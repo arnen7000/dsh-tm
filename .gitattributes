@@ -1,0 +1,13 @@
+# 行尾策略
+#
+# core.autocrlf=true 会把工作区文件 checkout 成 CRLF；但 Git 钩子**必须**是 LF ——
+# CRLF 时 `#!/bin/sh\r` 会被 sh 当成 "bad interpreter: /bin/sh^M"，钩子直接失效。
+# 这里按路径覆盖，只钉必需的，不改全局行为。
+.githooks/*  text eol=lf
+*.sh         text eol=lf
+
+# .bat 必须 CRLF：cmd.exe 按 ANSI 代码页(GBK) 逐字节解析，行尾形态与编码同属一类坑
+# （2026-10-15 的「dsh-cli.bat 双击没反应」就是编码+行尾没被钉住造成的）。
+# 不依赖本机 core.autocrlf：有的机器是 input/false，checkout 出来的 bat 会是 LF-only。
+# blob 里仍归一成 LF，只保证落盘一定是 CRLF。
+*.bat        text eol=crlf

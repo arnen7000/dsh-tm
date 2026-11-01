@@ -1,0 +1,17 @@
+# v2 web profile 补丁层：把 webserver 端口钉死。
+# 作用：绕过部分 dsh 版本 `web --port` 启动参数失效的问题
+#       （某些版本 parseCmdline 链路未把 --port 正确转给 web-app，导致只能改这里）。
+# 用法：手工把 {{PORT}} 替换为实际端口，写入 $DSH_HOME/profiles/web/cordis.patch.yml。
+#       管理器本身不走这条路 —— 新版本直接 `--port` 传，见 docs/isolated-install-runbook.md。
+# 注意：按 bundle → profile 的 cordis.patch.yml → home 级 cordis.patch.yml → --patch 的叠加顺序，
+#       最后写入的层获胜，所以钉在这里一定生效。
+- id: webserver
+  name: '@deepseek-ai/dsh-host-webserver'
+  inject:
+    - webStartup
+  config:
+    host: 127.0.0.1
+    port: {{PORT}}
+    compression: gzip
+    compressionLevel: 1
+    compressionThresholdBytes: 1024

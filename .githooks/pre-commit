@@ -1,0 +1,91 @@
+#!/bin/sh
+# pre-commit —— 提交前自检（dsh 版本管理器）
+#
+# 为什么要它：check-all.ps1 里的「敏感文件入库」「token 明文」两道护栏，
+# 在没有钩子的情况下从未真正执行过。钩子才是「每次提交都跑」的保证。
+#
+# 行尾必须是 LF：CRLF 会让 sh 报 "bad interpreter: /bin/sh^M" 而静默失效。
+# 由 .gitattributes 的 `.githooks/* text eol=lf` 钉住。
+#
+# 设计取舍：只跑**纯内存、零副作用**的检查。
+#   · py-syntax-check.py 用 compile(bytes) 而非 py_compile —— 不写 __pycache__，只读环境也能跑。
+#   · 不在这里做 GUI 冒烟测试（需要真实 dsh 安装，会误伤开发态）。
+set -e
+
+REPO=$(git rev-parse --show-toplevel)
+cd "$REPO"
+
+echo "[pre-commit] 仓库：$REPO"
+
+# 1) Python 语法（纯内存，不产生 __pycache__）
+PY=""
+for c in python python3 py; do
+    if command -v "$c" >/dev/null 2>&1; then PY="$c"; break; fi
+done
+
+if [ -n "$PY" ]; then
+    FILES=$(git ls-files '*.py' '*.pyw')
+    if [ -n "$FILES" ]; then
+        # shellcheck disable=SC2086
+        "$PY" scripts/py-syntax-check.py $FILES
+        echo "[pre-commit] + 语法检查通过"
+    fi
+else
+    echo "[pre-commit] ! 找不到 python，跳过语法检查" >&2
+fi
+
+# 2) 离线回归（脱敏 / 端口校验 / bat 生成器）
+#    只跑纯内存、零副作用的 tests；不启 GUI、不写真实日志。
+for t in scripts/test-manager-logic.py scripts/test-adopt-logic.py \
+         scripts/test-install-ops.py scripts/test-log-mask.py; do
+    if [ -f "$t" ]; then
+        if [ -n "$PY" ]; then
+            "$PY" "$t" | tail -1
+        else
+            echo "[pre-commit] ! 找不到 python，跳过 $t" >&2
+        fi
+    fi
+done
+echo "[pre-commit] + 离线回归通过"
+
+# 3) 真实用户名不得入库（本机全局规则 AGENTS.md §1 隐私红线）
+#    用 git grep 限定在**已跟踪文件**上——临时文件/工作区草稿不算。
+#    命中即阻断：推上 GitHub 就是公开泄露系统用户名。
+#
+#    正则只认**真实用户名形态**：用户名段必须以字母或数字开头。
+#    这样能放过合法的占位写法（`C:\Users\...`、`C:\Users\<你的用户名>`、
+#    `C:/Users/...`），又不会漏掉真正写死了名字的路径（如 `C:\Users\张三\...`）。
+#    ——占位符命中会让人养成"加 ! 前缀绕过检查"的习惯，比漏检更危险。
+USER_GREP='\bUsers[\\/]([A-Za-z0-9][A-Za-z0-9._-]*)'
+if git grep -nIE "$USER_GREP" -- \
+        '*.md' '*.ps1' '*.py' '*.pyw' '*.json' '*.txt' '*.yml' '*.bat' \
+        >/dev/null 2>&1; then
+    echo "[pre-commit] x 疑似真实用户名入库（C:\\Users\\<名字>）：" >&2
+    git grep -nIE "$USER_GREP" -- \
+        '*.md' '*.ps1' '*.py' '*.pyw' '*.json' '*.txt' '*.yml' '*.bat' >&2
+    echo "    占位符请写成 <home> / <用户名> / \$env:USERPROFILE / <base>" >&2
+    exit 1
+fi
+echo "[pre-commit] + 无真实用户名入库"
+
+# 3) 凭据/明文 token 不得入库
+if git grep -nIE '(sk-[A-Za-z0-9]{16,}|Bearer[[:space:]]+[A-Za-z0-9]{16,})' -- \
+        '*.md' '*.ps1' '*.py' '*.pyw' '*.json' '*.txt' '*.yml' '*.bat' \
+        >/dev/null 2>&1; then
+    echo "[pre-commit] x 疑似明文 token/密钥入库：" >&2
+    git grep -nIE '(sk-[A-Za-z0-9]{16,}|Bearer[[:space:]]+[A-Za-z0-9]{16,})' -- \
+        '*.md' '*.ps1' '*.py' '*.pyw' '*.json' '*.txt' '*.yml' '*.bat' >&2
+    exit 1
+fi
+echo "[pre-commit] + 无明文 token 入库"
+
+# 4) 敏感文件不得入库（config.json / 日志 / 凭据 / 便携运行时）
+for f in config.json dsh-manager.log .credentials.yaml; do
+    if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+        echo "[pre-commit] x 敏感文件被跟踪：$f（应写进 .gitignore）" >&2
+        exit 1
+    fi
+done
+echo "[pre-commit] + 无敏感文件入库"
+
+echo "[pre-commit] 全部通过"

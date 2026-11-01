@@ -1,0 +1,62 @@
+# ── 依赖与运行时（不入库，随发布包一起打）──
+# 管理器自带运行时：
+#   runtime/python/  python-build-standalone 解压产物（约 100MB，含 tkinter）
+#   runtime/node/    官方 win-x64 node 发行包（含 npm）
+# 为什么 node 也放这里：新电脑第一次装 dsh 时没有既有槽可复制、系统也未必装过
+# node，包内带一份才能「解压即用」。详见 dsh_install_ops.bundled_node_exe()。
+runtime/
+
+# 离线分发包里的版本槽（几 GB，含各自 node + node_modules）。
+# 槽名由用户自定（dshV1/dshV2…），一并排除，避免误提交。
+dsh-versions/
+dshV[0-9]*/
+# 旧双槽模型的安装目录（dsh-012rc1/、dsh-012rc1-home/ 等），仅历史兼容
+dsh-0*/
+# 全局安装的家目录（用户数据）
+.dsh/
+
+# 卸载时生成的用户数据备份文件夹（含明文凭据，绝不入库）
+dsh备份/
+
+# ── 会话临时产物 ──
+temp/
+
+# ── 日志 ──
+dsh-manager.log
+*.log
+
+# ── 凭据与瞬时锁 ──
+.credentials.yaml
+.credentials.yaml.lock
+node_modules.lock
+
+# ── Python ──
+__pycache__/
+*.pyc
+
+# ── 用户实际配置（模板见 config/config.example.json）──
+config.json
+# 配置备份里带本机绝对路径，不入库
+config.json.bak-*
+config.json.bad-*
+*.bak-*
+*.bak
+*.ico.bak-*
+*.ico.bak
+
+# ── 快捷方式 / 系统文件 ──
+*.lnk
+.DS_Store
+Thumbs.db
+
+# ── 只在开发机上有效的内部记录 ──
+# 这些文件描述的是「某台机器现在装了什么」「某次排查的完整过程」，
+# 含本机绝对路径、排障细节与对话记录。对使用者没有意义，也不该出现在公网。
+# 文件本身保留在本地，只是不随仓库发布。
+docs/本机部署现状.md
+docs/审计与功能测试报告-*.md
+docs/变更记录.md
+docs/DeepSeek-Harness使用手册-旧版-*.md
+
+# ── AI 助手的工作区记忆（含本机路径与排障笔记，因人而异）──
+.workbuddy-ai/
