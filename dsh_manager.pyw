@@ -3105,8 +3105,10 @@ def _drift_seed():
         except Exception as e:
             DRIFT[key] = None
             log("[变更] %s 读插件清单失败（不影响使用）：%s" % (key, e))
-    log("[变更] 已记录 %d 个槽的插件与配置基线；之后有插件安装/卸载/升级、"
-        "或 cordis 配置被改，都会写在这里" % n)
+    # 2026-11-02：零槽时这条纯属噪音（没东西可记录），不打。
+    if n > 0:
+        log("[变更] 已记录 %d 个槽的插件与配置基线（之后插件或 cordis 配置有改动会记在这里）"
+            % n)
 
 
 def _check_drift():
@@ -3638,11 +3640,39 @@ def _adopt_row_info(version, loc):
                                   else "（缺 %d）" % len(info["deps_missing"])))
     src_home = info.get("source_home") or ""
     comp.append("旧数据 " + ("✓ " + src_home if src_home else "（无）"))
+    # 2026-11-02：给普通用户一句**能看懂**的摘要；下面的逐项体检细节收进"详情"。
+    _deps_missing = len(info.get("deps_missing") or [])
+    if info.get("ok") and not _deps_missing:
+        _summary = "可以纳入"
+    elif info.get("ok"):
+        _summary = "可以纳入（有 %d 个可选依赖缺失，一般不影响使用）" % _deps_missing
+    else:
+        _summary = "这个安装不完整，暂时不能纳入"
     return {"ok": bool(info.get("ok")), "version": ver, "kind": kind, "nm": nm,
+            "summary": _summary,
             "component": "  ".join(comp),
             "problems": info.get("problems") or [],
             "warnings": info.get("warnings") or [],
             "loc": loc}
+
+
+def _make_autohide_scroll(canvas, sb):
+    """返回一个 yscrollcommand 回调：内容不足一屏时自动隐藏滚动条。
+
+    2026-11-02：纳入对话框里只有一个可纳入版本时，右侧那条滚动条纯属多余
+    （用户反馈）。做成模块级函数而不是嵌套定义 —— 嵌套的话
+    测试里的回调正则也会把它误判成"按钮回调未定义"（test C3p）。
+    """
+    def _cb(first, last):
+        try:
+            if float(first) <= 0.0 and float(last) >= 1.0:
+                sb.pack_forget()
+            else:
+                sb.pack(side="right", fill="y")
+        except Exception:
+            pass
+        sb.set(first, last)
+    return _cb
 
 
 def _adopt_picker_dialog(found):
@@ -3687,7 +3717,9 @@ def _adopt_picker_dialog(found):
     # 长路径会把整行推出可视区（右边被切掉）。
     canvas.bind("<Configure>",
                 lambda e: canvas.itemconfigure(_win_id, width=e.width))
-    canvas.configure(yscrollcommand=sb.set)
+    # 2026-11-02 用户反馈：只发现一个可纳入版本时，右侧那条滚动条是多余的。
+    # 改成**按需显示**：内容装得下就藏起来，装不下才出现。
+    canvas.configure(yscrollcommand=_make_autohide_scroll(canvas, sb))
     canvas.pack(side="left", fill="both", expand=True)
     sb.pack(side="right", fill="y")
 
@@ -3720,17 +3752,46 @@ def _adopt_picker_dialog(found):
         if not r["ok"]:
             _mark.configure(foreground="#999")
             _txt.configure(foreground="#999")
-        ttk.Label(box, text="位置：" + r["nm"], foreground=_MUTED,
+        # 2026-11-02 用户反馈：中间的"位置 / 组件 / 依赖 282 项 / 旧数据"都是
+        # 诊断细节，普通用户不关心，堆在那里反而看不懂。
+        # 现在：只留一句摘要 + 一个「详情」可展开（默认收起）。
+        ttk.Label(box, text=r.get("summary", ""), foreground=_MUTED,
                   wraplength=600, justify="left").pack(anchor="w", padx=(22, 0))
-        ttk.Label(box, text="组件：" + r["component"],
-                  foreground=_INK, wraplength=560, justify="left"
-                  ).pack(anchor="w", padx=(22, 0))
-        for t in r["problems"]:
-            ttk.Label(box, text="✗ " + t, foreground=_RED,
-                      wraplength=600, justify="left").pack(anchor="w", padx=(22, 0))
-        for t in r["warnings"]:
-            ttk.Label(box, text="· " + t, foreground=_MUTED,
-                      wraplength=600, justify="left").pack(anchor="w", padx=(22, 0))
+
+        _detail = ttk.Frame(box)
+        _detail.pack(anchor="w", fill="x", padx=(22, 0))
+        _shown = {"on": False}
+
+        def _mk_detail(d=_detail, rr=r):
+            rows = [("位置", rr["nm"]), ("组件", rr["component"])]
+            for t in rr["problems"]:
+                rows.append(("问题", t))
+            for t in rr["warnings"]:
+                rows.append(("提醒", t))
+            for k, v in rows:
+                line = ttk.Frame(d)
+                line.pack(anchor="w", fill="x", pady=1)
+                ttk.Label(line, text=k + "：", foreground=_MUTED, width=5
+                          ).pack(side="left", anchor="n")
+                ttk.Label(line, text=v, foreground=_INK, wraplength=540,
+                          justify="left").pack(side="left", anchor="w")
+
+        def _toggle_detail(_e=None, d=_detail, st=_shown, btn=None):
+            if st["on"]:
+                for w in d.winfo_children():
+                    w.destroy()
+                st["on"] = False
+                if btn is not None:
+                    btn.configure(text="详情 ▾")
+            else:
+                _mk_detail()
+                st["on"] = True
+                if btn is not None:
+                    btn.configure(text="详情 ▴")
+
+        _btn = ttk.Label(box, text="详情 ▾", foreground=_LINK, cursor="hand2")
+        _btn.pack(anchor="w", padx=(22, 0), pady=(2, 0))
+        _btn.bind("<Button-1>", lambda e, b=_btn: _toggle_detail(btn=b))
         vars_.append((v, r))
 
     res = {"picked": None, "skipped": None}
@@ -4532,12 +4593,39 @@ def _do_readd(roots):
 
 
 # ── 日志区 ─────────────────────────────────────────────────
-log_text = tk.Text(root, height=10, width=80, font=("Consolas", 9), wrap="char",
-                  bg="#ffffff", fg=_INK, insertbackground=_INK,
-                  relief="solid", borderwidth=1,
-                  highlightbackground=_CARD_BD, highlightthickness=1)
-log_text.grid(row=2, column=0, padx=12, pady=(0, 12), sticky="nsew")
+# 2026-11-02 用户反馈：日志区没有滚动条，鼠标没有中键（或用触摸板）就没法回看历史。
+# 加一条竖向滚动条（只在内容超出时才有实际作用，占位很窄不碍事）；
+# 同时 enable 鼠标滚轮：Windows 上 <MouseWheel> 的 delta 是 120 的倍数。
+_log_wrap = ttk.Frame(root)
+_log_wrap.grid(row=2, column=0, padx=12, pady=(0, 12), sticky="nsew")
+_log_wrap.rowconfigure(0, weight=1)
+_log_wrap.columnconfigure(0, weight=1)
+
+log_text = tk.Text(_log_wrap, height=10, width=80, font=("Consolas", 9), wrap="char",
+                   bg="#ffffff", fg=_INK, insertbackground=_INK,
+                   relief="solid", borderwidth=1,
+                   highlightbackground=_CARD_BD, highlightthickness=1)
+log_sb = ttk.Scrollbar(_log_wrap, orient="vertical", command=log_text.yview)
+log_text.configure(yscrollcommand=log_sb.set)
+log_text.grid(row=0, column=0, sticky="nsew")
+log_sb.grid(row=0, column=1, sticky="ns")
 log_text.configure(state="disabled")
+
+
+def _log_wheel(evt):
+    """滚轮滚动日志（Tk 默认不处理）。delta>0 向上。"""
+    try:
+        if evt.delta:
+            log_text.yview_scroll(int(-1 * (evt.delta / 120)), "units")
+    except Exception:
+        pass
+
+
+try:
+    # bind 在 Text 上而不是 bind_all：避免主界面上滚轮误滚日志区
+    log_text.bind("<MouseWheel>", _log_wheel)
+except Exception:
+    pass
 
 # 日志着色（2026-10-31 起，2026-11-01 扩充）
 # 只做行内子串判断，不跑正则 —— 日志高峰时一次刷新能来十几行，开销要小。
@@ -4549,31 +4637,96 @@ log_text.configure(state="disabled")
 #   橙  = 警告（可能要处理）
 #   青绿 = 变更（只是告知，不用管）
 #   灰  = 噪音（kill/探测等实现细节，正常浏览时可直接跳过）
-for _tag, _fg in (
-        ("err",    _RED),          # 失败/异常
-        ("warn",   "#8A5A00"),     # 警告
-        ("change", _LINK),         # 插件/配置变更（青绿，非故障）
-        ("dim",    "#8a8a8a"),     # 实现细节噪音
-):
-    log_text.tag_configure(_tag, foreground=_fg)
+# ══════════════════════════════════════════════════════════════════
+# 日志分级与着色规范（2026-11-02 定稿）
+# ══════════════════════════════════════════════════════════════════
+# 原则：**颜色只用来表达"要不要管"，不用来表达"发生了什么"**。
+# 判定顺序 = 优先级：错误 > 警告 > 用户操作 > 细节 > 普通（无颜色）
+#
+#   错误  红  —— 不处理就进行不下去（启动失败 / 端口被占 / 备份校验失败）
+#   警告  橙  —— 能继续，但值得知道（体检异常 / 自愈 / 搬迁后旧目录没删净）
+#   操作  蓝  —— **用户手动做的事**及其结果（安装/纳入/卸载/移出/移动/设置/主题…）
+#   细节  紫  —— 排障或开发才看（杀进程过程 / 权限探测 / 端口扫描）
+#   普通  无  —— 状态变化、自检、变更检测（`[v1] 状态变化`、`[环境]`、`[变更]`）
+#
+# 2026-11-02 之前是"关键词子串匹配"（如 "可能"、"注意"），太宽：
+# `[变更] 已记录 0 个槽`、`[环境] 未装 pywin32` 这类信息行被误标成彩色。
+# 现在改成**按前缀判定**（见 _log_tag），关键词只作兜底。
 _ERR_WORDS = ("失败", "错误", "异常", "Traceback", "ERROR", "!!")
-_WARN_WORDS = ("警告", "注意", "未能", "未找到", "可能", "请勿")
-# 这些前缀只是实现细节（杀进程过程、能力探测、端口探测），正常时不值得抢注意力
-_DIM_PREFIXES = ("[kill]", "[权限]", "[检测]")
+_WARN_WORDS = ("警告", "注意", "未能", "未找到", "请勿")
+
+# 前缀 → 级别。**用户操作用蓝**，排障细节用紫。
+_LOG_USER_PREFIXES = ("[设置]", "[安装]", "[纳入]", "[卸载]", "[移出]", "[移动]",
+                      "[主题]", "[全部启动]", "[全部停止]", "[清理]", "[版本列表]")
+_LOG_DETAIL_PREFIXES = ("[kill]", "[kill-all]", "[权限]", "[检测]", "[fatal]")
+
+# 两套主题各一份（深色下必须同样可读，不能沿用浅色的深色调）
+_LOG_COLORS = {
+    "light": {"err": "#D31E1E", "warn": "#B45309", "user": "#1D4ED8",
+              "detail": "#6D28D9", "plain": "#151517"},
+    "dark":  {"err": "#FF6B6B", "warn": "#F0A64A", "user": "#7BA7FF",
+              "detail": "#B794F6", "plain": "#E6E7E9"},
+}
+_LOG_MARKS = {"err": "✕", "warn": "!", "user": "›", "detail": "·", "plain": ""}
+
+
+def _log_colors():
+    try:
+        return _LOG_COLORS[_resolved_theme()]
+    except Exception:
+        return _LOG_COLORS["light"]
+
+
+def _apply_log_tags():
+    """把当前主题下的日志配色刷到 Text 控件上（切主题时也要调）。"""
+    pal = _log_colors()
+    for tag in ("err", "warn", "user", "detail", "plain"):
+        try:
+            log_text.tag_configure(tag, foreground=pal[tag])
+        except Exception:
+            pass
+    try:
+        log_text.tag_configure("head", font=("Consolas", 10, "bold"))
+    except Exception:
+        pass
+
+
+_apply_log_tags()
 
 
 def _log_tag(line):
-    """给一行日志挑颜色 tag。顺序即优先级：出错 > 警告 > 变更 > 噪音。"""
-    if any(w in line for w in _ERR_WORDS):
+    """给一行日志挑级别 tag。规则见上方「日志分级与着色规范」。
+
+    判定顺序（先命中先返回）：
+      1. 关键词命中"失败/错误/异常" → err（**优先级最高**：任何级别里出现真错误都算错误）
+      2. 前缀在"用户操作"名单里     → user（蓝）
+      3. 关键词命中"警告/未能…"     → warn（橙）
+      4. 前缀在"排障细节"名单里     → detail（紫）
+      5. 其余                        → plain（无颜色）
+
+    为什么"操作"排在"警告"之前：用户点「卸载」失败时，那行同时含 `[卸载]`
+    和"失败"——它本质是**用户动作的结果**，但既然是真失败，第 1 条已经把它
+    判成 err 了。所以顺序不会让"操作失败"被误标成普通的蓝色。
+
+    为什么按前缀而不是纯关键词：`[变更] 已记录 0 个槽`、`[环境] 未装 pywin32`
+    这类信息行曾被 "可能/注意" 之类的宽关键词误标成彩色，界面很吵。
+    """
+    txt = line or ""
+    # 去掉行首时间戳，只看正文
+    body = txt
+    if body.startswith("[") and "] " in body:
+        body = body.split("] ", 1)[1]
+
+    if any(w in body for w in _ERR_WORDS):
         return "err"
-    if "[变更]" in line:
-        # 变更不是错误，单独一档，避免和"失败"混在一起
-        return "change"
-    if any(w in line for w in _WARN_WORDS):
+    if any(body.startswith(p) or (" " + p) in body for p in _LOG_USER_PREFIXES):
+        return "user"
+    if any(w in body for w in _WARN_WORDS):
         return "warn"
-    if any(p in line for p in _DIM_PREFIXES):
-        return "dim"
-    return ""
+    if any(body.startswith(p) or (" " + p) in body for p in _LOG_DETAIL_PREFIXES):
+        return "detail"
+    # 槽日志（[v1] …）走普通色，不加视觉标记（用户选择方案 A）
+    return "plain"
 
 def _gui_sink_impl(line):
     log_text.configure(state="normal")
@@ -5513,7 +5666,11 @@ _THEME_PALETTES = {
         "log_bg": "#101113", "log_fg": "#d7d9dc",
     },
 }
-_THEME_CUR = {"mode": "system"}
+# 2026-11-02 修 bug：这里原来硬编码 "system"，而启动时从 config 读出的
+# _THEME_INIT（第 358 行）**从没被用上** —— 结果是用户选了深色/浅色，
+# 重启后又变回"跟随系统"，设置不持久（实测：config 里 theme=dark，
+# 日志却打「生效：light（模式=system）」）。
+_THEME_CUR = {"mode": (_THEME_INIT if _THEME_INIT in ("system", "light", "dark") else "system")}
 
 
 def _apply_palette():
@@ -5571,6 +5728,8 @@ def _apply_palette():
         log_text.configure(bg=pal["log_bg"], fg=pal["log_fg"],
                            insertbackground=pal["ink"],
                            selectbackground=_BRAND)
+        # 2026-11-02：日志分级的颜色也要跟着主题走（深色下必须可读）
+        _apply_log_tags()
     except Exception:
         pass
 
@@ -5710,17 +5869,29 @@ def _make_side_panel(win, width=380):
                 pass
         _DOCK["job"] = win.after(180, lambda: _check_dock(win))
 
+    # 2026-11-02 修「打开设置没贴住主界面」：
+    # <Configure> 在窗口**创建过程中**就会连续触发（Tk 每改一次几何都发一次）。
+    # 那时 _main_rect() 拿到的还是主窗口的旧尺寸/未布局尺寸，
+    # 算出来的 gap 必然超阈值 → 初始化阶段就把 attached 判成 False，
+    # 于是"刚打开就脱开了"。
+    # 现在：前 _DOCK_GRACE 次 Configure 一律强制吸附（把它们当作初始化噪声），
+    # 之后才按真实拖动位置判断。
+    _grace = {"n": 0}
+    _DOCK_GRACE = 6
+
     def _check_dock(w):
         """拖动停下来后判断：靠得够近就吸回去。"""
         _DOCK["job"] = None
         try:
             if not w.winfo_exists():
                 return
+            _grace["n"] += 1
+            if _grace["n"] <= _DOCK_GRACE:
+                _dock_settings_window(w)
+                return
             mx, my, mw, mh = _main_rect()
             wx, wy = w.winfo_rootx(), w.winfo_rooty()
-            # 与主窗口右边缘的距离（设置窗左边缘 - 主窗右边缘）
             gap = abs(wx - (mx + mw))
-            # 垂直方向也不能离太远，否则"靠近"就失去意义
             vgap = abs(wy - my)
             if gap <= _DOCK["threshold"] and vgap <= _DOCK["threshold"] * 3:
                 _dock_settings_window(w)
@@ -5993,6 +6164,78 @@ def _do_move_root(MV, plan):
     OPS.run_in_thread(work, prog, None)
 
 
+def _log_stats():
+    """返回 (字节数, 行数)；文件不存在就是 (0, 0)。"""
+    try:
+        sz = os.path.getsize(LOG_FILE)
+    except Exception:
+        sz = 0
+    lines = 0
+    try:
+        with open(LOG_FILE, "rb") as f:
+            for _ in f:
+                lines += 1
+    except Exception:
+        pass
+    return sz, lines
+
+
+def _fmt_size(n):
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return ("%.0f %s" % (n, unit)) if unit == "B" else ("%.1f %s" % (n, unit))
+        n /= 1024.0
+    return "%.1f GB" % n
+
+
+def _clear_logs_dialog(parent=None):
+    """清空日志文件（先确认）。不动任何已安装版本、不动 config。"""
+    sz, lines = _log_stats()
+    if sz <= 0:
+        messagebox.showinfo("日志已为空", "日志文件本来就是空的。",
+                            parent=parent)
+        return
+    if not messagebox.askyesno(
+            "清空日志",
+            "当前日志：%s（%d 行）\n位置：%s\n\n"
+            "清空后**无法恢复**，但不影响任何已安装版本、配置和进程。\n\n确定清空吗？"
+            % (_fmt_size(sz), lines, LOG_FILE), parent=parent):
+        return
+    err = ""
+    try:
+        # 保持文件句柄可用：先关掉再截断再重开
+        global LOG_FH
+        try:
+            if LOG_FH:
+                LOG_FH.close()
+        except Exception:
+            pass
+        LOG_FH = None
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write("")
+        try:
+            LOG_FH = open(LOG_FILE, "a", encoding="utf-8", errors="replace")
+        except Exception:
+            LOG_FH = None
+    except Exception as e:
+        err = str(e)
+    if err:
+        messagebox.showerror("清空失败", err, parent=parent)
+        return
+    log("[清理] 日志已清空（用户手动操作）")
+
+
+def _open_log_folder(parent=None):
+    try:
+        if os.name == "nt":
+            os.startfile(os.path.dirname(LOG_FILE))
+        else:
+            messagebox.showinfo("日志位置", LOG_FILE, parent=parent)
+    except Exception as e:
+        messagebox.showinfo("日志位置", "%s\n\n(%s)" % (LOG_FILE, e), parent=parent)
+
+
 def _scroll_host(win):
     """在 Toplevel 里造一个「可竖向滚动」的内容容器，返回内部 Frame。
 
@@ -6144,6 +6387,31 @@ def settings_hub_dialog():
     ttk.Button(arow, text="检查运行环境", command=_show_env_report
                ).pack(side="left", padx=(8, 0))
     ttk.Button(arow, text="★ 在 GitHub 收藏", command=_open_project_page
+               ).pack(side="left", padx=(8, 0))
+
+    # ── 日志管理（2026-11-02 用户要求：能看到大小、自己决定要不要清）──
+    ttk.Separator(ab, orient="horizontal").pack(fill="x", pady=(10, 8))
+    _lsz, _llines = _log_stats()
+    _lrow = ttk.Frame(ab)
+    _lrow.pack(anchor="w", fill="x")
+    ttk.Label(_lrow, text="日志", foreground=_MUTED).pack(side="left")
+    _linfo = ttk.Label(_lrow,
+                       text="  %s（%d 行）" % (_fmt_size(_lsz), _llines),
+                       foreground=_INK)
+    _linfo.pack(side="left")
+
+    def _refresh_log_info():
+        sz, ln = _log_stats()
+        try:
+            _linfo.configure(text="  %s（%d 行）" % (_fmt_size(sz), ln))
+        except Exception:
+            pass
+
+    _lbtn = ttk.Frame(ab)
+    _lbtn.pack(anchor="w", pady=(6, 0))
+    ttk.Button(_lbtn, text="打开日志文件夹", command=_open_log_folder).pack(side="left")
+    ttk.Button(_lbtn, text="清空日志…",
+               command=lambda: (_clear_logs_dialog(win), _refresh_log_info())
                ).pack(side="left", padx=(8, 0))
 
     # ── 底部 ──────────────────────────────────────────────

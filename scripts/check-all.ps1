@@ -361,6 +361,7 @@ if ($Fast) {
         (Join-Path $Repo "scripts\test-tk-selfheal.py"),
         (Join-Path $Repo "scripts\test-cli.py"),
         (Join-Path $Repo "scripts\test-move.py"),
+        (Join-Path $Repo "scripts\test-log-levels.py"),
         (Join-Path $Repo "tests\test-manager.py"),
         (Join-Path $Repo "scripts\test-manager.py")
     )
