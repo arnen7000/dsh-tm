@@ -414,7 +414,10 @@ m = re.search(r"askyesno\(\s*\"发现已安装的 dsh\"", src)
 chk("C3l 纳入走勾选列表且需显式确认",
     "def _adopt_picker_dialog" in src and "纳入勾选的" in src
     and "全部跳过，以后不再提示" in src)
-chk("C3l2 体检不通过的安装禁止勾选", 'cb.state(["disabled"])' in src)
+chk("C3l2 体检不通过的安装禁止勾选",
+    # 2026-11-01：勾选态从原生 Checkbutton 改成可点击 Label（✅/空），
+    # 禁用逻辑同步改成「点不动 + 变灰」。
+    'if not _ok:' in src and '_ok=r["ok"]' in src)
 chk("C3l3 未勾选的写入 adopt_ignored（以后不再提示）",
     "def _set_adopt_ignored" in src and '"adopt_ignored"' in src)
 chk("C3l4 手动扫描会重扫被跳过的（manual 分支不过滤）",

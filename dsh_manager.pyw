@@ -1586,7 +1586,7 @@ def _build_version_picker(parent, var, height=9, width=38, multi=False):
     row.pack(fill="x", pady=(6, 0))
     btn = ttk.Button(row, text="刷新列表")
     btn.pack(side="left")
-    status = ttk.Label(row, text="准备获取…", foreground="#666")
+    status = ttk.Label(row, text="准备获取…", foreground=_MUTED)
     status.pack(side="left", padx=(8, 0))
 
     state = {"items": [], "busy": False}
@@ -2984,7 +2984,7 @@ def _health_dialog():
 
     ttk.Label(win, text="槽体检（只读）", font=("Microsoft YaHei UI", 11, "bold")
               ).pack(padx=16, pady=(14, 2), anchor="w")
-    ttk.Label(win, foreground="#666", justify="left", wraplength=680,
+    ttk.Label(win, foreground=_MUTED, justify="left", wraplength=680,
               text="这里只报告「现在的样子和登记的样子差在哪」，不会修改任何文件。"
                    "要不要处理、怎么处理由你决定；确实装坏了就走「卸载 → 重装」"
                    "（那条路有完整备份）。").pack(padx=16, pady=(0, 8), anchor="w")
@@ -3668,7 +3668,7 @@ def _adopt_picker_dialog(found):
     _apply_icon(win)
     ttk.Label(win, text="这些 dsh 不在管理器里，勾选要纳入的版本",
               font=("Microsoft YaHei UI", 10, "bold")).pack(padx=18, pady=(14, 2))
-    ttk.Label(win, foreground="#666", wraplength=600, justify="left",
+    ttk.Label(win, foreground=_MUTED, wraplength=600, justify="left",
               text="纳入 = 复制一份程序与依赖到本管理器的版本根，并分配独立端口与数据目录；"
                    "原安装一个字节都不动。没勾选的会被记下，以后启动不再提示"
                    "（想改主意点「扫描已装 dsh 并纳入」随时重扫）。"
@@ -3696,22 +3696,40 @@ def _adopt_picker_dialog(found):
         box = ttk.LabelFrame(inner, padding=(8, 5))
         box.pack(fill="x", pady=3, padx=2)
         v = tk.BooleanVar(value=r["ok"])       # 完好的默认勾上，坏的不勾
-        # 勾选框只放短标题：完整路径太长，塞进 Checkbutton 会把窗口撑到屏幕外
-        cb = ttk.Checkbutton(box, text="%s   [%s]" % (r["version"], r["kind"]),
-                             variable=v)
-        cb.pack(anchor="w")
+        # 2026-11-01 用户反馈：原生 Checkbutton 的勾选态是「☒ / ☐」，看着像叉号/报错。
+        # 改成「✅ / 空」：用一个可点击的 Label 显示符号，点它就切换 BooleanVar。
+        _title = "%s   [%s]" % (r["version"], r["kind"])
+        _row = ttk.Frame(box)
+        _row.pack(anchor="w")
+        _mark = ttk.Label(_row, text="✅" if v.get() else "  ",
+                          font=("Segoe UI", 10))
+        _mark.pack(side="left", padx=(0, 6))
+        _txt = ttk.Label(_row, text=_title)
+        _txt.pack(side="left")
+
+        def _toggle(_e=None, _v=v, _m=_mark, _ok=r["ok"]):
+            if not _ok:
+                return                      # 有问题的安装不可选
+            _v.set(not _v.get())
+            _m.configure(text="✅" if _v.get() else "  ")
+
+        for _w in (_mark, _txt):
+            _w.bind("<Button-1>", _toggle)
+            if r["ok"]:
+                _w.configure(cursor="hand2")
         if not r["ok"]:
-            cb.state(["disabled"])
-        ttk.Label(box, text="位置：" + r["nm"], foreground="#555",
+            _mark.configure(foreground="#999")
+            _txt.configure(foreground="#999")
+        ttk.Label(box, text="位置：" + r["nm"], foreground=_MUTED,
                   wraplength=600, justify="left").pack(anchor="w", padx=(22, 0))
         ttk.Label(box, text="组件：" + r["component"],
-                  foreground="#333", wraplength=560, justify="left"
+                  foreground=_INK, wraplength=560, justify="left"
                   ).pack(anchor="w", padx=(22, 0))
         for t in r["problems"]:
-            ttk.Label(box, text="✗ " + t, foreground="#c0392b",
+            ttk.Label(box, text="✗ " + t, foreground=_RED,
                       wraplength=600, justify="left").pack(anchor="w", padx=(22, 0))
         for t in r["warnings"]:
-            ttk.Label(box, text="· " + t, foreground="#777",
+            ttk.Label(box, text="· " + t, foreground=_MUTED,
                       wraplength=600, justify="left").pack(anchor="w", padx=(22, 0))
         vars_.append((v, r))
 
@@ -3851,14 +3869,32 @@ def _adopt_one(version, loc):
         return
 
     slot_key = _next_free_slot_key()
+    # 2026-11-01 修 bug（用户实测「纳入失败」）：
+    # 原逻辑只在**已有槽**里找 node；零槽时退化成裸 "node"，被当成相对路径
+    # `D:\DSH-TM\node`，于是复制阶段报「找不到可用的 node 运行时」。
+    # 正确做法：走 OPS._pick_node_exe() —— 先找既有槽，再找包内自带的
+    # runtime/node/node.exe（发布包必带），两者都没有才退回系统 PATH。
     node_src = ""
-    for _k in SLOT_KEYS:
-        n = VC[_k].get("node_exe") or ""
-        if n and os.path.isfile(n):
-            node_src = n
-            break
+    try:
+        _existing = [VC[_k] for _k in SLOT_KEYS if VC.get(_k)]
+        if hasattr(OPS, "_pick_node_exe"):
+            node_src = OPS._pick_node_exe(_existing, INSTALL_BASE, HOME) or ""
+    except Exception as e:
+        log("[纳入] 挑选 node 运行时出错（继续尝试其它来源）：%s" % e)
     if not node_src:
-        node_src = "node"       # 交给脚本/系统解析；复制阶段会如实报缺
+        for _k in SLOT_KEYS:
+            n = VC[_k].get("node_exe") or ""
+            if n and os.path.isfile(n):
+                node_src = n
+                break
+    if not node_src:
+        for _cand in (os.path.join(BASE_DIR, "runtime", "node", "node.exe"),
+                      os.path.join(BASE_DIR, "runtime", "node", "node")):
+            if os.path.isfile(_cand):
+                node_src = _cand
+                break
+    if not node_src:
+        node_src = "node"       # 交给系统 PATH；复制阶段会如实报缺
 
     # 纳入要复制的是整个 node_modules，不是 @deepseek-ai/dsh 包目录 ——
     # detect_existing_installs 的 path 是后者，必须经 _adopt_loc_nm 换过来。
@@ -3961,7 +3997,7 @@ def install_official_version():
     ttk.Label(win, text="安装官方版 dsh（一次最多 %d 个）" % free,
               font=("Microsoft YaHei UI", 10, "bold")).pack(padx=20, pady=(16, 4))
     ttk.Label(win, text="从下面选版本：Ctrl 点选多个 / Shift 连选；"
-                        "也可以直接在下面手填。", foreground="#666"
+                        "也可以直接在下面手填。", foreground=_MUTED
               ).pack(padx=20, pady=(0, 6))
 
     ver_var = tk.StringVar(value="")
@@ -3969,14 +4005,14 @@ def install_official_version():
     _picker["frame"].pack(padx=20, pady=(0, 10), fill="both", expand=True)
 
     ttk.Label(win, text="或手动输入版本号（多个用逗号 / 空格分隔；也可填 latest / next）：",
-              foreground="#666").pack(anchor="w", padx=20)
+              foreground=_MUTED).pack(anchor="w", padx=20)
     ent = ttk.Entry(win, textvariable=ver_var, width=44)
     ent.pack(padx=20, pady=(2, 6), anchor="w")
     ent.focus_set()
 
     ttk.Label(win, text="将从官方 npm registry 下载安装；需要 Node.js ≥ 22.19。\n"
                         "每个版本装进一个独立的空槽（自带数据目录与端口），不影响已有版本。",
-              foreground="#666", wraplength=440, justify="left"
+              foreground=_MUTED, wraplength=440, justify="left"
               ).pack(padx=20, pady=(0, 12))
 
     def on_ok(_evt=None):
@@ -4215,7 +4251,7 @@ def detached_manager_dialog():
     ttk.Label(win,
               text="这些版本的文件都还在原处，只是不再由管理器跟踪。\n"
                    "勾选后点「重新纳入」，会原样接回来（端口沿用、磁盘不动）。",
-              foreground="#666", justify="left", wraplength=470
+              foreground=_MUTED, justify="left", wraplength=470
               ).pack(padx=20, pady=(0, 8), anchor="w")
 
     box = ttk.LabelFrame(win, text="已移出的槽", padding=(10, 6))
@@ -4283,7 +4319,7 @@ def uninstall_versions_dialog():
     ttk.Label(win, text="卸载 = 删掉它；移出管理 = 放它自己跑",
               font=("Microsoft YaHei UI", 10, "bold")).pack(padx=20, pady=(16, 4))
     ttk.Label(win, text="两个动作改的都是 config.json；区别在磁盘上的文件动没动。",
-              foreground="#666").pack(padx=20, pady=(0, 8))
+              foreground=_MUTED).pack(padx=20, pady=(0, 8))
 
     pick = tk.StringVar(value=SLOT_KEYS[0] if SLOT_KEYS else "")
     if SLOT_KEYS:
@@ -4294,7 +4330,7 @@ def uninstall_versions_dialog():
                             ).pack(anchor="w", pady=1)
 
     backup_root = os.path.join(INSTALL_BASE, "dsh备份")
-    ttk.Label(win, justify="left", wraplength=470, foreground="#555",
+    ttk.Label(win, justify="left", wraplength=470, foreground=_MUTED,
               text=("【卸载】停进程 → 备份 → 删除整个槽目录 → 从 config 移除\n"
                     "  备份到 %s\\<槽>-userdata-<时间>\\：.dsh-home（会话/设置/凭据/\n"
                     "  插件配置）+ 插件清单 + 版本信息；**不含** node_modules 与 node。\n"
@@ -5198,7 +5234,7 @@ def _ask_install_root():
     ttk.Label(win,
               text="这是第一次安装/纳入 —— 位置一旦确定就不再改动。\n"
                    "要换位置，得先把所有版本卸载干净（卸载会先备份用户数据）。",
-              foreground="#666", justify="left", wraplength=470
+              foreground=_MUTED, justify="left", wraplength=470
               ).pack(padx=20, pady=(0, 10), anchor="w")
 
     r = ttk.Frame(win)
@@ -5216,7 +5252,7 @@ def _ask_install_root():
 
     ttk.Button(r, text="浏览…", width=7, command=_pick).pack(side="left")
 
-    prev = ttk.Label(win, text="", foreground="#666", justify="left",
+    prev = ttk.Label(win, text="", foreground=_MUTED, justify="left",
                      wraplength=470)
     prev.pack(padx=20, pady=(8, 0), anchor="w")
 
@@ -5322,7 +5358,7 @@ def _dir_group(parent, padx=20):
         # 只留一句必要的（不可逆操作的后果必须就地说明），其余细节移入使用说明。
         ttk.Label(df,
                   text="已确定，不可更改（要换位置请先卸载全部版本）",
-                  foreground="#a05000"
+                  foreground=_AMBER
                   ).pack(anchor="w", pady=(4, 0))
     # 2026-11-01：原来这里还有一段「安装根目录 = 版本装在哪（<路径>/dsh-versions 下…）」。
     # 用户指出**显示值与说明里的路径对不上**：输入框显示安装根本身，
@@ -5331,7 +5367,7 @@ def _dir_group(parent, padx=20):
     try:
         _slots_root = os.path.join(os.path.normpath(INSTALL_BASE), "dsh-versions")
         ttk.Label(df, text="槽实际位置：%s\\<槽名>" % _slots_root,
-                  foreground="#666").pack(anchor="w", pady=(6, 0))
+                  foreground=_MUTED).pack(anchor="w", pady=(6, 0))
     except Exception:
         pass
     return ib, tr
@@ -5429,7 +5465,7 @@ def _dirs_only_dialog():
               font=("Microsoft YaHei UI", 10, "bold")
               ).pack(padx=20, pady=(16, 2), anchor="w")
     ttk.Label(win, text="还没有安装任何 dsh 版本 —— 正好先决定它装在哪。",
-              foreground="#666").pack(padx=20, pady=(0, 10), anchor="w")
+              foreground=_MUTED).pack(padx=20, pady=(0, 10), anchor="w")
     ib_var, tr_var = _dir_group(win)
 
     def on_ok():
@@ -5481,8 +5517,20 @@ _THEME_CUR = {"mode": "system"}
 
 
 def _apply_palette():
-    """把当前配色刷到 ttk 样式与原生 tk 控件上。"""
+    """把当前配色刷到 ttk 样式与原生 tk 控件上。
+
+    2026-11-01：**同时更新模块级颜色常量**。界面里有很多地方直接引用
+    _INK / _MUTED / _RED 等（23+ 处 foreground=），只改 ttk 样式会导致
+    深色背景下那些标签仍然是浅色主题的深灰字，看不清（用户实测反馈）。
+    """
+    global _INK, _MUTED, _DIVIDER, _NEUTRAL, _NEUTRAL_BD, _NEUTRAL_D
     pal = _palette()
+    _INK = pal["ink"]
+    _MUTED = pal["muted"]
+    _DIVIDER = pal["divider"]
+    _NEUTRAL = pal["neutral"]
+    _NEUTRAL_BD = pal["neutral_bd"]
+    _NEUTRAL_D = pal["neutral_d"]
     st = ttk.Style()
     st.theme_use("clam")
     st.configure(".", background=pal["app_bg"], foreground=pal["ink"],
@@ -5738,14 +5786,14 @@ def about_dialog():
               font=("Microsoft YaHei UI", 13, "bold")).pack(padx=24, pady=(20, 2),
                                                            anchor="w")
     ttk.Label(win, text="多版本隔离 · 独立进程 / 端口 / 数据 / 运行时 / 临时目录",
-              foreground="#666").pack(padx=24, anchor="w")
+              foreground=_MUTED).pack(padx=24, anchor="w")
 
     body = ttk.Frame(win)
     body.pack(padx=24, pady=(14, 8), fill="both", expand=True)
     body.columnconfigure(1, weight=1)
 
     def _row(r, label, value):
-        ttk.Label(body, text=label, foreground="#666").grid(
+        ttk.Label(body, text=label, foreground=_MUTED).grid(
             row=r, column=0, sticky="w", pady=2, padx=(0, 12))
         ttk.Label(body, text=value, wraplength=380, justify="left").grid(
             row=r, column=1, sticky="w", pady=2)
@@ -5772,7 +5820,7 @@ def about_dialog():
     ttk.Label(win, text="使用说明", font=("Microsoft YaHei UI", 10, "bold")
               ).pack(padx=24, pady=(12, 4), anchor="w")
     ttk.Label(win,
-              justify="left", wraplength=470, foreground="#444",
+              justify="left", wraplength=470, foreground=_INK,
               text=("· 「安装官方版 dsh」→ 选版本号 → 自动下载并配好隔离环境\n"
                     "· 卡片上「启动 / 停止」管单个版本；「打开浏览器」带上登录 token\n"
                     "· 拖动卡片可调整左右顺序；「设置」里能隐藏不看的槽\n"
@@ -5845,14 +5893,14 @@ def move_install_root_dialog():
               text=("把已装的所有版本整体搬到另一个位置。\n"
                     "过程：复制 → 校验（文件数 + 字节数）→ 改配置 → 删旧位置。\n"
                     "任何一步失败都会保留旧位置、不动配置。"),
-              foreground="#666", justify="left", wraplength=470
+              foreground=_MUTED, justify="left", wraplength=470
               ).pack(padx=20, pady=(0, 10), anchor="w")
 
     cur = ttk.Frame(win)
     cur.pack(padx=20, fill="x")
     ttk.Label(cur, text="当前位置", width=10).pack(side="left")
     ttk.Label(cur, text=os.path.normpath(INSTALL_BASE),
-              foreground="#666").pack(side="left")
+              foreground=_MUTED).pack(side="left")
 
     newv = tk.StringVar(value="")
 
@@ -6006,6 +6054,13 @@ def settings_hub_dialog():
     这样主窗口只剩"看状态 + 起停"，一眼就懂。
     """
     win = tk.Toplevel(root)
+    _SETTINGS_WIN["win"] = win
+    try:
+        win.bind("<Destroy>",
+                 lambda e: _SETTINGS_WIN.update({"win": None})
+                 if e.widget is win else None, add="+")
+    except Exception:
+        pass
     win.title("设置")
     # 2026-11-01：改成**非模态并排窗口**。
     #   · 不再 transient / grab_set —— 否则主界面被禁用，看不到改动的实时效果
@@ -6240,10 +6295,10 @@ def _settings_display_dialog():
     mv = tk.StringVar(value=str(maxv))
     tk.Spinbox(opt, from_=1, to=MAX_SLOTS, width=4, textvariable=mv,
                justify="center").pack(side="left", padx=6)
-    ttk.Label(opt, text="个槽", foreground="#666").pack(side="left")
+    ttk.Label(opt, text="个槽", foreground=_MUTED).pack(side="left")
     ttk.Label(win, text="上限 %d。勾选数超过它时只显示靠前的几个 —— "
                         "想只看某几个，把不要的取消勾选即可。" % MAX_SLOTS,
-              foreground="#666", wraplength=470, justify="left"
+              foreground=_MUTED, wraplength=470, justify="left"
               ).pack(padx=20, pady=(0, 12), anchor="w")
 
     # ── 目录（2026-10-31）──────────────────────────────────────────────
@@ -6332,7 +6387,7 @@ def _settings_display_dialog():
     bcb.bind("<<ComboboxSelected>>", _b_pick, add="+")
     ttk.Label(bf, text="「系统默认浏览器」= 你平时双击链接时用的那个。"
                        "改完点「保存」生效；卡片上的按钮会变成「打开 Chrome」这种。",
-              foreground="#666", wraplength=460, justify="left"
+              foreground=_MUTED, wraplength=460, justify="left"
               ).pack(anchor="w", pady=(6, 0))
     _b_sync()
 
