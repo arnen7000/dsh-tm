@@ -426,7 +426,10 @@ chk("C3l5 纳入用的是 node_modules（不是 dsh 包目录）",
 # 点「关闭」不记，同一件事两种后果，下次是否被再问一次取决于点了哪个。
 # 现在统一：关窗口 = 全部跳过。不留"什么都不记就走"的出口。
 chk("C3l6 关闭对话框等同全部跳过（不留不记录的出口）",
-    'text="关闭", command=win.destroy' not in src
+    # 2026-11-01：判定范围收窄到「纳入选择窗」本身。
+    # 新增的「已移出管理」窗里有一个普通「关闭」按钮（它不记录任何"跳过"名单，
+    # 语义与纳入窗的"全部跳过"完全不同），不能用全局搜索一刀切。
+    'text="关闭", command=win.destroy' not in _fn_body("_adopt_picker_dialog")
     and 'win.protocol("WM_DELETE_WINDOW", _on_close)' in src
     and "on_skip_all()" in src)
 # grid 行号：日志区从 row3 挪到 row4（新增按钮行），权重必须同步
@@ -634,7 +637,8 @@ chk("C3y3 中途失败不中断后面的",
 # 2026-11-01：改成带参数调用（要传本次新增的槽键给白名单同步），
 # 断言的本意是"整个队列只重启一次"，所以按调用名计数，不限定括号里有没有参数。
 chk("C3y4 队列结束才重启一次",
-    _iq.count("_reload_config_after_change(") == 1)
+    # 2026-11-01：重启统一走 _restart_or_tell（它内部先起新实例、成功后才关自己）。
+    (_iq.count("_restart_or_tell(") + _iq.count("_reload_config_after_change(")) == 1)
 _iov = _fn_body("install_official_version")
 chk("C3y5 安装对话框是多选列表", "multi=True" in _iov)
 chk("C3y6 安装对话框按剩余槽数限流", "free = MAX_SLOTS - len(SLOT_KEYS)" in _iov)
@@ -643,11 +647,13 @@ _in2 = _fn_body("_do_install")
 chk("C3y8 单装路径仍然保留（on_done 为空时弹框+重启）",
     "on_done=None" in _in2 and "if on_done:" in _in2)
 _ud = _fn_body("uninstall_versions_dialog")
-# 单选约束只针对**槽选择区**（卸载/移出选中那一个）。2026-10-31 起这个窗下半部分
-# 多了「已移出」列表，那里用 Checkbutton 勾多个重新纳入是另一件事，不能一棍子打死。
-_ud_pick = _ud.split("已移出管理")[0]
+# 2026-11-01：「已移出管理」已拆成独立窗口（detached_manager_dialog），
+# 卸载窗里只剩「在管的槽」这一个选择区，所以直接看整个函数即可。
+_ud_pick = _ud
 chk("C3y9 卸载/移出改成单选（槽选择区用 Radiobutton，没有多选）",
-    "Radiobutton" in _ud_pick and "Checkbutton" not in _ud_pick)
+    # 2026-11-01：「已移出管理」已拆成独立窗口，卸载窗里不再有 Checkbutton，
+    # 所以整个函数都不该出现 Checkbutton。
+    "Radiobutton" in _ud_pick and "Checkbutton" not in _ud)
 chk("C3y10 卸载不再有全选/全不选", "全选" not in _ud)
 # 一次装多个时槽键必须读盘：内存里的 SLOT_KEYS 是启动快照，第二个槽会算出同一个 key
 _live = _fn_body("_next_free_slot_key_live")
@@ -1060,11 +1066,17 @@ chk("C3z17d 运行中的槽拒绝移出（判据与卡片上的「运行中」�
     and "proc_alive(procs.get(key))" in _fn_body("_do_detach"))
 chk("C3z17e 重新纳入走 UNINST.readd_slots",
     "UNINST.readd_slots(" in _fn_body("_do_readd"))
-chk("C3z17f 已移出的槽列在同一个窗里，可勾选重新纳入",
-    '"已移出管理' in _fn_body("uninstall_versions_dialog")
-    and "重新纳入勾选的" in _fn_body("uninstall_versions_dialog"))
-chk("C3z17g 没有槽但有已移出记录时窗口仍能打开（否则永远回不去）",
-    "if not SLOT_KEYS and not _recs:" in _fn_body("uninstall_versions_dialog"))
+chk("C3z17f 已移出的槽在**独立窗口**里可勾选重新纳入",
+    # 2026-11-01 用户反馈：卸载弹窗里混着"已移出管理"很怪（一次只想卸一个）。
+    # 现在拆成 detached_manager_dialog()，卸载窗只管在管的槽。
+    "重新纳入勾选的" in _fn_body("detached_manager_dialog")
+    and "重新纳入勾选的" not in _fn_body("uninstall_versions_dialog"))
+chk("C3z17g 没有在管槽时，卸载窗指引去「已移出管理」找回来",
+    # 2026-11-01：卸载窗只处理在管的槽；一个都没有时明确指路，
+    # 免得用户以为"已移出的版本彻底找不回来了"。
+    "if not SLOT_KEYS:" in _fn_body("uninstall_versions_dialog")
+    and "已移出管理" in _fn_body("uninstall_versions_dialog")
+    and "def detached_manager_dialog" in src)
 chk("C3z17h 移出确认框明说「磁盘上的文件一个都不会动」",
     "一个都不会动" in _fn_body("uninstall_versions_dialog"))
 # 全部移出后 versions 为空 → _dir_group 的 locked 自然变 False，
@@ -1092,8 +1104,12 @@ chk("C3z17m detached 记录里存绝对路径（<base> 会跟着新根漂移，�
 # 问一遍），但纳入扫描那一处必须显式关掉。
 _adopt_seg = src[src.index("def scan_and_offer_adopt("):
                  src.index("def scan_and_offer_adopt(") + 4000]
-chk("C3z17n 纳入扫描排除名单只算「正在管」的槽（include_detached=False）",
-    "_managed_roots(include_detached=False)" in _adopt_seg)
+chk("C3z17n 自动扫描把「已移出」当已知，手动扫描才全量",
+    # 2026-11-01 用户实测：移出一个版本后重启，被当成"新发现"弹窗追问，
+    # 而真正想接回来又只能用另一个列表 —— 自相矛盾。现在：
+    #   自动扫描（manual=False）→ include_detached=True，已移出的不再来烦
+    #   手动扫描（manual=True）  → include_detached=False，全量重扫
+    "include_detached=not manual" in _adopt_seg)
 chk("C3z17o _managed_roots 支持关掉 detached（默认仍含，启动时不再重复问）",
     "def _managed_roots(include_detached=True):" in src)
 chk("C3z17p 扫不到时明确指路「卸载 / 移出…」窗口下半部分的已移出列表",

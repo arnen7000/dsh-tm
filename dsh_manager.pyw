@@ -89,6 +89,10 @@ BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 EXAMPLE_PATH = os.path.join(BASE_DIR, "config", "config.example.json")
 LOG_FILE    = os.path.join(BASE_DIR, "dsh-manager.log")
+# 管理器自己的入口文件。重启要重开它 —— **不能依赖 __file__**：
+# pythonw 下 __file__ 可能是相对路径，destroy() 之后更不安全（2026-11-01 实测
+# 「说重启但没重启」的根因之一）。这里在模块加载时就固化成绝对路径。
+MANAGER_ENTRY = os.path.abspath(__file__)
 CREATE_NO_WINDOW = 0x08000000   # 隐藏 node/taskkill 子进程的控制台窗口
 
 # 日志脱敏：dsh 启动时会打印带 token 的入口 URL，那是该实例的唯一认证凭据，
@@ -3327,13 +3331,73 @@ def _installed_keys_from(payload):
     return [k for k in out if not (k in seen or seen.add(k))]
 
 
+def _relaunch_self():
+    """重启管理器本体。返回 (ok, 说明)。
+
+    2026-11-01 用户实测：卸载完弹「管理器即将重启」，但实际根本没重启。
+
+    根因（这是关键）：
+      1. `__file__` 在 pythonw / 某些打包形态下可能是空或相对路径，
+         destroy() 之后再取就更容易失败 —— 而原实现把异常整个吞掉了；
+      2. 原来的顺序是「先 destroy 再 startfile」，一旦 startfile 失败，
+         窗口已经没了、也起不来，用户只看到程序"消失"。
+
+    现在的做法：
+      · 用运行时记录的管理器入口（MANAGER_ENTRY），而不是依赖 __file__；
+      · **先尝试启动新实例，成功后再关自己** —— 起不来就保持现状并如实返回错误，
+        绝不让程序凭空消失；
+      · 用 subprocess 脱离父进程启动，避免被一起杀掉。
+    """
+    entry = ""
+    try:
+        entry = os.path.abspath(MANAGER_ENTRY or __file__)
+    except Exception:
+        try:
+            entry = os.path.abspath(sys.argv[0])
+        except Exception:
+            entry = ""
+    if not entry or not os.path.exists(entry):
+        return False, "找不到管理器入口文件：%s" % (entry or "(未知)")
+
+    # 用「同一个解释器 + 脚本」重启：pythonw 下 sys.executable 就是那个 pythonw.exe
+    exe = sys.executable or ""
+    pyw = exe
+    try:
+        cand = os.path.join(os.path.dirname(exe), "pythonw.exe")
+        if os.path.exists(cand):
+            pyw = cand
+    except Exception:
+        pass
+    if not pyw or not os.path.exists(pyw):
+        return False, "找不到 Python 解释器：%s" % (pyw or "(未知)")
+
+    try:
+        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP：子进程与当前进程脱钩，
+        # 我们随后 destroy 自己不会把它一起带走。
+        flags = 0
+        if os.name == "nt":
+            flags = 0x00000008 | 0x00000200
+        subprocess.Popen([pyw, entry], cwd=BASE_DIR,
+                         creationflags=flags, close_fds=True,
+                         stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+    except Exception as e:
+        return False, "启动新实例失败：%s" % e
+    return True, ""
+
+
 def _reload_config_after_change(new_keys=None):
     """config.json 被改了之后，让界面整体重画。
+
     槽位数量可能变了（1 槽 -> 2 槽），只刷新卡片是不够的，直接重开窗口最稳。
 
     `new_keys`：本次新增的槽键（安装 / 纳入）。2026-11-01 起，
     这里会先把它们补进 `ui.visible` —— 否则新装的槽在"有白名单"的配置下
     根本不画出来，用户会以为装失败了（见 _ensure_slots_visible）。
+
+    返回值：(ok, 说明)。**调用方据此决定提示文案** —— 重启失败时不能再对用户
+    说"即将重启"，那正是 2026-11-01 用户实测到的"说了要重启却没重启"。
     """
     try:
         err = _ensure_slots_visible(new_keys or [])
@@ -3343,13 +3407,41 @@ def _reload_config_after_change(new_keys=None):
             log("[配置] 已把新槽 %s 并入界面显示列表" % "、".join(new_keys))
     except Exception as e:
         log("[配置] 同步 ui.visible 时出错（忽略）：%s" % e)
+
+    ok, why = _relaunch_self()
+    if ok:
+        log("[配置] 已变更，正在重启管理器以加载新槽。")
+        try:
+            root.destroy()
+        except Exception:
+            pass
+        return True, ""
+
+    # 起不来：保持窗口存活，把原因如实写进日志，由调用方提示用户手动重开。
+    log("[配置] 已变更，但自动重启失败：%s（请手动关闭并重新打开管理器）" % why)
+    return False, why
+
+
+def _restart_or_tell(what="版本列表"):
+    """重开管理器；失败时**如实**告诉用户，而不是谎称"即将重启"。
+
+    2026-11-01 用户实测：「卸载完弹『管理器即将重启』，但实际没重启」。
+    原因是原代码 destroy() 后 os.startfile 静默失败，异常被吞掉。
+    现在改成：先启动新实例成功才关自己；失败就留下窗口并弹出说明。
+    """
+    ok, why = _relaunch_self()
+    if ok:
+        try:
+            root.destroy()
+        except Exception:
+            pass
+        return
     try:
-        root.destroy()
-    except Exception:
-        pass
-    log("[配置] 已变更，请重新启动管理器以加载新槽。")
-    try:
-        os.startfile(os.path.abspath(__file__))
+        messagebox.showwarning(
+            "已更新，但未能自动重启",
+            "配置已改好，但管理器没能自动重启（%s）。\n\n"
+            "请手动关闭本窗口并重新打开管理器，新的%s就会生效。"
+            % (why, what))
     except Exception:
         pass
 
@@ -3565,9 +3657,13 @@ def scan_and_offer_adopt(manual=False):
         messagebox.showerror("无法扫描", "缺少 dsh_adopt.py 模块。")
         return
     try:
+        # 2026-11-01 修：**自动扫描**必须把「已移出的槽」也算作已知，否则
+        # 用户刚移出一个版本、下次启动就被当成"新发现了未纳入的 dsh"弹窗追问，
+        # 而真正想接回来时又只能用「已移出管理」列表 —— 自相矛盾（用户实测踩到）。
+        # 手动点「扫描已装 dsh 并纳入」时才用 include_detached=False（全量重扫）。
         found = dsh_adopt.detect_existing_installs(
             [_probe_npm_global()] if _probe_npm_global() else [],
-            _versions_root(), _managed_roots(include_detached=False))
+            _versions_root(), _managed_roots(include_detached=not manual))
     except Exception as e:
         log("[检测] 扫描已装版本失败（不影响使用）：%s" % e)
         return
@@ -3679,7 +3775,8 @@ def _adopt_one(version, loc):
                                 "原安装未做任何改动。管理器即将重启以显示新槽。"
                                 % (msg, payload["slot_key"], payload["label"],
                                    payload["port"], payload["dsh_home"]))
-            _reload_config_after_change([payload.get("slot_key")])
+            _ensure_slots_visible([payload.get("slot_key")])
+            _restart_or_tell("槽列表")
         else:
             log("[纳入] 失败：%s" % msg)
             messagebox.showerror("纳入失败", msg)
@@ -3850,7 +3947,8 @@ def _install_queue(versions):
             messagebox.showinfo("安装成功",
                                 "%s\n\n管理器即将重启以显示新槽。" % body)
         if okr:
-            _reload_config_after_change(_installed_keys_from(payload))
+            _ensure_slots_visible(_installed_keys_from(payload))
+            _restart_or_tell("槽列表")
 
     def step(i):
         if i >= total:
@@ -3896,7 +3994,8 @@ def _do_install(version, slot_key, on_done=None, index=1, total=1):
         if ok:
             messagebox.showinfo("安装成功",
                                 "%s\n\n管理器即将重启以显示新槽。" % msg)
-            _reload_config_after_change(_installed_keys_from(payload))
+            _ensure_slots_visible(_installed_keys_from(payload))
+            _restart_or_tell("槽列表")
         else:
             messagebox.showerror("安装失败", msg)
 
@@ -3973,6 +4072,72 @@ def _stop_for_uninstall(key, port):
         time.sleep(0.5)
 
 
+def detached_manager_dialog():
+    """「已移出管理」独立窗口：把以前移出的槽原样接回来。
+
+    2026-11-01 从卸载窗里拆出来。用户反馈：只想卸一个版本，弹出来的窗里
+    却塞着一整块"已移出管理（可重新纳入）"，感觉像两个功能被硬拼在一起。
+    现在的分工：
+      · 「卸载 / 移出…」 —— 只处理**在管**的槽（卸 or 移出）
+      · 「已移出管理」   —— 只处理**已移出**的槽（重新纳入）
+    一个窗口只回答一个问题。
+    """
+    recs = _detached_records()
+    if not recs:
+        messagebox.showinfo(
+            "没有已移出的版本",
+            "当前没有「已移出管理」的版本。\n\n"
+            "移出 = 只从 config.json 里摘掉记录，磁盘上一个字节都不动；\n"
+            "槽里的 dsh.bat 仍然可以双击启动。想放走某个版本时，\n"
+            "在「卸载 / 移出…」窗口里选「移出管理（不删文件）」。")
+        return
+    win = tk.Toplevel(root)
+    win.title("已移出管理")
+    win.transient(root)
+    win.resizable(False, False)
+    _apply_icon(win)
+    ttk.Label(win, text="已移出管理",
+              font=("Microsoft YaHei UI", 10, "bold")).pack(padx=20, pady=(16, 2),
+                                                           anchor="w")
+    ttk.Label(win,
+              text="这些版本的文件都还在原处，只是不再由管理器跟踪。\n"
+                   "勾选后点「重新纳入」，会原样接回来（端口沿用、磁盘不动）。",
+              foreground="#666", justify="left", wraplength=470
+              ).pack(padx=20, pady=(0, 8), anchor="w")
+
+    box = ttk.LabelFrame(win, text="已移出的槽", padding=(10, 6))
+    box.pack(padx=20, pady=(0, 10), fill="both", expand=True)
+    dvar = {}
+    for r in recs:
+        v = tk.BooleanVar(value=False)
+        dvar[r["root"]] = v
+        ttk.Checkbutton(
+            box,
+            text="%s（%s，端口 %s）\n    %s" % (
+                r.get("label") or "?", r.get("version") or "版本未知",
+                r.get("port") or "?", r.get("root")),
+            variable=v).pack(anchor="w", pady=1)
+
+    def on_readd():
+        roots = [p for p, v in dvar.items() if v.get()]
+        if not roots:
+            messagebox.showwarning("还没选", "请勾选要重新纳入的槽。")
+            return
+        try:
+            win.destroy()
+        except Exception:
+            pass
+        _do_readd(roots)
+
+    btns = ttk.Frame(win)
+    btns.pack(padx=20, pady=(0, 16))
+    ttk.Button(btns, text="重新纳入勾选的", style="Green.TButton",
+               command=on_readd).pack(side="left", padx=4)
+    ttk.Button(btns, text="关闭", command=win.destroy).pack(side="left", padx=4)
+    win.bind("<Escape>", lambda e: win.destroy())
+    win.grab_set()
+
+
 def uninstall_versions_dialog():
     """卸载 / 移出管理：两个动作放一个窗里，因为用户面对的是同一个决定 ——
     「这几个槽我还要不要」。
@@ -3990,10 +4155,11 @@ def uninstall_versions_dialog():
                              "缺少 dsh_uninstall_ops.py / dsh_install_ops.py 模块，"
                              "请确认管理器目录完整。")
         return
-    _recs = _detached_records()
-    if not SLOT_KEYS and not _recs:
+    if not SLOT_KEYS:
         messagebox.showinfo("没有可卸载的版本",
-                            "当前管理器没有管理任何 dsh 版本，也没有已移出的记录。")
+                            "当前管理器没有管理任何 dsh 版本。\n\n"
+                            "（想找回以前「移出管理」的版本？点卡片区的"
+                            "「已移出管理」按钮。）")
         return
 
     win = tk.Toplevel(root)
@@ -4085,36 +4251,6 @@ def uninstall_versions_dialog():
         _b_det.state(["disabled"])
     ttk.Button(btns, text="取消", command=win.destroy).pack(side="left", padx=4)
 
-    # ── 已移出：仍在磁盘上，可一键重新纳入 ──────────────────────────────
-    if _recs:
-        dbox = ttk.LabelFrame(win, text="已移出管理（文件都还在，可重新纳入）",
-                              padding=(10, 6))
-        dbox.pack(padx=20, pady=(0, 10), fill="both", expand=True)
-        dvar = {}
-        for r in _recs:
-            v = tk.BooleanVar(value=False)
-            dvar[r["root"]] = v
-            ttk.Checkbutton(
-                dbox,
-                text="%s（%s，端口 %s）\n    %s" % (
-                    r.get("label") or "?", r.get("version") or "版本未知",
-                    r.get("port") or "?", r.get("root")),
-                variable=v).pack(anchor="w", pady=1)
-
-        def on_readd():
-            roots = [p for p, v in dvar.items() if v.get()]
-            if not roots:
-                messagebox.showwarning("还没选", "请勾选要重新纳入的槽。")
-                return
-            try:
-                win.destroy()
-            except Exception:
-                pass
-            _do_readd(roots)
-
-        ttk.Button(dbox, text="重新纳入勾选的", command=on_readd
-                   ).pack(anchor="w", pady=(6, 0))
-
     win.bind("<Escape>", lambda e: win.destroy())
     win.grab_set()
 
@@ -4131,7 +4267,7 @@ def _do_uninstall(keys):
             log("[卸载] 完成：%s" % msg.replace("\n", " | "))
             messagebox.showinfo("卸载完成",
                                 "%s\n\n管理器即将重启以反映新的版本列表。" % msg)
-            _reload_config_after_change()
+            _restart_or_tell("槽列表")
         else:
             log("[卸载] 未完成：%s" % msg.replace("\n", " | "))
             messagebox.showerror("卸载未完成", msg or "原因未知")
@@ -4170,7 +4306,7 @@ def _do_detach(keys):
             log("[移出] 完成：%s" % msg.replace("\n", " | "))
             messagebox.showinfo("已移出管理",
                                 "%s\n\n管理器即将重启以反映新的版本列表。" % msg)
-            _reload_config_after_change()
+            _restart_or_tell("槽列表")
         else:
             log("[移出] 未完成：%s" % msg.replace("\n", " | "))
             messagebox.showerror("移出未完成", msg or "原因未知")
@@ -4210,7 +4346,8 @@ def _do_readd(roots):
             log("[纳入] 完成：%s" % msg.replace("\n", " | "))
             messagebox.showinfo("已重新纳入",
                                 "%s\n\n管理器即将重启以反映新的版本列表。" % msg)
-            _reload_config_after_change(_installed_keys_from(payload))
+            _ensure_slots_visible(_installed_keys_from(payload))
+            _restart_or_tell("槽列表")
         else:
             log("[纳入] 未完成：%s" % msg.replace("\n", " | "))
             messagebox.showerror("重新纳入未完成", msg or "原因未知")
@@ -4251,6 +4388,16 @@ _b_uninst = ttk.Button(_act2, text="卸载 / 移出…", style="Red.TButton",
                        command=uninstall_versions_dialog)
 _b_uninst.grid(row=0, column=3, padx=4, pady=2, sticky="ew")
 BUSY["btns"].append(_b_uninst)
+# 「已移出管理」独立按钮（2026-11-01）：只在真有已移出记录时才出现，
+# 平时不占位置。它和「卸载 / 移出…」是两件事，各有各的入口。
+try:
+    if _detached_records():
+        _act2.columnconfigure(4, weight=1)
+        _b_detached = ttk.Button(_act2, text="已移出管理（%d）" % len(_detached_records()),
+                                 command=detached_manager_dialog)
+        _b_detached.grid(row=0, column=4, padx=4, pady=2, sticky="ew")
+except Exception:
+    pass
 
 
 # ── 日志区 ─────────────────────────────────────────────────
@@ -4731,44 +4878,47 @@ def _build_fresh_guide():
     if not FRESH_START:
         return
     try:
-        _w = ttk.LabelFrame(cards_frame, text="欢迎使用 DSH 版本管理器",
-                             padding=(20, 18))
+        _w = ttk.LabelFrame(cards_frame, text="快速开始", padding=(24, 20))
         _w.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
         _f = ttk.Frame(_w, style="Card.TFrame")
         _f.pack(fill="both", expand=True)
 
+        # 2026-11-01 重做观感：原来是一大段左对齐文字堆在一起，像说明书；
+        # 现在改成「一句主张 + 三步清单 + 主按钮」，和一个空状态的引导卡该有的样子。
         ttk.Label(_f, text="还没有安装任何 dsh 版本",
-                  font=("Segoe UI", 13, "bold"), style="Card.TLabel"
-                  ).pack(anchor="w", pady=(0, 4))
-        ttk.Label(_f, text="从这里开始：点下面的「安装官方版 dsh」，填一个版本号，"
-                           "就会自动下载、装好，并配好独立的数据目录与端口。",
-                  style="Card.TLabel", wraplength=560, justify="left"
-                  ).pack(anchor="w", pady=(0, 10))
-        ttk.Label(_f, text="版本号格式：0.2.0-rc.2 / 0.1.6-alpha.2 / 0.1.5-rc.2"
-                           "（可直接粘贴，常见手误会自动纠正）",
-                  style="Card.TLabel", foreground=_MUTED, wraplength=560,
-                  justify="left").pack(anchor="w", pady=(0, 6))
-        # 2026-10-31：包里带了 node 运行时，必须说出来 —— 否则用户会先去装 Node.js
-        # （或者以为"没装 Node 所以装不上"是管理器坏了）。
-        ttk.Label(_f, text="不需要先装 Node.js：管理器自带一份 node 运行时，"
-                           "装 dsh 时会自动拷进新槽。",
-                  style="Card.TLabel", foreground=_MUTED, wraplength=560,
+                  font=("Microsoft YaHei UI", 15, "bold"), style="Card.TLabel"
+                  ).pack(anchor="w", pady=(0, 6))
+        ttk.Label(_f, text="装一个版本就能开始用 —— 下载、隔离配置、分配端口都是自动的。",
+                  style="Card.TLabel", foreground=_MUTED, wraplength=600,
                   justify="left").pack(anchor="w", pady=(0, 14))
 
+        _steps = ttk.Frame(_f, style="Card.TFrame")
+        _steps.pack(anchor="w", pady=(0, 16))
+        for _i, (_n, _t) in enumerate((
+                ("1", "点「安装官方版 dsh」"),
+                ("2", "选一个版本号（如 0.2.1-rc.1）"),
+                ("3", "装好后点卡片上的「启动」")), 1):
+            _r = ttk.Frame(_steps, style="Card.TFrame")
+            _r.pack(anchor="w", pady=2)
+            ttk.Label(_r, text=_n, width=2, style="Card.TLabel",
+                      foreground=_LINK, font=("Segoe UI", 10, "bold")
+                      ).pack(side="left", padx=(0, 8))
+            ttk.Label(_r, text=_t, style="Card.TLabel").pack(side="left")
+
         _b = ttk.Frame(_f, style="Card.TFrame")
-        _b.pack(anchor="w")
+        _b.pack(anchor="w", pady=(0, 12))
         ttk.Button(_b, text="安装官方版 dsh", style="Green.TButton",
                    command=install_official_version).pack(side="left", padx=(0, 8))
         ttk.Button(_b, text="本机已有 dsh？扫描并纳入",
-                   command=lambda: scan_and_offer_adopt(manual=True)).pack(side="left", padx=(0, 8))
-        ttk.Button(_b, text="检查运行环境",
-                   command=_show_env_report).pack(side="left")
-        ttk.Label(_f, text="提示：最多可管理 %d 个版本并存，各自独立进程 / 端口 / 数据目录。"
-                           % MAX_SLOTS,
+                   command=lambda: scan_and_offer_adopt(manual=True)).pack(side="left")
+
+        ttk.Label(_f, text="不需要先装 Node.js（管理器自带 node 运行时）"
+                           " · 最多可管理 %d 个版本并存" % MAX_SLOTS,
                   style="Card.TLabel", foreground=_MUTED
-                  ).pack(anchor="w", pady=(14, 0))
+                  ).pack(anchor="w")
     except Exception as e:
         log("[引导] 零槽引导卡构建失败（不影响使用，可点底部按钮安装）：%s" % e)
+
 
 def _ensure_slots_visible(new_keys):
     """把**新装的槽**补进 `ui.visible`，避免"装了却看不见"。
@@ -5067,6 +5217,14 @@ def _dir_group(parent, padx=20):
         return var
 
     ib = _row("安装根目录", os.path.normpath(INSTALL_BASE), readonly=locked)
+    if locked:
+        # 2026-11-01：安装根锁定后不能"改"，但**可以整体移动**（换盘/整理）。
+        # 移动 = 复制 + 校验 + 改配置 + 删旧位置，安全性由 dsh_move 保证。
+        try:
+            ttk.Button(df, text="移动安装根目录…", command=move_install_root_dialog
+                       ).pack(anchor="w", pady=(2, 0))
+        except Exception:
+            pass
     tr = _row("临时目录根", os.path.normpath(_temp_root()))
     if locked:
         # 只留一句必要的（不可逆操作的后果必须就地说明），其余细节移入使用说明。
@@ -5201,6 +5359,245 @@ def _dirs_only_dialog():
     ttk.Button(btns, text="取消", command=win.destroy).pack(side="left", padx=4)
     win.bind("<Escape>", lambda e: win.destroy())
     win.grab_set()
+
+
+def _open_user_guide():
+    """打开详细使用说明（文档文件）。找不到时给出明确说明。"""
+    p = os.path.join(BASE_DIR, "docs", "dsh管理器使用说明.md")
+    if os.path.exists(p):
+        try:
+            os.startfile(p)
+            return
+        except Exception:
+            pass
+    messagebox.showinfo("详细使用说明",
+                        "找不到文档文件：\n%s\n\n"
+                        "完整说明见程序目录下的 docs/ 文件夹，"
+                        "或项目主页的 README。" % p)
+
+
+def about_dialog():
+    """「关于」窗口：软件基本信息 + 使用说明入口 + 运行环境检查。
+
+    2026-11-01 用户需求：左上加一个「关于」，点开能看到软件信息，
+    也能看到详细使用说明。
+
+    为什么把「检查运行环境」搬到这里：它查的是**管理器自身的运行前提**
+    （Python / tkinter / node / 权限 / 端口），而管理器既然已经打开了，
+    这些基本必然通过 —— 摆在首页引导卡上属于"占位置的按钮"。
+    只有排障时才需要，放进「关于」正合适。
+    """
+    win = tk.Toplevel(root)
+    win.title("关于 DSH 版本管理器")
+    win.transient(root)
+    win.resizable(False, False)
+    _apply_icon(win)
+
+    ttk.Label(win, text="DSH 版本管理器（dsh-tm）",
+              font=("Microsoft YaHei UI", 13, "bold")).pack(padx=24, pady=(20, 2),
+                                                           anchor="w")
+    ttk.Label(win, text="多版本隔离 · 独立进程 / 端口 / 数据 / 运行时 / 临时目录",
+              foreground="#666").pack(padx=24, anchor="w")
+
+    body = ttk.Frame(win)
+    body.pack(padx=24, pady=(14, 8), fill="both", expand=True)
+    body.columnconfigure(1, weight=1)
+
+    def _row(r, label, value):
+        ttk.Label(body, text=label, foreground="#666").grid(
+            row=r, column=0, sticky="w", pady=2, padx=(0, 12))
+        ttk.Label(body, text=value, wraplength=380, justify="left").grid(
+            row=r, column=1, sticky="w", pady=2)
+
+    def _safe(fn, default="—"):
+        try:
+            v = fn()
+            return v if v not in (None, "") else default
+        except Exception:
+            return default
+
+    _row(0, "版本", _safe(lambda: _app_version()))
+    _row(1, "槽上限", "%d 个" % MAX_SLOTS)
+    _row(2, "当前槽数", "%d 个" % len(SLOT_KEYS))
+    _row(3, "安装根目录", os.path.normpath(INSTALL_BASE))
+    _row(4, "程序目录", BASE_DIR)
+    _row(5, "运行环境", "%s（%s）" % (
+        _safe(lambda: "%d.%d.%d" % sys.version_info[:3]),
+        _safe(lambda: os.path.basename(sys.executable) or "python")))
+    _row(6, "日志文件", LOG_FILE)
+
+    ttk.Separator(win, orient="horizontal").pack(fill="x", padx=24, pady=(8, 0))
+
+    ttk.Label(win, text="使用说明", font=("Microsoft YaHei UI", 10, "bold")
+              ).pack(padx=24, pady=(12, 4), anchor="w")
+    ttk.Label(win,
+              justify="left", wraplength=470, foreground="#444",
+              text=("· 「安装官方版 dsh」→ 选版本号 → 自动下载并配好隔离环境\n"
+                    "· 卡片上「启动 / 停止」管单个版本；「打开浏览器」带上登录 token\n"
+                    "· 拖动卡片可调整左右顺序；「设置」里能隐藏不看的槽\n"
+                    "· 「卸载 / 移出…」：卸载会先备份用户数据再删；\n"
+                    "  移出只改配置、磁盘一个字节不动（之后可在「已移出管理」接回）\n"
+                    "· 「槽体检」只读检查，报告问题但不替你改\n"
+                    "· 命令行：python dsh-tm.py list | start --all | stop --all")
+              ).pack(padx=24, anchor="w")
+
+    btns = ttk.Frame(win)
+    btns.pack(padx=24, pady=(14, 18), fill="x")
+
+    ttk.Button(btns, text="打开详细使用说明", command=_open_user_guide).pack(side="left")
+    ttk.Button(btns, text="检查运行环境", command=_show_env_report).pack(
+        side="left", padx=(8, 0))
+    ttk.Button(btns, text="关闭", command=win.destroy).pack(side="right")
+    win.bind("<Escape>", lambda e: win.destroy())
+    win.grab_set()
+
+
+def _app_version():
+    """读程序版本：优先 config.json 的 version 字段，其次 git describe，最后兜底。"""
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
+            v = (json.load(f) or {}).get("version")
+        if v:
+            return str(v)
+    except Exception:
+        pass
+    return "1.0"
+
+
+def move_install_root_dialog():
+    """把已装的槽整体搬到另一个位置（换盘 / 整理目录）。
+
+    2026-11-01 用户需求：装了版本后磁盘紧张想换盘，或纯粹想把安装根挪个位置
+    做文件整理 —— 原来只能"全部卸载再重装"，代价太大。
+
+    安全性由 dsh_move 模块保证（它有自己的离线回归 test-move.py）：
+      · 先复制 → 校验（文件数+字节数）→ **成功才改 config、才删源**
+      · 目标已有同名目录一律中止，绝不覆盖
+      · junction / 符号链接不跟随、不复制内容
+      · 旧目录删不干净也照样成功（提示手动清理），绝不让用户"搬一半"
+    """
+    try:
+        import dsh_move as MV
+    except Exception as e:
+        messagebox.showerror("无法移动", "缺少 dsh_move.py 模块：%s" % e)
+        return
+    if not SLOT_KEYS:
+        messagebox.showinfo("没有可移动的版本",
+                            "当前管理器没有管理任何 dsh 版本。\n\n"
+                            "装第一个版本时会让您选位置，那时选好即可。")
+        return
+
+    win = tk.Toplevel(root)
+    win.title("移动安装根目录")
+    win.transient(root)
+    win.resizable(False, False)
+    _apply_icon(win)
+
+    ttk.Label(win, text="移动安装根目录",
+              font=("Microsoft YaHei UI", 10, "bold")
+              ).pack(padx=20, pady=(16, 4), anchor="w")
+    ttk.Label(win,
+              text=("把已装的所有版本整体搬到另一个位置。\n"
+                    "过程：复制 → 校验（文件数 + 字节数）→ 改配置 → 删旧位置。\n"
+                    "任何一步失败都会保留旧位置、不动配置。"),
+              foreground="#666", justify="left", wraplength=470
+              ).pack(padx=20, pady=(0, 10), anchor="w")
+
+    cur = ttk.Frame(win)
+    cur.pack(padx=20, fill="x")
+    ttk.Label(cur, text="当前位置", width=10).pack(side="left")
+    ttk.Label(cur, text=os.path.normpath(INSTALL_BASE),
+              foreground="#666").pack(side="left")
+
+    newv = tk.StringVar(value="")
+
+    row = ttk.Frame(win)
+    row.pack(padx=20, pady=(8, 0), fill="x")
+    ttk.Label(row, text="新位置", width=10).pack(side="left")
+    ent = ttk.Entry(row, textvariable=newv, width=42, font=("Consolas", 9))
+    ent.pack(side="left", padx=(0, 6), fill="x", expand=True)
+
+    def _pick():
+        p = filedialog.askdirectory(title="选择新的安装根目录", parent=win,
+                                     initialdir=os.path.normpath(INSTALL_BASE))
+        if p:
+            newv.set(os.path.normpath(p))
+
+    ttk.Button(row, text="浏览…", width=7, command=_pick).pack(side="left")
+
+    ttk.Label(win,
+              text=("· 新位置下会创建 dsh-versions\\ 存放各版本槽\n"
+                    "· 磁盘空间要够（每个版本约 0.7～1.3 GB）\n"
+                    "· 移动期间请勿启动或停止任何版本"),
+              foreground="#8A5A00", justify="left", wraplength=470
+              ).pack(padx=20, pady=(10, 0), anchor="w")
+
+    def on_ok():
+        target = (newv.get() or "").strip()
+        if not target:
+            messagebox.showwarning("还没选位置", "请先选择新的安装根目录。")
+            return
+        target = os.path.normpath(target)
+        slot_names = []
+        for k in SLOT_KEYS:
+            nm = os.path.basename(os.path.normpath(_version_root(VC[k]) or ""))
+            if nm:
+                slot_names.append(nm)
+        plan = MV.plan_move(INSTALL_BASE, target, slot_names)
+        if not plan["ok"]:
+            messagebox.showerror("无法移动", plan["error"])
+            return
+        body = "\n".join("  · " + s for s in plan["steps"])
+        if not messagebox.askyesno(
+                "确认移动",
+                "即将把 %d 个版本搬到：\n%s\n\n%s\n\n"
+                "旧位置在全部校验通过后才会被删除。\n\n继续吗？"
+                % (len(plan["slots"]), target, body)):
+            return
+        try:
+            win.destroy()
+        except Exception:
+            pass
+        _do_move_root(MV, plan)
+
+    btns = ttk.Frame(win)
+    btns.pack(padx=20, pady=(16, 16), fill="x")
+    ttk.Button(btns, text="开始移动", style="Green.TButton",
+               command=on_ok).pack(side="left")
+    ttk.Button(btns, text="取消", command=win.destroy).pack(side="left", padx=(8, 0))
+    win.bind("<Escape>", lambda e: win.destroy())
+    win.grab_set()
+
+
+def _do_move_root(MV, plan):
+    """后台执行搬迁，进度窗 + 完成后提示重启。"""
+    log("[移动] 开始：%s → %s（%d 个槽）"
+        % (plan["src_base"], plan["dst_base"], len(plan["slots"])))
+
+    def done(ok, message):
+        _set_busy(True)
+        if ok:
+            log("[移动] 完成：%s" % str(message).replace("\n", " | "))
+            messagebox.showinfo(
+                "移动完成",
+                "%s\n\n管理器需要重启才能使用新位置。" % message)
+            _restart_or_tell("安装位置")
+        else:
+            log("[移动] 失败：%s" % str(message).replace("\n", " | "))
+            messagebox.showerror("移动失败", str(message))
+
+    prog = _GuiProgress("移动安装根目录", done)
+
+    def work():
+        try:
+            ok, msg = MV.move_now(
+                plan, CONFIG_PATH,
+                progress=lambda t: prog.on_step(t))
+            return (ok, msg, "")
+        except Exception as e:
+            return (False, "", "移动过程异常：%s" % e)
+
+    OPS.run_in_thread(work, prog, None)
 
 
 def settings_dialog():
@@ -5498,6 +5895,8 @@ def settings_dialog():
 # 那一行时函数还不存在 → NameError，而 .pyw 无控制台，表现为「双击没反应」。
 # （这个坑本项目踩过两次，C3/C8 组断言守着。）
 ttk.Button(_hdr, text="设置", command=settings_dialog).pack(side="right", padx=(0, 6))
+# 「关于」按钮（2026-11-01）：放设置左边，能看到版本信息、使用说明、运行环境检查。
+ttk.Button(_hdr, text="关于", command=about_dialog).pack(side="right", padx=(0, 6))
 # 「槽体检」按钮已挪到下面「安装/纳入/体检/卸载」那一排（2026-10-31 起）——
 # 那四个都是「对整个槽做的事」，摆在一起才符合心智。标题栏只留「设置」。
 
