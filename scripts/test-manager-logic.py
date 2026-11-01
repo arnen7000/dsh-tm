@@ -437,8 +437,8 @@ chk("C3l6 关闭对话框等同全部跳过（不留不记录的出口）",
     and "on_skip_all()" in src)
 # grid 行号：日志区从 row3 挪到 row4（新增按钮行），权重必须同步
 chk("C3m 日志区行权重与当前布局一致",
-    # 2026-11-01：第二排按钮移入设置后，日志区从 row4 回到 row3
-    "root.rowconfigure(3, weight=1)" in src, "日志区须是 row3")
+    # 2026-11-01 第三轮：底部按钮条整体移到标题栏 → 日志区上提到 row2
+    "root.rowconfigure(2, weight=1)" in src, "日志区须是 row2")
 
 print("== C6 任务栏图标（2026-10-02 修复：发虚 + 羽毛）==")
 # 只查**实际调用**，不能只按词出现判断——注释里为了说明「为什么不用它」
@@ -617,8 +617,10 @@ chk("C8c 有 FRESH_START 标志", "FRESH_START = (N_SLOTS == 0)" in src)
 chk("C8d 零槽时画空槽卡片而非空白页",
     "空槽 %d" in src and "「_build_fresh_guide」".replace("「", "").replace("」", "") in src
     or "_build_fresh_guide" in src)
-chk("C8e 零槽卡提供安装入口",
-    "安装 dsh 到本槽" in _fn_body("_build_fresh_guide"))
+chk("C8e 零槽引导提供安装与纳入两个入口",
+    # 2026-11-01 定稿：不再画假槽卡，改为一段说明 + 两个真按钮
+    "install_official_version" in _fn_body("_build_fresh_guide")
+    and "scan_and_offer_adopt(manual=True)" in _fn_body("_build_fresh_guide"))
 chk("C8e2 零槽时不再有「快速开始」大卡片（与底部按钮重复）",
     'text="快速开始"' not in src)
 chk("C8f 示例配置是零槽",
@@ -933,10 +935,10 @@ chk("C3z13b 空白区仍是 fleur",
     'w.configure(cursor="fleur")' in _fn_body("_bind_drag"))
 # 2026-11-01 第二轮重构（用户要求）：**初始界面只留「槽 + 日志 + 全启停」**，
 # 其余动作（安装 / 纳入 / 卸载 / 生成 bat / 关于 / 收藏）全部收进「设置」。
-chk("C3z13c 主界面第一排：全部启动 + 全部停止",
-    'text="全部启动"' in src and 'text="全部停止"' in src
-    and "_b_startall.grid(row=0, column=0" in src
-    and "_b_stopall.grid(row=0, column=1" in src)
+chk("C3z13c 全启停按钮在标题栏、位于「设置」左侧",
+    # 2026-11-01 第三轮：底部按钮条移到标题栏（pack side=right 后 pack 的在更左）
+    '_hdr, text="全部启动"' in src and '_hdr, text="全部停止"' in src
+    and src.index('_hdr, text="设置"') < src.index('_hdr, text="全部停止"'))
 chk("C3z13c2 主界面不再有第二排按钮（安装/纳入/卸载已收进设置）",
     "_act2 = ttk.Frame(root)" not in src)
 chk("C3z13c3 设置页里提供安装 / 纳入 / 卸载入口",

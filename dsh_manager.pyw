@@ -3233,28 +3233,9 @@ def _build_cards():
             _sep.grid(row=0, column=i * 2 + 1, sticky="ns")
             CARD_SEPS.append(_sep)
 
-# ── 底部操作行：全部启动 / 全部停止（2026-11-01 精简）──────────────
-# 用户要求：初始界面只包含「各个槽 + 日志 + 两个全启停按钮」，
-# 其余动作（安装 / 纳入 / 卸载 / 生成 bat / 关于）一律收进「设置」。
-_act = ttk.Frame(root)
-_act.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 6))
-_act.columnconfigure(0, weight=1); _act.columnconfigure(1, weight=1)
-# 2026-11-01：界面只加「全部停止」（用户明确：不需要界面版"全部启动"）。
-# 批量启动留给 CLI，避免用户误开一堆版本后还要手动一个个关。
-#
-# 2026-11-01 第二轮：「杀全部进程」按钮**从界面移除**（用户反馈：和「全部停止」
-# 日常效果几乎一样，两个并排会让人犹豫）。它的独有价值只剩"清理没登记进 config
-# 的 dsh 残留"，属于排障动作、不该占首页位置 —— 移到 CLI：
-#     python dsh-tm.py kill-stray
-# 函数 kill_all() 本体保留（CLI 要用），只是不再有界面入口。
-_b_startall = ttk.Button(_act, text="全部启动", style="Green.TButton",
-                         command=start_all_slots)
-_b_startall.grid(row=0, column=0, padx=4, pady=2, sticky="ew")
-BUSY["btns"].append(_b_startall)
-_b_stopall = ttk.Button(_act, text="全部停止", style="Red.TButton",
-                        command=stop_all_slots)
-_b_stopall.grid(row=0, column=1, padx=4, pady=2, sticky="ew")
-BUSY["btns"].append(_b_stopall)
+# 2026-11-01（第三轮）：两个全启停按钮移到**标题栏**，紧贴「设置」左侧。
+# 用户要求：主窗口只留槽 + 日志，操作按钮收到顶部一行，与「设置」同一水平线。
+# 底部那一排因此整个删除。
 # 为每个版本生成 启动 bat + kill bat（2026-09-30 新增）：
 # 让「管理器启动」与「双击 bat 启动」两条路的 TEMP 等环境完全一致。
 
@@ -4519,7 +4500,7 @@ log_text = tk.Text(root, height=10, width=80, font=("Consolas", 9), wrap="char",
                   bg="#ffffff", fg=_INK, insertbackground=_INK,
                   relief="solid", borderwidth=1,
                   highlightbackground=_CARD_BD, highlightthickness=1)
-log_text.grid(row=3, column=0, padx=12, pady=(0, 12), sticky="nsew")
+log_text.grid(row=2, column=0, padx=12, pady=(0, 12), sticky="nsew")
 log_text.configure(state="disabled")
 
 # 日志着色（2026-10-31 起，2026-11-01 扩充）
@@ -4959,7 +4940,7 @@ log("log file = %s" % LOG_FILE)
 # 保证每槽标题与按钮文字完整可见。日志区随窗口拉伸占满剩余高度。
 root.geometry("%dx600" % _win_w)
 root.columnconfigure(0, weight=1)
-root.rowconfigure(3, weight=1)   # 日志区占满剩余高度（row 3 = 日志；第二排按钮已移除）
+root.rowconfigure(2, weight=1)   # 日志区占满剩余高度（row 2 = 日志；底部按钮已移到标题栏）
 root.update_idletasks()
 # 窗口已 realize：再补设一次图标（双保险——就算 Tk 在 realize 时动过图标也会被这里盖回海豚）
 _force_taskbar_icon()
@@ -4989,58 +4970,46 @@ if dsh_adopt is not None:
 # NameError；而 .pyw 没有控制台，异常被吞掉 → 表现为「双击没反应」。
 # 这个坑我踩了两次，现在有 C8 组断言守着。
 def _build_fresh_guide():
-    """零槽首屏：画**两个空槽卡片**，版式与真实卡片完全一致，只是字都留空。
+    """零槽首屏：一段简短安装说明 + 两个按钮（安装 / 纳入）。
 
-    2026-11-01 用户反馈两轮之后的定稿：
-      ① 第一版是大号「快速开始」卡 —— 撑不满、按钮与底部重复（已废弃）
-      ② 第二版是两个空槽卡，但卡里还塞了「未安装」「装好之后这里会出现…」等说明字
-         —— 用户要求"下面的区域不要有什么说明，直接显示正常的各个区域，只是把字都去掉"
-      ③ 现在：结构与真实槽卡逐行对齐（状态行 / 启动·停止 / 打开·复制URL / 程序·数据目录），
-         文字留空，只保留一个「安装 dsh 到本槽」主按钮供点击。
-    这样零槽和非零槽的视觉语言完全一致，第一次打开就知道"这里将来会长成什么样"。
+    2026-11-01 用户最终定的形态：
+      ① 最早是「快速开始」大卡片 —— 撑不满、按钮与底部重复，废弃
+      ② 后来改成两个假槽卡片 —— 用户觉得"空槽 1/空槽 2"是假的、容易误解，废弃
+      ③ 现在：一张**朴素说明卡**，说清楚"这里还没有版本、装一个就能用"，
+         下面两个真正的动作按钮（安装官方版 / 扫描并纳入）。
+    不再画任何假槽位 —— 没装的槽不该在界面上占一个"空槽"的位置。
     """
     if not FRESH_START:
         return
     try:
         _clear_cards()
-        n = 2
-        for _c in range(n):
-            cards_frame.columnconfigure(_c * 2, weight=1, uniform="card")
-        for _c in range(n - 1):
-            cards_frame.columnconfigure(_c * 2 + 1, weight=0, minsize=16)
+        cards_frame.columnconfigure(0, weight=1)
         cards_frame.rowconfigure(0, weight=1)
 
-        for i in range(n):
-            _card = ttk.LabelFrame(cards_frame, text="空槽 %d" % (i + 1),
-                                   padding=(12, 8), labelanchor="n")
-            _card.grid(row=0, column=i * 2, sticky="nsew", padx=2, pady=2)
-            _body = ttk.Frame(_card, style="Card.TFrame")
-            _body.pack(fill="both", expand=True, padx=2, pady=(4, 4))
-            _body.columnconfigure(0, weight=1)
-            _body.columnconfigure(1, weight=1)
+        _w = ttk.LabelFrame(cards_frame, text="开始使用", padding=(24, 20))
+        _w.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+        _f = ttk.Frame(_w, style="Card.TFrame")
+        _f.pack(fill="both", expand=True)
 
-            # 与真实卡逐行对齐的骨架，文字留空（保持行高，避免整卡塌下去）
-            ttk.Label(_body, text=" ", style="Card.TLabel",
-                      font=("Segoe UI", 9)).grid(
-                row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        ttk.Label(_f, text="还没有安装 dsh",
+                  font=("Microsoft YaHei UI", 14, "bold"), style="Card.TLabel"
+                  ).pack(anchor="w", pady=(0, 8))
+        ttk.Label(_f,
+                  text=("点下面的「安装 dsh」选一个版本号就会自动下载并配好隔离环境；\n"
+                        "如果你机器上已经装过 dsh，点「扫描并纳入」把它接进来管理。\n"
+                        "每个版本各自独立的数据目录、端口与 node 运行时，互不影响。"),
+                  style="Card.TLabel", justify="left", wraplength=560
+                  ).pack(anchor="w", pady=(0, 16))
 
-            # 第 1 行：安装（真实卡这里是「启动 / 停止」）
-            ttk.Button(_body, text="安装 dsh 到本槽", style="Brand.TButton",
-                       command=install_official_version).grid(
-                row=1, column=0, columnspan=2, padx=3, pady=3, sticky="ew")
-
-            # 第 2~3 行：占位按钮（disabled，无文字），保持与真实卡同高
-            for _r, _c0, _c1 in ((2, 0, 1), (3, 0, 1)):
-                for _cc in (_c0, _c1):
-                    _ph = ttk.Button(_body, text="", state=["disabled"])
-                    _ph.grid(row=_r, column=_cc, padx=3,
-                             pady=(3, 3) if _r == 2 else (3, 0), sticky="ew")
-
-            if i < n - 1:
-                ttk.Separator(cards_frame, orient="vertical").grid(
-                    row=0, column=i * 2 + 1, sticky="ns")
+        _b = ttk.Frame(_f, style="Card.TFrame")
+        _b.pack(anchor="w")
+        ttk.Button(_b, text="安装 dsh", style="Brand.TButton",
+                   command=install_official_version).pack(side="left", padx=(0, 8))
+        ttk.Button(_b, text="扫描并纳入",
+                   command=lambda: scan_and_offer_adopt(manual=True)
+                   ).pack(side="left")
     except Exception as e:
-        log("[引导] 零槽引导卡构建失败（不影响使用，可点底部按钮安装）：%s" % e)
+        log("[引导] 零槽引导构建失败（不影响使用，可点底部按钮安装）：%s" % e)
 
 
 def _ensure_slots_visible(new_keys):
@@ -6005,8 +5974,15 @@ def _settings_display_dialog():
     丢东西，也就没有「隐藏了怎么找回」这种问题 —— 这正是它敢做成即时生效的原因。
     「目录」则相反：它改的是磁盘真相，所以每一步都要先校验、后写入。
     """
+    # 2026-11-01 修 bug：零槽时原来直接退到 _dirs_only_dialog（目录设置），
+    # 于是点「显示哪些槽」弹出来的却是"目录"，与按钮名完全不符（用户实测反馈）。
+    # 零槽时本来就没有槽可显示，正确做法是**如实说明**，而不是弹一个无关的窗。
     if not SLOT_KEYS:
-        _dirs_only_dialog()
+        messagebox.showinfo(
+            "还没有可显示的槽",
+            "当前没有任何版本槽，所以没有可勾选/排序的对象。\n\n"
+            "先装一个版本（设置 → 安装官方版 dsh），之后这里就能调整\n"
+            "显示哪几个槽、它们的左右顺序。")
         return
 
     order = _ui_order()                                   # 工作副本（含全部槽）
@@ -6294,6 +6270,15 @@ def _settings_display_dialog():
 # 2026-11-01：标题栏只留「设置」一个入口。
 # 「关于」「★ 在 GitHub 收藏」都收进设置页（用户要求：初始界面只有槽 + 日志 + 全启停）。
 ttk.Button(_hdr, text="设置", command=settings_dialog).pack(side="right", padx=(0, 6))
+# 两个全启停按钮：放在「设置」左侧（pack side=right 时后 pack 的在更左边）
+_b_stopall = ttk.Button(_hdr, text="全部停止", style="Red.TButton",
+                        command=stop_all_slots)
+_b_stopall.pack(side="right", padx=(0, 6))
+BUSY["btns"].append(_b_stopall)
+_b_startall = ttk.Button(_hdr, text="全部启动", style="Green.TButton",
+                         command=start_all_slots)
+_b_startall.pack(side="right", padx=(0, 6))
+BUSY["btns"].append(_b_startall)
 # 「槽体检」按钮已挪到下面「安装/纳入/体检/卸载」那一排（2026-10-31 起）——
 # 那四个都是「对整个槽做的事」，摆在一起才符合心智。标题栏只留「设置」。
 
