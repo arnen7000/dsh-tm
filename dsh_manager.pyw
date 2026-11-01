@@ -353,6 +353,14 @@ SLOT_KEYS = list(VERSIONS.keys())   # 顺序保留：第 0 个在最左，依次
 # 这样用户调布局时不可能丢东西，也就不需要为「隐藏」写任何数据迁移。
 UI_CFG = CFG.get("ui") if isinstance(CFG.get("ui"), dict) else {}
 
+# 主题模式（2026-11-01）：config 的 ui.theme = system / light / dark
+try:
+    _THEME_INIT = str(UI_CFG.get("theme") or "system").lower()
+except Exception:
+    _THEME_INIT = "system"
+if _THEME_INIT not in ("system", "light", "dark"):
+    _THEME_INIT = "system"
+
 try:
     import dsh_ui_prefs as UIP
 except Exception:
@@ -1201,6 +1209,103 @@ def stop_all_slots():
     else:
         log("[全部停止] 完成：%d 个槽已发出停止指令" % len(running))
 
+def start_all_slots():
+    """「全部启动」：把**本管理器管的**每个槽都拉起来（2026-11-01 新增）。
+
+    与 start_one 的区别
+    -------------------
+    start_one 是"点一张卡片"，里面有一堆交互式弹窗（端口被非 dsh 占用时问用户、
+    被自家 dsh 占用时问要不要清理）。批量场景下一个人盯着 6 个弹窗是不可接受的，
+    所以这里走**静默策略**：
+
+      · 已在运行 → 跳过
+      · 端口被 **非 dsh** 程序占用 → **不启动、不改动任何东西**，记录一条并汇总告诉用户
+        （绝不为了"全部起来"去杀别人的程序）
+      · 端口被**自家 dsh** 占用 → 视为已在运行，跳过
+      · 其它失败 → 记录，继续下一个
+
+    全部发完后等端口真正开始监听再回报（dsh 冷启动 5~8 秒），
+    与 CLI 的 `start --all` 行为一致。
+    """
+    keys = [k for k in SLOT_KEYS]
+    if not keys:
+        messagebox.showinfo("全部启动", "当前没有任何槽可启动。")
+        return
+
+    started, skipped, blocked = [], [], []
+    for k in keys:
+        cfg = VC[k]
+        try:
+            if proc_alive(procs.get(k)) or port_open(cfg["port"]):
+                # 已在跑（含外部/上一会话启动的）
+                if port_open(cfg["port"]):
+                    skipped.append(k)
+                    continue
+            # 端口被占但不是 dsh 在听 → 查是不是别家程序
+            if port_open(cfg["port"]):
+                owners = []
+                if dsh_kill is not None:
+                    try:
+                        owners, _t = dsh_kill.format_port_owners(cfg["port"])
+                    except Exception:
+                        owners = []
+                if not any(o.get("kind") in ("dsh", "dsh-ambiguous") for o in owners):
+                    blocked.append("%s（端口 %d 被非 dsh 程序占用）" % (k, cfg["port"]))
+                    continue
+                skipped.append(k)
+                continue
+            _spawn_slot_silent(k)
+            started.append(k)
+        except Exception as e:
+            blocked.append("%s（%s）" % (k, e))
+
+    if started:
+        log("=== 全部启动：%s ===" % "、".join(started))
+    if skipped:
+        log("[全部启动] 已在运行，跳过：%s" % "、".join(skipped))
+    for _b in blocked:
+        log("[全部启动] 未能启动：%s" % _b)
+
+    if blocked:
+        messagebox.showwarning(
+            "全部启动",
+            "以下槽未能启动：\n\n  " + "\n  ".join(blocked) +
+            "\n\n非 dsh 程序占用的端口不会自动结束，请手动处理或改端口。")
+    elif not started:
+        messagebox.showinfo("全部启动", "所有槽都已经在运行了。")
+    else:
+        log("[全部启动] 已发出 %d 个启动指令，等待端口监听…" % len(started))
+    refresh(once=True)
+
+
+def _spawn_slot_silent(key):
+    """不带任何弹框地拉起一个槽（供批量启动用）。
+
+    只做"能起就起"：不复用 start_one 的交互逻辑，避免批量时弹一堆窗。
+    失败直接抛异常，由调用方汇总。
+    """
+    cfg = VC[key]
+    cmd = _build_cmd(key)
+    env = os.environ.copy()
+    env["DSH_HOME"] = cfg["dsh_home"] or os.path.join(HOME, ".dsh")
+    td = cfg.get("temp_dir")
+    if td:
+        try:
+            os.makedirs(td, exist_ok=True)
+        except Exception:
+            pass
+        env["TEMP"] = td
+        env["TMP"] = td
+    flags = CREATE_NO_WINDOW | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    p = subprocess.Popen(cmd, cwd=BASE_DIR, env=env,
+                         stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL,
+                         creationflags=flags)
+    procs[key] = p
+    log("[%s] 已启动 pid=%s 端口=%d" % (key, p.pid, cfg["port"]))
+
+
 def kill_all():
     """杀全部 = 所有 DSH 相关的 node 进程：
     两个槽各自的签名（槽内，精确到安装目录）+ 泛签名兜底（槽外：别的安装位置、
@@ -1869,6 +1974,8 @@ _STATUS_COLORS = {
     "external_conflict": _RED,
     "stopped":           _MUTED,
 }
+# 2026-11-01：配色统一由 _apply_palette() 应用（浅色/深色/跟随系统），
+# 下面原有的 configure 保留作为兜底（在 _apply_palette 之前跑，随后被覆盖）。
 try:
     _style = ttk.Style()
     _style.theme_use("clam")
@@ -3126,7 +3233,9 @@ def _build_cards():
             _sep.grid(row=0, column=i * 2 + 1, sticky="ns")
             CARD_SEPS.append(_sep)
 
-# ── 底部操作行（全部停止 / 生成 bat）────────────────────────
+# ── 底部操作行：全部启动 / 全部停止（2026-11-01 精简）──────────────
+# 用户要求：初始界面只包含「各个槽 + 日志 + 两个全启停按钮」，
+# 其余动作（安装 / 纳入 / 卸载 / 生成 bat / 关于）一律收进「设置」。
 _act = ttk.Frame(root)
 _act.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 6))
 _act.columnconfigure(0, weight=1); _act.columnconfigure(1, weight=1)
@@ -3138,15 +3247,17 @@ _act.columnconfigure(0, weight=1); _act.columnconfigure(1, weight=1)
 # 的 dsh 残留"，属于排障动作、不该占首页位置 —— 移到 CLI：
 #     python dsh-tm.py kill-stray
 # 函数 kill_all() 本体保留（CLI 要用），只是不再有界面入口。
+_b_startall = ttk.Button(_act, text="全部启动", style="Green.TButton",
+                         command=start_all_slots)
+_b_startall.grid(row=0, column=0, padx=4, pady=2, sticky="ew")
+BUSY["btns"].append(_b_startall)
 _b_stopall = ttk.Button(_act, text="全部停止", style="Red.TButton",
                         command=stop_all_slots)
-_b_stopall.grid(row=0, column=0, padx=4, pady=2, sticky="ew")
+_b_stopall.grid(row=0, column=1, padx=4, pady=2, sticky="ew")
 BUSY["btns"].append(_b_stopall)
 # 为每个版本生成 启动 bat + kill bat（2026-09-30 新增）：
 # 让「管理器启动」与「双击 bat 启动」两条路的 TEMP 等环境完全一致。
-_b_gen = ttk.Button(_act, text="生成启动/kill/CLI bat", command=gen_bats)
-_b_gen.grid(row=0, column=1, padx=4, pady=2, sticky="ew")
-BUSY["btns"].append(_b_gen)
+
 # ── 装官方版 / 扫已有安装（2026-10-02 新增）──────────────────────────────
 # 注意：按钮创建在下面 _do_install 定义之后 —— Python 自上而下执行，
 # 回调函数必须先定义好再被 ttk.Button 引用，否则这里就是 NameError，
@@ -4398,26 +4509,9 @@ def _do_readd(roots):
 # ── 操作行按钮（必须在上面这些函数定义之后创建）──────────────────────────
 # 「安装官方版 dsh」每点一次装到下一个空槽：已有 v1 → 装 v2，再点装 v3，再点装 v4；
 # 槽满（MAX_SLOTS）会明确提示，并指向「卸载 dsh 版本…」。
-_act2 = ttk.Frame(root)
-_act2.grid(row=3, column=0, padx=12, pady=(0, 6), sticky="ew")
-for _c in range(4):
-    _act2.columnconfigure(_c, weight=1)
-_b_inst = ttk.Button(_act2, text="安装官方版 dsh", command=install_official_version)
-_b_inst.grid(row=0, column=0, padx=4, pady=2, sticky="ew")
-BUSY["btns"].append(_b_inst)
-_b_scan = ttk.Button(_act2, text="扫描已装 dsh 并纳入", command=lambda: scan_and_offer_adopt(manual=True))
-_b_scan.grid(row=0, column=1, padx=4, pady=2, sticky="ew")
-BUSY["btns"].append(_b_scan)
-# 2026-11-01 精简底部按钮条（用户反馈）：
-#   · 「槽体检」移进「关于」窗口 —— 它是一年也用不上几次的排障工具，不该占主界面
-#   · 「已移出管理」不再单列为一级按钮，改为「卸载 / 移出…」窗口里的一个入口
-#     （它本来就是那个窗口的子功能，摆在主界面反而让人疑惑"这是啥"）
-# 现在这一排只保留三个**日常真的会点**的动作：装 / 纳 / 卸。
-_act2.columnconfigure(2, weight=1)
-_b_uninst = ttk.Button(_act2, text="卸载 / 移出…", style="Red.TButton",
-                       command=uninstall_versions_dialog)
-_b_uninst.grid(row=0, column=2, padx=4, pady=2, sticky="ew")
-BUSY["btns"].append(_b_uninst)
+# ── 2026-11-01：第二排按钮（安装 / 纳入 / 卸载）已全部移进「设置」窗口 ──
+# 用户要求初始界面只留「槽 + 日志 + 全启停」，其余动作统一收进设置。
+
 
 
 # ── 日志区 ─────────────────────────────────────────────────
@@ -4425,7 +4519,7 @@ log_text = tk.Text(root, height=10, width=80, font=("Consolas", 9), wrap="char",
                   bg="#ffffff", fg=_INK, insertbackground=_INK,
                   relief="solid", borderwidth=1,
                   highlightbackground=_CARD_BD, highlightthickness=1)
-log_text.grid(row=4, column=0, padx=12, pady=(0, 12), sticky="nsew")
+log_text.grid(row=3, column=0, padx=12, pady=(0, 12), sticky="nsew")
 log_text.configure(state="disabled")
 
 # 日志着色（2026-10-31 起，2026-11-01 扩充）
@@ -4865,7 +4959,7 @@ log("log file = %s" % LOG_FILE)
 # 保证每槽标题与按钮文字完整可见。日志区随窗口拉伸占满剩余高度。
 root.geometry("%dx600" % _win_w)
 root.columnconfigure(0, weight=1)
-root.rowconfigure(4, weight=1)   # 日志区占满剩余高度（row 4 = 日志；row 3 是新增的按钮行）
+root.rowconfigure(3, weight=1)   # 日志区占满剩余高度（row 3 = 日志；第二排按钮已移除）
 root.update_idletasks()
 # 窗口已 realize：再补设一次图标（双保险——就算 Tk 在 realize 时动过图标也会被这里盖回海豚）
 _force_taskbar_icon()
@@ -5390,6 +5484,156 @@ def _dirs_only_dialog():
     win.grab_set()
 
 
+# ── 主题：浅色 / 深色 / 跟随系统（2026-11-01）──────────────────────────
+# 用户要求：界面颜色能随系统深浅设置，也能自己指定。
+#
+# 实现要点：
+#   · 深色色板同样取自 dsh 的主题包（近黑底 #151517 / 层 #1e1f22 / 文字 #e6e7e9），
+#     保证两个界面并排时不割裂。
+#   · 「跟随系统」读注册表 AppsUseLightTheme（0=深色 / 1=浅色），这是 Windows
+#     应用都认的开关；读不到就回退浅色。
+#   · 切换时**重新 configure 一遍 ttk 样式**即可；tk 原生控件（TextBox/Frame）
+#     需要单独设背景色，见 _apply_theme_mode。
+_THEME_PALETTES = {
+    "light": {
+        "app_bg": "#f5f6f7", "card_bg": "#ffffff", "card_bd": "#e4e6ea",
+        "ink": "#151517", "muted": "#545557", "divider": "#e4e6ea",
+        "neutral": "#f1f2f4", "neutral_bd": "#dcdfe4", "neutral_d": "#e6e8eb",
+        "log_bg": "#ffffff", "log_fg": "#151517",
+    },
+    "dark": {
+        "app_bg": "#151517", "card_bg": "#1e1f22", "card_bd": "#2f3136",
+        "ink": "#e6e7e9", "muted": "#9a9da3", "divider": "#2f3136",
+        "neutral": "#242629", "neutral_bd": "#33363b", "neutral_d": "#2b2d31",
+        "log_bg": "#101113", "log_fg": "#d7d9dc",
+    },
+}
+_THEME_CUR = {"mode": "system"}
+
+
+def _apply_palette():
+    """把当前配色刷到 ttk 样式与原生 tk 控件上。"""
+    pal = _palette()
+    st = ttk.Style()
+    st.theme_use("clam")
+    st.configure(".", background=pal["app_bg"], foreground=pal["ink"],
+                 font=("Segoe UI", 10))
+    st.configure("TLabel", background=pal["app_bg"], foreground=pal["ink"])
+    st.configure("TFrame", background=pal["app_bg"])
+    st.configure("TButton", background=pal["neutral"], foreground=pal["ink"],
+                 bordercolor=pal["neutral_bd"], darkcolor=pal["neutral"],
+                 lightcolor=pal["neutral"], relief="raised", padding=(6, 3))
+    st.map("TButton", background=[("active", pal["neutral_d"]),
+                                  ("pressed", pal["neutral_d"])])
+    st.configure("Green.TButton", background=_GREEN, foreground="white",
+                 bordercolor=_GREEN, darkcolor=_GREEN, lightcolor=_GREEN)
+    st.map("Green.TButton", background=[("active", _GREEN_D), ("pressed", _GREEN_D)])
+    st.configure("Brand.TButton", background=_BRAND, foreground="white",
+                 bordercolor=_BRAND, darkcolor=_BRAND, lightcolor=_BRAND)
+    st.map("Brand.TButton", background=[("active", _BRAND_D), ("pressed", _BRAND_D)])
+    st.configure("Red.TButton", background=_RED, foreground="white",
+                 bordercolor=_RED, darkcolor=_RED, lightcolor=_RED)
+    st.map("Red.TButton", background=[("active", _RED_D), ("pressed", _RED_D)])
+    st.configure("SoftRed.TButton", background=pal["neutral"], foreground=_RED,
+                 bordercolor=pal["neutral_bd"], darkcolor=pal["neutral"],
+                 lightcolor=pal["neutral"])
+    st.configure("Card.TFrame", background=pal["card_bg"])
+    st.configure("Card.TLabel", background=pal["card_bg"], foreground=pal["ink"])
+    st.configure("TLabelframe", background=pal["app_bg"], bordercolor=pal["card_bd"])
+    st.configure("TLabelframe.Label", background=pal["app_bg"],
+                 foreground=pal["muted"])
+    st.configure("TSeparator", background=pal["divider"])
+    # 原生 tk 控件（不进 ttk 样式体系，必须单独设）
+    for w, key_bg, key_fg in ((root, "app_bg", "ink"),
+                              (cards_frame, "app_bg", "ink")):
+        try:
+            w.configure(bg=pal[key_bg])
+        except Exception:
+            pass
+    try:
+        log_text.configure(bg=pal["log_bg"], fg=pal["log_fg"],
+                           insertbackground=pal["ink"],
+                           selectbackground=_BRAND)
+    except Exception:
+        pass
+
+
+
+def _system_is_dark():
+    """读 Windows 的"应用使用深色模式"开关。读不到就当浅色。"""
+    try:
+        import winreg
+        k = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+        v, _ = winreg.QueryValueEx(k, "AppsUseLightTheme")
+        winreg.CloseKey(k)
+        return int(v) == 0
+    except Exception:
+        return False
+
+
+def _theme_mode():
+    """当前主题模式：system / light / dark（来自 config 的 ui.theme）。"""
+    try:
+        return _THEME_CUR.get("mode") or "system"
+    except Exception:
+        return "system"
+
+
+def _resolved_theme():
+    """最终生效的配色键：light 或 dark。"""
+    m = _theme_mode()
+    if m == "dark":
+        return "dark"
+    if m == "light":
+        return "light"
+    return "dark" if _system_is_dark() else "light"
+
+
+def _palette():
+    return _THEME_PALETTES[_resolved_theme()]
+
+
+def _apply_theme_mode(mode, persist=True):
+    """切换主题并立即重绘。
+
+    persist=True 时把选择写进 config.json 的 ui.theme，下次启动沿用。
+    """
+    _THEME_CUR["mode"] = mode or "system"
+    try:
+        _apply_palette()
+    except Exception as e:
+        log("[主题] 应用失败：%s" % e)
+    if persist:
+        try:
+            _save_ui_field("theme", _THEME_CUR["mode"])
+        except Exception:
+            pass
+    log("[主题] 已切换为：%s" % {"system": "跟随系统", "light": "浅色",
+                                 "dark": "深色"}.get(_THEME_CUR["mode"], mode))
+
+
+def _save_ui_field(key, value):
+    """往 config.json 的 ui 段写一个字段（读-改-写，原子落盘）。"""
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+        ui = data.get("ui")
+        if not isinstance(ui, dict):
+            ui = {}
+        ui[key] = value
+        data["ui"] = ui
+        tmp = CONFIG_PATH + ".tmp-%d" % os.getpid()
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, CONFIG_PATH)
+        return True
+    except Exception as e:
+        log("[配置] 写入 ui.%s 失败：%s" % (key, e))
+        return False
+
+
 def _open_project_page():
     """打开项目主页（GitHub）。收藏 / 看更新 / 提 issue 都从这儿走。"""
     try:
@@ -5646,7 +5890,114 @@ def _do_move_root(MV, plan):
     OPS.run_in_thread(work, prog, None)
 
 
+def settings_hub_dialog():
+    """「设置」总入口（2026-11-01 重构）。
+
+    用户要求：**初始界面只包含「各个槽 + 日志 + 全部启动/全部停止」**，
+    其余动作一律收进设置。所以这里把原来散在主界面上的入口集中成一页：
+
+      · 动作：安装官方版 / 扫描已装并纳入 / 卸载·移出 / 已移出管理 / 生成 bat
+      · 外观：界面显示哪些槽、顺序、主题（浅色 / 深色 / 跟随系统）
+      · 目录：安装根（含移动）、临时目录根、浏览器
+      · 关于：版本信息、使用说明、槽体检、检查运行环境、GitHub 收藏
+
+    这样主窗口只剩"看状态 + 起停"，一眼就懂。
+    """
+    win = tk.Toplevel(root)
+    win.title("设置")
+    win.transient(root)
+    win.resizable(False, False)
+    _apply_icon(win)
+
+    ttk.Label(win, text="设置", font=("Microsoft YaHei UI", 13, "bold")
+              ).pack(padx=22, pady=(18, 2), anchor="w")
+    ttk.Label(win, text="日常启停在主界面；这里放的是不常用但必要的操作。",
+              foreground=_MUTED).pack(padx=22, pady=(0, 12), anchor="w")
+
+    # ── 动作 ──────────────────────────────────────────────
+    act = ttk.LabelFrame(win, text="操作", padding=(12, 10))
+    act.pack(padx=22, fill="x", pady=(0, 10))
+    for _c in range(2):
+        act.columnconfigure(_c, weight=1)
+
+    def _act_btn(r, c, text, cmd, style=None):
+        kw = {"command": cmd}
+        if style:
+            kw["style"] = style
+        b = ttk.Button(act, text=text, **kw)
+        b.grid(row=r, column=c, padx=4, pady=3, sticky="ew")
+        try:
+            BUSY["btns"].append(b)
+        except Exception:
+            pass
+        return b
+
+    _act_btn(0, 0, "安装官方版 dsh", install_official_version, "Brand.TButton")
+    _act_btn(0, 1, "扫描已装 dsh 并纳入",
+             lambda: scan_and_offer_adopt(manual=True))
+    _act_btn(1, 0, "卸载 / 移出…", uninstall_versions_dialog, "Red.TButton")
+    _act_btn(1, 1, "已移出管理…", detached_manager_dialog)
+    _act_btn(2, 0, "生成启动/kill/CLI bat", gen_bats)
+    _act_btn(2, 1, "槽体检", lambda: _run_health(deep=True, dialog=True))
+
+    # ── 外观 ──────────────────────────────────────────────
+    look = ttk.LabelFrame(win, text="外观", padding=(12, 10))
+    look.pack(padx=22, fill="x", pady=(0, 10))
+    lrow = ttk.Frame(look)
+    lrow.pack(fill="x")
+    ttk.Label(lrow, text="主题", width=10).pack(side="left")
+    _theme_var = tk.StringVar(value=_theme_mode())
+    _THEME_CHOICES = (("system", "跟随系统"), ("light", "浅色"), ("dark", "深色"))
+    for _val, _lbl in _THEME_CHOICES:
+        ttk.Radiobutton(lrow, text=_lbl, value=_val, variable=_theme_var,
+                        command=lambda v=_val: _apply_theme_mode(v)
+                        ).pack(side="left", padx=(0, 12))
+
+    # ── 目录 ──────────────────────────────────────────────
+    try:
+        _dir_group(win)
+    except Exception as e:
+        log("[设置] 目录分组构建失败：%s" % e)
+
+    # ── 显示与浏览器：那块逻辑较长，单独一页更清爽 ─────────
+    more = ttk.Frame(win)
+    more.pack(padx=22, fill="x", pady=(0, 10))
+    ttk.Button(more, text="显示哪些槽 / 顺序 / 浏览器…",
+               command=_settings_display_dialog).pack(side="left")
+
+    # ── 关于 ──────────────────────────────────────────────
+    ab = ttk.LabelFrame(win, text="关于", padding=(12, 10))
+    ab.pack(padx=22, fill="x", pady=(0, 12))
+    ttk.Label(ab, text="DSH 版本管理器（dsh-tm）%s · 槽上限 %d · 当前 %d 个槽"
+                       % (_app_version(), MAX_SLOTS, len(SLOT_KEYS)),
+              foreground=_MUTED).pack(anchor="w", pady=(0, 8))
+    arow = ttk.Frame(ab)
+    arow.pack(anchor="w")
+    ttk.Button(arow, text="使用说明", command=_open_user_guide).pack(side="left")
+    ttk.Button(arow, text="检查运行环境", command=_show_env_report
+               ).pack(side="left", padx=(8, 0))
+    ttk.Button(arow, text="★ 在 GitHub 收藏", command=_open_project_page
+               ).pack(side="left", padx=(8, 0))
+
+    # ── 底部 ──────────────────────────────────────────────
+    btns = ttk.Frame(win)
+    btns.pack(padx=22, pady=(0, 16), fill="x")
+    ttk.Button(btns, text="关闭", command=win.destroy).pack(side="right")
+    win.bind("<Escape>", lambda e: win.destroy())
+    win.grab_set()
+
+
+
+
 def settings_dialog():
+    """统一入口：主界面与各处「设置」都走这里 → 打开设置总页。"""
+    try:
+        settings_hub_dialog()
+    except Exception as e:
+        log("[设置] 打开设置窗口失败：%s" % e)
+        messagebox.showerror("设置", "打开设置窗口失败：%s" % e)
+
+def _settings_display_dialog():
     """设置：显示哪几个槽 / 顺序 / 浏览器 / 目录（安装根 + 临时目录根）。
 
     为什么「显示」类设置只改显示不改管理：隐藏只是不画卡片，进程 / 端口 /
@@ -5940,11 +6291,9 @@ def settings_dialog():
 # 标题栏「设置」按钮：**必须**在 settings_dialog 定义之后创建 —— 否则模块执行到
 # 那一行时函数还不存在 → NameError，而 .pyw 无控制台，表现为「双击没反应」。
 # （这个坑本项目踩过两次，C3/C8 组断言守着。）
+# 2026-11-01：标题栏只留「设置」一个入口。
+# 「关于」「★ 在 GitHub 收藏」都收进设置页（用户要求：初始界面只有槽 + 日志 + 全启停）。
 ttk.Button(_hdr, text="设置", command=settings_dialog).pack(side="right", padx=(0, 6))
-# 「关于」按钮（2026-11-01）：放设置左边，能看到版本信息、使用说明、运行环境检查。
-ttk.Button(_hdr, text="★ 在 GitHub 收藏", command=_open_project_page).pack(
-    side="right", padx=(0, 6))
-ttk.Button(_hdr, text="关于", command=about_dialog).pack(side="right", padx=(0, 6))
 # 「槽体检」按钮已挪到下面「安装/纳入/体检/卸载」那一排（2026-10-31 起）——
 # 那四个都是「对整个槽做的事」，摆在一起才符合心智。标题栏只留「设置」。
 
@@ -6000,5 +6349,15 @@ def _log_fresh_env():
             "python scripts\\check-env.py（换新机器 / 排查管理器起不来时用）")
     except Exception as e:
         log("[环境] 自动体检失败：%s" % e)
+
+# ── 主题（2026-11-01）───────────────────────────────────────────────
+# 必须放在文件末尾：_apply_palette() 定义在下方，而这里要**调用**它；
+# 同时它还要触碰 log_text / cards_frame，那些控件也得先建好。
+# （2026-11-01 实测踩到：放在控件创建处调用 → name '_apply_palette' is not defined）
+try:
+    _apply_palette()
+    log("[主题] 生效：%s（模式=%s）" % (_resolved_theme(), _theme_mode()))
+except Exception as _e:
+    log("[主题] 应用失败（回退默认配色）：%s" % _e)
 
 root.mainloop()

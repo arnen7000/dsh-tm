@@ -239,8 +239,11 @@ for fn in ("uninstall_versions_dialog", "_do_uninstall", "_stop_for_uninstall",
         any(isinstance(n, ast.FunctionDef) and n.name == fn for n in tree.body))
 chk("C3r 导入 dsh_registry（带降级）", "import dsh_registry as REG" in src)
 chk("C3s 导入 dsh_uninstall_ops（带降级）", "import dsh_uninstall_ops as UNINST" in src)
-chk("C3t 按钮「卸载 dsh 版本…」已挂",
-    "卸载 dsh 版本…" in src and "command=uninstall_versions_dialog" in src)
+# _fn_body 会在顶层注释处截断，而 hub 里恰好有「· 动作：」这类顶层注释，
+# 所以这里直接对整份源码断言（按钮绑定只可能是那一处）。
+chk("C3t 卸载入口已挂（2026-11-01 起收进设置页）",
+    "uninstall_versions_dialog, \"Red.TButton\")" in src
+    or "command=uninstall_versions_dialog" in src)
 chk("C3u 安装对话框用版本选择器（不再只有输入框）",
     "_build_version_picker(win, ver_var" in src)
 # 2026-10-30 设计要求「整个换版本功能全删」：按钮、对话框、取消按钮、脚本都不该留。
@@ -433,9 +436,9 @@ chk("C3l6 关闭对话框等同全部跳过（不留不记录的出口）",
     and 'win.protocol("WM_DELETE_WINDOW", _on_close)' in src
     and "on_skip_all()" in src)
 # grid 行号：日志区从 row3 挪到 row4（新增按钮行），权重必须同步
-chk("C3m 日志区行权重已随新增按钮行调整",
-    "root.rowconfigure(4, weight=1)" in src and "root.rowconfigure(3, weight=1)" not in src,
-    "日志区须是 row4")
+chk("C3m 日志区行权重与当前布局一致",
+    # 2026-11-01：第二排按钮移入设置后，日志区从 row4 回到 row3
+    "root.rowconfigure(3, weight=1)" in src, "日志区须是 row3")
 
 print("== C6 任务栏图标（2026-10-02 修复：发虚 + 羽毛）==")
 # 只查**实际调用**，不能只按词出现判断——注释里为了说明「为什么不用它」
@@ -673,7 +676,8 @@ print("== C3z4 界面设置 ==")
 chk("C3z5a settings_dialog 已定义", "def settings_dialog()" in src)
 _d = line_of("def settings_dialog")
 _b = line_of('ttk.Button(_hdr, text="设置"')
-chk("C3z5b 「设置」按钮在 settings_dialog 之后创建（否则 NameError 静默退出）",
+chk("C3z5b 「设置」按钮在 settings_dialog / settings_hub_dialog 之后创建",
+    # 2026-11-01：主界面按钮改指向统一入口 settings_dialog（它内部再调 hub）
     _d > 0 and _b > _d, "def@%d 按钮@%d" % (_d, _b))
 _c = line_of("\n_build_cards()")
 chk("C3z5c 首次 _build_cards() 也在它之后（全隐藏提示卡引用它）",
@@ -692,7 +696,9 @@ chk("C3z5i 保存是读-改-写，不整份覆盖（否则抹掉 versions）",
     'data["ui"] = prefs' in _fn_body("_save_ui_prefs"))
 # settings_dialog 里嵌套了 _row_text/_toggle 等，_fn_body 会在第一个嵌套 def 处截断，
 # 所以这里单独按「到顶层注释为止」取全文。
-_sd = re.search(r"\ndef settings_dialog\(.*?(?=\n# )", src, re.S)
+# 2026-11-01：设置窗口拆成「总页 settings_hub_dialog」+
+# 「显示/排序页 _settings_display_dialog」。下面这些断言测的是后者。
+_sd = re.search(r"\ndef _settings_display_dialog\(.*?(?=\n# )", src, re.S)
 _sd = _sd.group(0) if _sd else ""
 chk("C3z5j 保存后立刻重画，不必重启管理器", "_build_cards()" in _sd)
 chk("C3z5k 保存前过 dsh_ui_prefs.normalize 收口", "UIP.normalize(" in _sd)
@@ -778,7 +784,9 @@ chk("C3z6n 卡片标题带 ≡ 手柄提示（光靠鼠标变四向箭头太隐�
 _eb = _fn_body("_drag_end_btn")
 chk("C3z6y 按钮上真拖过就 return \"break\" 吞掉点击（否则拖完顺带启动一个版本）",
     'return "break" if moved else None' in _eb)
-_sd = re.search(r"\ndef settings_dialog\(.*?(?=\n# )", src, re.S)
+# 2026-11-01：设置窗口拆成「总页 settings_hub_dialog」+
+# 「显示/排序页 _settings_display_dialog」。下面这些断言测的是后者。
+_sd = re.search(r"\ndef _settings_display_dialog\(.*?(?=\n# )", src, re.S)
 _sd = _sd.group(0) if _sd else ""
 chk("C3z6o 设置对话框的列表也能拖动排序", "_lb_move" in _sd and "<B1-Motion>" in _sd)
 chk("C3z6p 列表拖动要 return \"break\"（否则 Listbox 自己的拖选会改掉选中区）",
@@ -923,23 +931,24 @@ chk("C3z13a 按钮显式设 cursor=\"arrow\"（Tk 的 -cursor 空串＝继承父
     'w.configure(cursor="arrow")' in _fn_body("_bind_drag"))
 chk("C3z13b 空白区仍是 fleur",
     'w.configure(cursor="fleur")' in _fn_body("_bind_drag"))
-# 2026-11-01 精简（用户反馈）：底部一排只留**日常真会点**的三个动作
-#   安装 / 纳入 / 卸载  ——  「槽体检」移进「关于」，「已移出管理」收进卸载窗
-chk("C3z13c 底部一排 3 个按钮：安装 / 纳入 / 卸载",
-    src.index('_b_inst.grid(row=0, column=0')
-    < src.index('_b_scan.grid(row=0, column=1')
-    < src.index('_b_uninst.grid(row=0, column=2'))
-chk("C3z13c2 底部不再有「槽体检」和「已移出管理」一级按钮",
-    '_act2, text="槽体检"' not in src and '_act2, text="已移出管理' not in src
-    and 'text="槽体检"' in _fn_body("about_dialog"))
-chk("C3z13d 标题栏只剩「设置」，不再有「槽体检」",
-    '_hdr, text="槽体检"' not in src and '_hdr, text="设置"' in src)
+# 2026-11-01 第二轮重构（用户要求）：**初始界面只留「槽 + 日志 + 全启停」**，
+# 其余动作（安装 / 纳入 / 卸载 / 生成 bat / 关于 / 收藏）全部收进「设置」。
+chk("C3z13c 主界面第一排：全部启动 + 全部停止",
+    'text="全部启动"' in src and 'text="全部停止"' in src
+    and "_b_startall.grid(row=0, column=0" in src
+    and "_b_stopall.grid(row=0, column=1" in src)
+chk("C3z13c2 主界面不再有第二排按钮（安装/纳入/卸载已收进设置）",
+    "_act2 = ttk.Frame(root)" not in src)
+chk("C3z13c3 设置页里提供安装 / 纳入 / 卸载入口",
+    "_act_btn(0, 0" in src and "install_official_version" in src
+    and "scan_and_offer_adopt(manual=True)" in src
+    and "uninstall_versions_dialog" in src)
+chk("C3z13d 标题栏只剩「设置」一个按钮",
+    '_hdr, text="槽体检"' not in src
+    and '_hdr, text="关于"' not in src
+    and '_hdr, text="设置"' in src)
 chk("C3z13e 槽体检按钮仍在 _run_health 定义之后创建（否则 NameError）",
     src.index('text="槽体检"') > src.index("def _run_health("))
-chk("C3z13f 界面已移除「杀全部进程」按钮（与「全部停止」重复，移到 CLI）",
-    'text="杀全部进程"' not in src
-    and "def kill_all(" in src            # 函数保留，供 CLI kill-stray 复用
-    and 'text="全部停止"' in src)
 chk("C3z13f2 底部行只剩两列（全部停止 / 生成 bat）",
     "_act.columnconfigure(2" not in src)
 chk("C3z13g 日志按行着色：出错标红、[变更] 标青",
@@ -971,9 +980,12 @@ chk("C3z14f 改临时目录后必须同步内存 VC，否则重建的 bat 还是
     'VC[ch["key"]]["temp_dir"] = ch["new_abs"]' in _fn_body("_apply_dir_settings"))
 chk("C3z14g 改临时目录后自动重建三件 bat",
     "_rebuild_bats()" in _fn_body("_apply_dir_settings"))
-chk("C3z14h 零槽也能进设置（最需要改安装根的时机就是装第一个版本之前）",
+chk("C3z14h 零槽也能进设置并改安装根",
+    # 2026-11-01：设置总页 settings_hub_dialog 自带「目录」分组，
+    # 零槽时也能打开（那时安装根还没锁定，正是最该设置的时机）。
     "def _dirs_only_dialog(" in src
-    and "_dirs_only_dialog()" in _fn_body("settings_dialog"))
+    and "_dir_group(win)" in src
+    and "def settings_hub_dialog(" in src)
 chk("C3z14i temp_root 落在 install_base 之下就写成 <base> 占位符（跟着安装根搬）",
     'return "<base>" + s[len(b):]' in _fn_body("_cfg_form_temp"))
 chk("C3z14j 老规则不再写死 D 盘：default_temp_dir 有 temp_root 时优先用它",
