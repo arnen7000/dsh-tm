@@ -6040,6 +6040,9 @@ def _scroll_host(win):
     return inner
 
 
+_SETTINGS_WIN = {"win": None}
+
+
 def settings_hub_dialog():
     """「设置」总入口（2026-11-01 重构）。
 
@@ -6155,7 +6158,23 @@ def settings_hub_dialog():
 
 
 def settings_dialog():
-    """统一入口：主界面与各处「设置」都走这里 → 打开设置总页。"""
+    """统一入口：主界面与各处「设置」都走这里 → 打开设置总页。
+
+    2026-11-01：加**单例保护**。非模态之后反复点「设置」会叠出多个窗口，
+    用户实测反馈"出现过几个设置页面"。已有活着的窗口就提到前面，不再新建。
+    """
+    try:
+        w = _SETTINGS_WIN.get("win")
+        if w is not None and w.winfo_exists():
+            try:
+                w.deiconify()
+                w.lift()
+                w.focus_force()
+            except Exception:
+                pass
+            return
+    except Exception:
+        pass
     try:
         settings_hub_dialog()
     except Exception as e:
