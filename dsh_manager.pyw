@@ -1834,26 +1834,33 @@ try:
 except Exception as _e:
     log("替换窗口类图标失败（不影响运行）：%s" % _e)
 
-# ── 界面配色（中性现代风，去掉刺眼蓝）─────────────────────────────────────
-# 设计：浅灰底 + 白卡片 + 细边框；按钮按语义上色（启动=绿 / 停止·杀全部=红 /
-# 其它=中性灰），不再满屏蓝。状态文字按运行态上色（运行=绿 / 冲突=红 / 启动中=琥珀）。
+# ── 界面配色：向 dsh 本体的视觉语言靠拢（2026-11-01）──────────────────
+# 用户要求「整体风格往 dsh 靠近」。做法不是凭感觉配色，而是**从 dsh 自己的主题包里
+# 取真实色值**（<dsh>/node_modules/@deepseek-ai/dsh-client-ui-theme/lib）：
+#   品牌主色  #4176e6（brand-primary）/ #3964fe（accent）
+#   近黑文字  #151517 / #43454a
+#   页面底色  #f9fafb / #f5f6f7
+#   成功      #22c55e      危险 #ec1313 / #f25a5a
+# 与 dsh 保持一致后，两个界面并排使用不会有"两套设计"的割裂感。
 # 仅改外观，不动布局与按钮冻结逻辑；主题初始化失败则静默回退默认主题。
-_APP_BG    = "#eef1f5"   # 应用浅灰底
+_APP_BG    = "#f5f6f7"   # 应用底色（dsh 页面底）
 _CARD_BG   = "#ffffff"   # 卡片白底
-_CARD_BD   = "#d7dce3"   # 卡片边框
-_INK       = "#1f2733"   # 主文字（深墨）
-_MUTED     = "#697586"   # 次要文字
-_DIVIDER   = "#ccd3dc"   # 分隔线
-_GREEN     = "#16a34a"
-_GREEN_D   = "#15803d"
-_RED       = "#dc2626"
-_RED_D     = "#b91c1c"
-_NEUTRAL   = "#eef0f3"
-_NEUTRAL_BD= "#d4d9e0"
-_NEUTRAL_D = "#e2e6ec"
+_CARD_BD   = "#e4e6ea"   # 卡片边框（dsh 细边框观感）
+_INK       = "#151517"   # 主文字（dsh 近黑）
+_MUTED     = "#545557"   # 次要文字（dsh 灰）
+_DIVIDER   = "#e4e6ea"   # 分隔线
+_BRAND     = "#4176e6"   # 品牌主色（dsh brand-primary）
+_BRAND_D   = "#3358b3"   # 主色按下态
+_GREEN     = "#22c55e"   # 成功（dsh success）
+_GREEN_D   = "#16a34a"
+_RED       = "#ec1313"   # 危险（dsh error）
+_RED_D     = "#c01010"
+_NEUTRAL   = "#f1f2f4"
+_NEUTRAL_BD= "#dcdfe4"
+_NEUTRAL_D = "#e6e8eb"
 _AMBER     = "#d97706"
-_LINK      = "#0d9488"   # 链接色（青，与主题一致）
-_LINK_H    = "#085041"   # 链接悬停加深
+_LINK      = "#3964fe"   # 链接/强调（dsh accent）
+_LINK_H    = "#2b4fd0"
 # 运行态 → 状态文字颜色
 _STATUS_COLORS = {
     "running_tracked":   _GREEN,
@@ -1883,6 +1890,15 @@ try:
                      lightcolor=_GREEN, relief="raised", padding=(6, 3))
     _style.map("Green.TButton",
                background=[("active", _GREEN_D), ("pressed", _GREEN_D)],
+               foreground=[("active", "white"), ("pressed", "white")])
+    # 品牌蓝主按钮（2026-11-01）：用于「安装」这类**主要行动**。
+    # 绿色只保留给"启动/运行"这种状态语义，避免满屏绿。
+    _style.configure("Brand.TButton",
+                     background=_BRAND, foreground="white",
+                     bordercolor=_BRAND, darkcolor=_BRAND,
+                     lightcolor=_BRAND, relief="raised", padding=(6, 3))
+    _style.map("Brand.TButton",
+               background=[("active", _BRAND_D), ("pressed", _BRAND_D)],
                foreground=[("active", "white"), ("pressed", "white")])
     # 停止 / 杀全部（红）
     _style.configure("Red.TButton",
@@ -4879,22 +4895,20 @@ if dsh_adopt is not None:
 # NameError；而 .pyw 没有控制台，异常被吞掉 → 表现为「双击没反应」。
 # 这个坑我踩了两次，现在有 C8 组断言守着。
 def _build_fresh_guide():
-    """零槽首屏：画**两个空槽卡片**，而不是一张大号引导卡。
+    """零槽首屏：画**两个空槽卡片**，版式与真实卡片完全一致，只是字都留空。
 
-    2026-11-01 用户反馈：原来那张「快速开始」大卡片
-      ① 撑不满区域，右边空出一大块；
-      ② 里面的按钮（安装官方版 / 扫描纳入）和底部按钮条完全重复；
-      ③ 看起来像"说明页"而不是"产品界面"。
-    现在改成：零槽时直接画两个**空槽占位卡**，形状与真实卡片一致
-    （同样的标题栏、同样的按钮布局），只是内容变成"点击安装"。
-    这样用户第一次打开看到的就是"这里将来会有两个版本"，
-    点击即可安装，界面自解释，也不再需要「快速开始」这个中间层。
+    2026-11-01 用户反馈两轮之后的定稿：
+      ① 第一版是大号「快速开始」卡 —— 撑不满、按钮与底部重复（已废弃）
+      ② 第二版是两个空槽卡，但卡里还塞了「未安装」「装好之后这里会出现…」等说明字
+         —— 用户要求"下面的区域不要有什么说明，直接显示正常的各个区域，只是把字都去掉"
+      ③ 现在：结构与真实槽卡逐行对齐（状态行 / 启动·停止 / 打开·复制URL / 程序·数据目录），
+         文字留空，只保留一个「安装 dsh 到本槽」主按钮供点击。
+    这样零槽和非零槽的视觉语言完全一致，第一次打开就知道"这里将来会长成什么样"。
     """
     if not FRESH_START:
         return
     try:
         _clear_cards()
-        # 两个空槽：与真实槽一样按「每槽两列」布局
         n = 2
         for _c in range(n):
             cards_frame.columnconfigure(_c * 2, weight=1, uniform="card")
@@ -4911,32 +4925,26 @@ def _build_fresh_guide():
             _body.columnconfigure(0, weight=1)
             _body.columnconfigure(1, weight=1)
 
-            ttk.Label(_body, text="未安装", style="Card.TLabel",
-                      font=("Segoe UI", 9), foreground=_MUTED
-                      ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+            # 与真实卡逐行对齐的骨架，文字留空（保持行高，避免整卡塌下去）
+            ttk.Label(_body, text=" ", style="Card.TLabel",
+                      font=("Segoe UI", 9)).grid(
+                row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
 
-            # 主按钮：安装（第一张卡带主色，第二张也一致，避免"哪个才对"的疑问）
-            ttk.Button(_body, text="安装 dsh 到本槽", style="Green.TButton",
-                       command=install_official_version
-                       ).grid(row=1, column=0, columnspan=2, padx=3, pady=3, sticky="ew")
+            # 第 1 行：安装（真实卡这里是「启动 / 停止」）
+            ttk.Button(_body, text="安装 dsh 到本槽", style="Brand.TButton",
+                       command=install_official_version).grid(
+                row=1, column=0, columnspan=2, padx=3, pady=3, sticky="ew")
 
-            # 下面两行沿用真实卡的按钮位置，保持视觉一致（这里置灰并写明原因）
-            _hint = ttk.Label(_body, text="装好之后这里会出现\n「启动 / 停止 / 打开浏览器」",
-                              style="Card.TLabel", foreground=_MUTED,
-                              justify="left")
-            _hint.grid(row=2, column=0, columnspan=2, sticky="w",
-                       padx=3, pady=(8, 0))
+            # 第 2~3 行：占位按钮（disabled，无文字），保持与真实卡同高
+            for _r, _c0, _c1 in ((2, 0, 1), (3, 0, 1)):
+                for _cc in (_c0, _c1):
+                    _ph = ttk.Button(_body, text="", state=["disabled"])
+                    _ph.grid(row=_r, column=_cc, padx=3,
+                             pady=(3, 3) if _r == 2 else (3, 0), sticky="ew")
 
             if i < n - 1:
-                _sep = ttk.Separator(cards_frame, orient="vertical")
-                _sep.grid(row=0, column=i * 2 + 1, sticky="ns")
-
-        # 首次使用提示放在两卡之下的一行，简短即可（详细说明在「关于」里）
-        _tip = ttk.Frame(cards_frame)
-        _tip.grid(row=1, column=0, columnspan=n * 2 - 1, sticky="w", padx=6, pady=(8, 0))
-        ttk.Label(_tip, text="还没装过 dsh？点上面任意一个槽的「安装 dsh 到本槽」即可，"
-                             "下载、隔离配置、分配端口都是自动的。",
-                  foreground=_MUTED).pack(side="left")
+                ttk.Separator(cards_frame, orient="vertical").grid(
+                    row=0, column=i * 2 + 1, sticky="ns")
     except Exception as e:
         log("[引导] 零槽引导卡构建失败（不影响使用，可点底部按钮安装）：%s" % e)
 
