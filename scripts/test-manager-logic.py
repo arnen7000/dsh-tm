@@ -609,8 +609,15 @@ if _top_cmds:
 chk("C8b 允许零槽启动（不再强制至少 1 槽）",
     "versions 为空，请至少保留一个版本槽" not in src)
 chk("C8c 有 FRESH_START 标志", "FRESH_START = (N_SLOTS == 0)" in src)
-chk("C8d 零槽时显示引导卡而非空白", "还没有安装任何 dsh 版本" in src)
-chk("C8e 引导卡提供安装入口", "安装官方版 dsh" in src and "扫描并纳入" in src)
+# 2026-11-01 用户反馈后重做零槽首屏：不再是「快速开始」大卡片（它和底部按钮重复、
+# 又撑不满区域），改成**直接画两个空槽占位卡**，点卡片上的按钮即可安装。
+chk("C8d 零槽时画空槽卡片而非空白页",
+    "空槽 %d" in src and "「_build_fresh_guide」".replace("「", "").replace("」", "") in src
+    or "_build_fresh_guide" in src)
+chk("C8e 零槽卡提供安装入口",
+    "安装 dsh 到本槽" in _fn_body("_build_fresh_guide"))
+chk("C8e2 零槽时不再有「快速开始」大卡片（与底部按钮重复）",
+    'text="快速开始"' not in src)
 chk("C8f 示例配置是零槽",
     '"versions": {}' in io.open(
         os.path.join(_REPO, "config", "config.example.json"),
@@ -916,10 +923,15 @@ chk("C3z13a 按钮显式设 cursor=\"arrow\"（Tk 的 -cursor 空串＝继承父
     'w.configure(cursor="arrow")' in _fn_body("_bind_drag"))
 chk("C3z13b 空白区仍是 fleur",
     'w.configure(cursor="fleur")' in _fn_body("_bind_drag"))
-chk("C3z13c 底部一排 4 个按钮：安装 / 纳入 / 体检 / 卸载",
-    "for _c in range(4):" in src
-    and src.index('_b_inst.grid(row=0, column=0') < src.index('_b_scan.grid(row=0, column=1')
-    < src.index('_b_health.grid(row=0, column=2') < src.index('_b_uninst.grid(row=0, column=3'))
+# 2026-11-01 精简（用户反馈）：底部一排只留**日常真会点**的三个动作
+#   安装 / 纳入 / 卸载  ——  「槽体检」移进「关于」，「已移出管理」收进卸载窗
+chk("C3z13c 底部一排 3 个按钮：安装 / 纳入 / 卸载",
+    src.index('_b_inst.grid(row=0, column=0')
+    < src.index('_b_scan.grid(row=0, column=1')
+    < src.index('_b_uninst.grid(row=0, column=2'))
+chk("C3z13c2 底部不再有「槽体检」和「已移出管理」一级按钮",
+    '_act2, text="槽体检"' not in src and '_act2, text="已移出管理' not in src
+    and 'text="槽体检"' in _fn_body("about_dialog"))
 chk("C3z13d 标题栏只剩「设置」，不再有「槽体检」",
     '_hdr, text="槽体检"' not in src and '_hdr, text="设置"' in src)
 chk("C3z13e 槽体检按钮仍在 _run_health 定义之后创建（否则 NameError）",

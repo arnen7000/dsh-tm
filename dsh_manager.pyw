@@ -93,6 +93,11 @@ LOG_FILE    = os.path.join(BASE_DIR, "dsh-manager.log")
 # pythonw 下 __file__ 可能是相对路径，destroy() 之后更不安全（2026-11-01 实测
 # 「说重启但没重启」的根因之一）。这里在模块加载时就固化成绝对路径。
 MANAGER_ENTRY = os.path.abspath(__file__)
+
+# 项目主页（2026-11-01）：界面上「★ 在 GitHub 收藏」按钮指向这里。
+# 只改这一处即可换仓库地址。
+PROJECT_URL = "https://github.com/arnen7000/dsh-tm"
+
 CREATE_NO_WINDOW = 0x08000000   # 隐藏 node/taskkill 子进程的控制台窗口
 
 # 日志脱敏：dsh 启动时会打印带 token 的入口 URL，那是该实例的唯一认证凭据，
@@ -4250,6 +4255,15 @@ def uninstall_versions_dialog():
     if not SLOT_KEYS:
         _b_det.state(["disabled"])
     ttk.Button(btns, text="取消", command=win.destroy).pack(side="left", padx=4)
+    # 2026-11-01：「已移出管理」不再占主界面，收进这个窗口（它本就是这里的功能）
+    try:
+        _recs_n = len(_detached_records())
+        if _recs_n:
+            ttk.Button(btns, text="已移出管理（%d）…" % _recs_n,
+                       command=detached_manager_dialog
+                       ).pack(side="left", padx=(12, 4))
+    except Exception:
+        pass
 
     win.bind("<Escape>", lambda e: win.destroy())
     win.grab_set()
@@ -4378,26 +4392,16 @@ BUSY["btns"].append(_b_inst)
 _b_scan = ttk.Button(_act2, text="扫描已装 dsh 并纳入", command=lambda: scan_and_offer_adopt(manual=True))
 _b_scan.grid(row=0, column=1, padx=4, pady=2, sticky="ew")
 BUSY["btns"].append(_b_scan)
-# 槽体检（2026-10-31 从标题栏挪到这里）：和装/纳/卸 放在同一排 —— 这四个都是
-# 「对整个槽做的事」，摆一起才符合心智；标题栏只留「设置」（界面偏好）。
-# 注意：_run_health 定义在文件中部，这里引用是安全的（运行时才求值）。
-_b_health = ttk.Button(_act2, text="槽体检",
-                       command=lambda: _run_health(deep=True, dialog=True))
-_b_health.grid(row=0, column=2, padx=4, pady=2, sticky="ew")
+# 2026-11-01 精简底部按钮条（用户反馈）：
+#   · 「槽体检」移进「关于」窗口 —— 它是一年也用不上几次的排障工具，不该占主界面
+#   · 「已移出管理」不再单列为一级按钮，改为「卸载 / 移出…」窗口里的一个入口
+#     （它本来就是那个窗口的子功能，摆在主界面反而让人疑惑"这是啥"）
+# 现在这一排只保留三个**日常真的会点**的动作：装 / 纳 / 卸。
+_act2.columnconfigure(2, weight=1)
 _b_uninst = ttk.Button(_act2, text="卸载 / 移出…", style="Red.TButton",
                        command=uninstall_versions_dialog)
-_b_uninst.grid(row=0, column=3, padx=4, pady=2, sticky="ew")
+_b_uninst.grid(row=0, column=2, padx=4, pady=2, sticky="ew")
 BUSY["btns"].append(_b_uninst)
-# 「已移出管理」独立按钮（2026-11-01）：只在真有已移出记录时才出现，
-# 平时不占位置。它和「卸载 / 移出…」是两件事，各有各的入口。
-try:
-    if _detached_records():
-        _act2.columnconfigure(4, weight=1)
-        _b_detached = ttk.Button(_act2, text="已移出管理（%d）" % len(_detached_records()),
-                                 command=detached_manager_dialog)
-        _b_detached.grid(row=0, column=4, padx=4, pady=2, sticky="ew")
-except Exception:
-    pass
 
 
 # ── 日志区 ─────────────────────────────────────────────────
@@ -4875,47 +4879,64 @@ if dsh_adopt is not None:
 # NameError；而 .pyw 没有控制台，异常被吞掉 → 表现为「双击没反应」。
 # 这个坑我踩了两次，现在有 C8 组断言守着。
 def _build_fresh_guide():
+    """零槽首屏：画**两个空槽卡片**，而不是一张大号引导卡。
+
+    2026-11-01 用户反馈：原来那张「快速开始」大卡片
+      ① 撑不满区域，右边空出一大块；
+      ② 里面的按钮（安装官方版 / 扫描纳入）和底部按钮条完全重复；
+      ③ 看起来像"说明页"而不是"产品界面"。
+    现在改成：零槽时直接画两个**空槽占位卡**，形状与真实卡片一致
+    （同样的标题栏、同样的按钮布局），只是内容变成"点击安装"。
+    这样用户第一次打开看到的就是"这里将来会有两个版本"，
+    点击即可安装，界面自解释，也不再需要「快速开始」这个中间层。
+    """
     if not FRESH_START:
         return
     try:
-        _w = ttk.LabelFrame(cards_frame, text="快速开始", padding=(24, 20))
-        _w.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
-        _f = ttk.Frame(_w, style="Card.TFrame")
-        _f.pack(fill="both", expand=True)
+        _clear_cards()
+        # 两个空槽：与真实槽一样按「每槽两列」布局
+        n = 2
+        for _c in range(n):
+            cards_frame.columnconfigure(_c * 2, weight=1, uniform="card")
+        for _c in range(n - 1):
+            cards_frame.columnconfigure(_c * 2 + 1, weight=0, minsize=16)
+        cards_frame.rowconfigure(0, weight=1)
 
-        # 2026-11-01 重做观感：原来是一大段左对齐文字堆在一起，像说明书；
-        # 现在改成「一句主张 + 三步清单 + 主按钮」，和一个空状态的引导卡该有的样子。
-        ttk.Label(_f, text="还没有安装任何 dsh 版本",
-                  font=("Microsoft YaHei UI", 15, "bold"), style="Card.TLabel"
-                  ).pack(anchor="w", pady=(0, 6))
-        ttk.Label(_f, text="装一个版本就能开始用 —— 下载、隔离配置、分配端口都是自动的。",
-                  style="Card.TLabel", foreground=_MUTED, wraplength=600,
-                  justify="left").pack(anchor="w", pady=(0, 14))
+        for i in range(n):
+            _card = ttk.LabelFrame(cards_frame, text="空槽 %d" % (i + 1),
+                                   padding=(12, 8), labelanchor="n")
+            _card.grid(row=0, column=i * 2, sticky="nsew", padx=2, pady=2)
+            _body = ttk.Frame(_card, style="Card.TFrame")
+            _body.pack(fill="both", expand=True, padx=2, pady=(4, 4))
+            _body.columnconfigure(0, weight=1)
+            _body.columnconfigure(1, weight=1)
 
-        _steps = ttk.Frame(_f, style="Card.TFrame")
-        _steps.pack(anchor="w", pady=(0, 16))
-        for _i, (_n, _t) in enumerate((
-                ("1", "点「安装官方版 dsh」"),
-                ("2", "选一个版本号（如 0.2.1-rc.1）"),
-                ("3", "装好后点卡片上的「启动」")), 1):
-            _r = ttk.Frame(_steps, style="Card.TFrame")
-            _r.pack(anchor="w", pady=2)
-            ttk.Label(_r, text=_n, width=2, style="Card.TLabel",
-                      foreground=_LINK, font=("Segoe UI", 10, "bold")
-                      ).pack(side="left", padx=(0, 8))
-            ttk.Label(_r, text=_t, style="Card.TLabel").pack(side="left")
+            ttk.Label(_body, text="未安装", style="Card.TLabel",
+                      font=("Segoe UI", 9), foreground=_MUTED
+                      ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
 
-        _b = ttk.Frame(_f, style="Card.TFrame")
-        _b.pack(anchor="w", pady=(0, 12))
-        ttk.Button(_b, text="安装官方版 dsh", style="Green.TButton",
-                   command=install_official_version).pack(side="left", padx=(0, 8))
-        ttk.Button(_b, text="本机已有 dsh？扫描并纳入",
-                   command=lambda: scan_and_offer_adopt(manual=True)).pack(side="left")
+            # 主按钮：安装（第一张卡带主色，第二张也一致，避免"哪个才对"的疑问）
+            ttk.Button(_body, text="安装 dsh 到本槽", style="Green.TButton",
+                       command=install_official_version
+                       ).grid(row=1, column=0, columnspan=2, padx=3, pady=3, sticky="ew")
 
-        ttk.Label(_f, text="不需要先装 Node.js（管理器自带 node 运行时）"
-                           " · 最多可管理 %d 个版本并存" % MAX_SLOTS,
-                  style="Card.TLabel", foreground=_MUTED
-                  ).pack(anchor="w")
+            # 下面两行沿用真实卡的按钮位置，保持视觉一致（这里置灰并写明原因）
+            _hint = ttk.Label(_body, text="装好之后这里会出现\n「启动 / 停止 / 打开浏览器」",
+                              style="Card.TLabel", foreground=_MUTED,
+                              justify="left")
+            _hint.grid(row=2, column=0, columnspan=2, sticky="w",
+                       padx=3, pady=(8, 0))
+
+            if i < n - 1:
+                _sep = ttk.Separator(cards_frame, orient="vertical")
+                _sep.grid(row=0, column=i * 2 + 1, sticky="ns")
+
+        # 首次使用提示放在两卡之下的一行，简短即可（详细说明在「关于」里）
+        _tip = ttk.Frame(cards_frame)
+        _tip.grid(row=1, column=0, columnspan=n * 2 - 1, sticky="w", padx=6, pady=(8, 0))
+        ttk.Label(_tip, text="还没装过 dsh？点上面任意一个槽的「安装 dsh 到本槽」即可，"
+                             "下载、隔离配置、分配端口都是自动的。",
+                  foreground=_MUTED).pack(side="left")
     except Exception as e:
         log("[引导] 零槽引导卡构建失败（不影响使用，可点底部按钮安装）：%s" % e)
 
@@ -5361,6 +5382,19 @@ def _dirs_only_dialog():
     win.grab_set()
 
 
+def _open_project_page():
+    """打开项目主页（GitHub）。收藏 / 看更新 / 提 issue 都从这儿走。"""
+    try:
+        import webbrowser
+        webbrowser.open(PROJECT_URL)
+    except Exception:
+        try:
+            os.startfile(PROJECT_URL)
+        except Exception as e:
+            messagebox.showinfo("项目主页", "打不开浏览器，请手动访问：\n%s\n\n(%s)"
+                                % (PROJECT_URL, e))
+
+
 def _open_user_guide():
     """打开详细使用说明（文档文件）。找不到时给出明确说明。"""
     p = os.path.join(BASE_DIR, "docs", "dsh管理器使用说明.md")
@@ -5447,6 +5481,10 @@ def about_dialog():
     ttk.Button(btns, text="打开详细使用说明", command=_open_user_guide).pack(side="left")
     ttk.Button(btns, text="检查运行环境", command=_show_env_report).pack(
         side="left", padx=(8, 0))
+    # 「槽体检」从主界面底部搬到这里（一年用不了几次的排障工具）
+    ttk.Button(btns, text="槽体检",
+               command=lambda: _run_health(deep=True, dialog=True)
+               ).pack(side="left", padx=(8, 0))
     ttk.Button(btns, text="关闭", command=win.destroy).pack(side="right")
     win.bind("<Escape>", lambda e: win.destroy())
     win.grab_set()
@@ -5896,6 +5934,8 @@ def settings_dialog():
 # （这个坑本项目踩过两次，C3/C8 组断言守着。）
 ttk.Button(_hdr, text="设置", command=settings_dialog).pack(side="right", padx=(0, 6))
 # 「关于」按钮（2026-11-01）：放设置左边，能看到版本信息、使用说明、运行环境检查。
+ttk.Button(_hdr, text="★ 在 GitHub 收藏", command=_open_project_page).pack(
+    side="right", padx=(0, 6))
 ttk.Button(_hdr, text="关于", command=about_dialog).pack(side="right", padx=(0, 6))
 # 「槽体检」按钮已挪到下面「安装/纳入/体检/卸载」那一排（2026-10-31 起）——
 # 那四个都是「对整个槽做的事」，摆在一起才符合心智。标题栏只留「设置」。
