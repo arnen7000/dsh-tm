@@ -5603,6 +5603,92 @@ def _save_ui_field(key, value):
         return False
 
 
+# ── 并排吸附窗口（2026-11-01）──────────────────────────────────────────
+# 需求：设置窗不要挡住主界面，而是**与主界面同高、并排靠右**显示；
+#       用户可以把它拖走脱离（成为独立窗口），一旦拖回主界面附近就再次吸附。
+#
+# 实现要点（纯 Tk，不依赖额外库）：
+#   · 用 <Configure> 监听窗口移动；拖动结束时判断与主窗口的距离。
+#   · 距离小于阈值 → 吸附：设置窗贴到主窗口右侧，高度对齐主窗口。
+#   · 拖远 → 视为脱离，之后主窗口移动不再带动它。
+#   · 非模态（不用 grab_set），这样点主界面上的东西仍然有反应，"实时看到变化"才成立。
+_DOCK = {"threshold": 48, "attached": False, "job": None}
+
+
+def _main_rect():
+    """主窗口的屏幕矩形 (x, y, w, h)。"""
+    try:
+        root.update_idletasks()
+        return (root.winfo_rootx(), root.winfo_rooty(),
+                root.winfo_width(), root.winfo_height())
+    except Exception:
+        return (0, 0, 800, 600)
+
+
+def _dock_settings_window(win):
+    """把设置窗贴到主窗口右侧、同高。"""
+    try:
+        mx, my, mw, mh = _main_rect()
+        win.geometry("+%d+%d" % (mx + mw + 8, my))
+        win.geometry("%dx%d" % (max(360, win.winfo_width()), mh))
+        _DOCK["attached"] = True
+    except Exception:
+        pass
+
+
+def _undock_settings_window(win):
+    _DOCK["attached"] = False
+
+
+def _make_side_panel(win, width=380):
+    """把任意 Toplevel 变成"并排可吸附"的侧栏。
+
+    返回一个 bind 好的处理器；调用方只需在创建完控件后调用一次。
+    """
+    try:
+        mx, my, mw, mh = _main_rect()
+        win.geometry("%dx%d+%d+%d" % (width, mh, mx + mw + 8, my))
+    except Exception:
+        pass
+
+    def _on_configure(evt=None):
+        # 只关心窗口自身位置变化
+        if evt is not None and evt.widget is not win:
+            return
+        if _DOCK.get("job"):
+            try:
+                win.after_cancel(_DOCK["job"])
+            except Exception:
+                pass
+        _DOCK["job"] = win.after(180, lambda: _check_dock(win))
+
+    def _check_dock(w):
+        """拖动停下来后判断：靠得够近就吸回去。"""
+        _DOCK["job"] = None
+        try:
+            if not w.winfo_exists():
+                return
+            mx, my, mw, mh = _main_rect()
+            wx, wy = w.winfo_rootx(), w.winfo_rooty()
+            # 与主窗口右边缘的距离（设置窗左边缘 - 主窗右边缘）
+            gap = abs(wx - (mx + mw))
+            # 垂直方向也不能离太远，否则"靠近"就失去意义
+            vgap = abs(wy - my)
+            if gap <= _DOCK["threshold"] and vgap <= _DOCK["threshold"] * 3:
+                _dock_settings_window(w)
+            else:
+                _DOCK["attached"] = False
+        except Exception:
+            pass
+
+    try:
+        win.bind("<Configure>", _on_configure, add="+")
+    except Exception:
+        pass
+    _DOCK["attached"] = True
+    return win
+
+
 def _open_project_page():
     """打开项目主页（GitHub）。收藏 / 看更新 / 提 issue 都从这儿走。"""
     try:
@@ -5859,6 +5945,53 @@ def _do_move_root(MV, plan):
     OPS.run_in_thread(work, prog, None)
 
 
+def _scroll_host(win):
+    """在 Toplevel 里造一个「可竖向滚动」的内容容器，返回内部 Frame。
+
+    用于设置页：并排窗口高度被主窗口锁死（约 640px），内容一多就会把
+    底部「关于」切掉。这里用 Canvas + 内嵌 Frame 的标准做法解决，
+    滚动条只在内容真的超出时才出现。
+    """
+    outer = ttk.Frame(win)
+    outer.pack(fill="both", expand=True)
+    canvas = tk.Canvas(outer, highlightthickness=0, bd=0)
+    sb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+    inner = ttk.Frame(canvas)
+    win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+    canvas.configure(yscrollcommand=sb.set)
+    canvas.pack(side="left", fill="both", expand=True)
+    sb.pack(side="right", fill="y")
+
+    def _sync(_e=None):
+        try:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfigure(win_id, width=canvas.winfo_width())
+        except Exception:
+            pass
+
+    inner.bind("<Configure>", _sync)
+    canvas.bind("<Configure>", _sync)
+
+    # 主题：Canvas 属于原生 tk 控件，需要跟着配色
+    try:
+        pal = _palette()
+        canvas.configure(bg=pal["app_bg"])
+    except Exception:
+        pass
+
+    def _wheel(evt):
+        try:
+            canvas.yview_scroll(int(-1 * (evt.delta / 120)), "units")
+        except Exception:
+            pass
+
+    try:
+        canvas.bind_all("<MouseWheel>", _wheel)
+    except Exception:
+        pass
+    return inner
+
+
 def settings_hub_dialog():
     """「设置」总入口（2026-11-01 重构）。
 
@@ -5874,17 +6007,24 @@ def settings_hub_dialog():
     """
     win = tk.Toplevel(root)
     win.title("设置")
-    win.transient(root)
-    win.resizable(False, False)
+    # 2026-11-01：改成**非模态并排窗口**。
+    #   · 不再 transient / grab_set —— 否则主界面被禁用，看不到改动的实时效果
+    #   · 初始贴在主窗口右侧、同高；拖走可脱离，拖回附近自动吸附（见 _make_side_panel）
+    win.resizable(True, True)
     _apply_icon(win)
+    _make_side_panel(win, width=380)
 
-    ttk.Label(win, text="设置", font=("Microsoft YaHei UI", 13, "bold")
+    # 2026-11-01：并排窗口高度跟主窗口一致（约 640px），内容可能超出。
+    # 用一个可竖向滚动的 host 承载全部区块，避免"关于"被截断。
+    host = _scroll_host(win)
+
+    ttk.Label(host, text="设置", font=("Microsoft YaHei UI", 13, "bold")
               ).pack(padx=22, pady=(18, 2), anchor="w")
-    ttk.Label(win, text="日常启停在主界面；这里放的是不常用但必要的操作。",
+    ttk.Label(host, text="日常启停在主界面；这里放的是不常用但必要的操作。",
               foreground=_MUTED).pack(padx=22, pady=(0, 12), anchor="w")
 
     # ── 动作 ──────────────────────────────────────────────
-    act = ttk.LabelFrame(win, text="操作", padding=(12, 10))
+    act = ttk.LabelFrame(host, text="操作", padding=(12, 10))
     act.pack(padx=22, fill="x", pady=(0, 10))
     for _c in range(2):
         act.columnconfigure(_c, weight=1)
@@ -5910,7 +6050,7 @@ def settings_hub_dialog():
     _act_btn(2, 1, "槽体检", lambda: _run_health(deep=True, dialog=True))
 
     # ── 外观 ──────────────────────────────────────────────
-    look = ttk.LabelFrame(win, text="外观", padding=(12, 10))
+    look = ttk.LabelFrame(host, text="外观", padding=(12, 10))
     look.pack(padx=22, fill="x", pady=(0, 10))
     lrow = ttk.Frame(look)
     lrow.pack(fill="x")
@@ -5924,18 +6064,18 @@ def settings_hub_dialog():
 
     # ── 目录 ──────────────────────────────────────────────
     try:
-        _dir_group(win)
+        _dir_group(host)
     except Exception as e:
         log("[设置] 目录分组构建失败：%s" % e)
 
     # ── 显示与浏览器：那块逻辑较长，单独一页更清爽 ─────────
-    more = ttk.Frame(win)
+    more = ttk.Frame(host)
     more.pack(padx=22, fill="x", pady=(0, 10))
     ttk.Button(more, text="显示哪些槽 / 顺序 / 浏览器…",
                command=_settings_display_dialog).pack(side="left")
 
     # ── 关于 ──────────────────────────────────────────────
-    ab = ttk.LabelFrame(win, text="关于", padding=(12, 10))
+    ab = ttk.LabelFrame(host, text="关于", padding=(12, 10))
     ab.pack(padx=22, fill="x", pady=(0, 12))
     ttk.Label(ab, text="DSH 版本管理器（dsh-tm）%s · 槽上限 %d · 当前 %d 个槽"
                        % (_app_version(), MAX_SLOTS, len(SLOT_KEYS)),
@@ -5949,11 +6089,12 @@ def settings_hub_dialog():
                ).pack(side="left", padx=(8, 0))
 
     # ── 底部 ──────────────────────────────────────────────
-    btns = ttk.Frame(win)
-    btns.pack(padx=22, pady=(0, 16), fill="x")
+    # 关闭按钮放进滚动内容里（否则它会浮在上面盖住「关于」那一段）
+    btns = ttk.Frame(host)
+    btns.pack(padx=22, pady=(0, 20), fill="x")
     ttk.Button(btns, text="关闭", command=win.destroy).pack(side="right")
     win.bind("<Escape>", lambda e: win.destroy())
-    win.grab_set()
+    # （非模态：不 grab_set，主界面仍可操作 —— 见上面说明）
 
 
 

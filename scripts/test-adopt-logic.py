@@ -6,6 +6,7 @@
   · test-manager-logic.py 测主文件的脱敏 / 端口校验 / bat 生成。
 两者都不需要真实 dsh 安装，因此可以进提交钩子。
 """
+import io
 import json
 import os
 import shutil
@@ -549,6 +550,40 @@ try:
         _U._robocopy, shutil.copy2 = _real_rc, _real_copy2
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ══════════════════════════════════════════════════════════════════
+# 2026-11-01 回归：扫描结果必须能被 inspect_adopt_source 认出来
+# 真实事故：detect_existing_installs 里只用 os.path.dirname 一次，得到的是
+# .../node_modules/@deepseek-ai（而非 .../node_modules），inspect 再拼
+# "@deepseek-ai/dsh" 就成了重复路径 → 判定"这里没有 dsh"→ UI 那行被禁用，
+# 用户表现为「点纳入却选不了本机已有的版本」。
+# ══════════════════════════════════════════════════════════════════
+print()
+print("== F. 扫描结果的 node_modules 层级正确（2026-11-01 修复回归）==")
+_d = tempfile.mkdtemp(prefix="dsh-adopt-nm-")
+try:
+    _root = os.path.join(_d, "dsh-versions", "dshV9")
+    _dsh = os.path.join(_root, "node_modules", "@deepseek-ai", "dsh")
+    os.makedirs(os.path.join(_dsh, "lib"), exist_ok=True)
+    with io.open(os.path.join(_dsh, "package.json"), "w", encoding="utf-8") as f:
+        f.write('{"name":"@deepseek-ai/dsh","version":"0.2.9"}')
+    with io.open(os.path.join(_dsh, "lib", "bin.js"), "w", encoding="utf-8") as f:
+        f.write("// entry")
+
+    _found = A.detect_existing_installs([], os.path.join(_d, "dsh-versions"), [])
+    chk("F1 扫到一个安装", len(_found) == 1, str(len(_found)))
+    if _found:
+        _loc = (_found[0].get("locations") or [{}])[0]
+        _nm = _loc.get("node_modules") or ""
+        chk("F2 node_modules 指向真正的 node_modules 目录",
+            os.path.basename(os.path.normpath(_nm)).lower() == "node_modules", _nm)
+        _info = A.inspect_adopt_source(_nm)
+        chk("F3 inspect 认得出这个安装（ok=True）",
+            bool(_info.get("ok")), str(_info.get("problems")))
+        chk("F4 能读到版本号", _info.get("version") == "0.2.9", str(_info.get("version")))
+finally:
+    shutil.rmtree(_d, ignore_errors=True)
 
 print()
 if FAILS:

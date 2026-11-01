@@ -311,7 +311,12 @@ def detect_existing_installs(npm_globals, versions_root, managed_roots=()):
 
     for f in scan_managed_dirs(versions_root, managed_roots):
         if not f["managed"]:                     # 已在 config.json 里的不重复报告
-            add("versions-dir", f["dsh_dir"], f["version"], os.path.dirname(f["dsh_dir"]))
+            # 2026-11-01 修 bug：dsh_dir 是 .../node_modules/@deepseek-ai/dsh，
+            # 要的是 .../node_modules —— 必须向上两级，只 dirname 一次会得到
+            # .../@deepseek-ai，后续 inspect 再拼 "@deepseek-ai/dsh" 就成了
+            # .../@deepseek-ai/@deepseek-ai/dsh，判定为"这里没有 dsh"→ 纳入项被禁用。
+            add("versions-dir", f["dsh_dir"], f["version"],
+                os.path.dirname(os.path.dirname(f["dsh_dir"])))
 
     def _key(v):
         # 排序用「版本元组」，让 0.1.9 < 0.1.10；非标准串排最后。
