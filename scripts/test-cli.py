@@ -70,6 +70,10 @@ chk("B7 启动参数取自 config 的 extra_args",
 
 print()
 print("== C. 安全边界（与 GUI 同一条门控） ==")
+chk("B8 缺 config 时 CLI 从模板自动生成（与 GUI 行为一致）",
+    "EXAMPLE_PATH" in src and "shutil.copyfile(EXAMPLE_PATH, path)" in src)
+
+
 chk("C1 停止走 dsh_kill.kill_version（签名 + 端口门控，不误杀别的 node）",
     "kill_version" in src)
 chk("C2 签名取 bin_js 里 /node_modules/ 之前那段（与 GUI 的 _make_sig 同义）",

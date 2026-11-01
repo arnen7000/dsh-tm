@@ -684,6 +684,7 @@ git config core.hooksPath .githooks
 | [`docs/路线图与扩展愿景.md`](docs/路线图与扩展愿景.md) | **★ 想知道"接下来做什么"读这篇**：CLI 与外部 agent 的协作契约、把 dsh-tm 当评估试验台的设计与已验证的技术事实、明确不做的清单 |
 | [`docs/常见问题.md`](docs/常见问题.md) | **FAQ**：安装 / 隔离 / 卸载 / 纳入 / 平台 / 验证 / 杂项 |
 | [`docs/isolated-install-runbook.md`](docs/isolated-install-runbook.md) | 隔离安装 Runbook：完整步骤 + 踩坑全集 |
+| [`docs/发布与更新流程.md`](docs/发布与更新流程.md) | **★ 要发新版本读这篇**：隐私扫描、最小必要原则、历史清理、GitHub 平台要求、首次使用实测、发版清单、版本号约定、插件化差异 |
 | [`docs/AI代装提示词-隔离版dsh.md`](docs/AI代装提示词-隔离版dsh.md) | 让 AI 助手替你装一个新槽的提示词（复制即用） |
 | [`docs/DeepSeek-Harness使用手册.md`](docs/DeepSeek-Harness使用手册.md) | **dsh 本体**的文档入口索引 |
 | [`docs/DeepSeek-Harness简明手册.md`](docs/DeepSeek-Harness简明手册.md) | **dsh 本体**·简明版：10 分钟快速上手 |

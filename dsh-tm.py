@@ -118,7 +118,25 @@ class Ctx(object):
         return c
 
 
+EXAMPLE_PATH = os.path.join(BASE_DIR, "config", "config.example.json")
+
+
 def _cfg_or_die(path=CONFIG_PATH):
+    """读配置；缺失时**和 GUI 一样**从模板自动生成。
+
+    2026-11-01 实测发现：全新 clone 后直接跑 `dsh-tm.py list` 会报
+    「找不到配置文件」而退出，但 GUI 双击却能自动生成 —— 同一个产品，
+    两个入口对"首次使用"的态度不一致。这里补齐：缺 config 且有模板时，
+    先按模板生成一份零槽配置，再照常往下走（零槽会打印「还没有任何槽」）。
+    """
+    if not os.path.exists(path) and os.path.exists(EXAMPLE_PATH):
+        try:
+            import shutil
+            shutil.copyfile(EXAMPLE_PATH, path)
+            sys.stderr.write("[提示] 未找到 config.json，已从 config/config.example.json "
+                             "生成默认配置。\n")
+        except Exception as e:
+            sys.stderr.write("[警告] 自动生成 config.json 失败：%s\n" % e)
     cfg, err = load_config(path)
     if cfg is None:
         sys.stderr.write("[错误] %s\n" % err)
