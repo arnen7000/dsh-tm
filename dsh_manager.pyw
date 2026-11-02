@@ -3798,46 +3798,16 @@ def _adopt_picker_dialog(found):
         if not r["ok"]:
             _mark.configure(foreground="#999")
             _txt.configure(foreground="#999")
-        # 2026-11-02 用户反馈：中间的"位置 / 组件 / 依赖 282 项 / 旧数据"都是
-        # 诊断细节，普通用户不关心，堆在那里反而看不懂。
-        # 现在：只留一句摘要 + 一个「详情」可展开（默认收起）。
-        ttk.Label(box, text=r.get("summary", ""), foreground=_MUTED,
-                  wraplength=600, justify="left").pack(anchor="w", padx=(22, 0))
-
-        _detail = ttk.Frame(box)
-        _detail.pack(anchor="w", fill="x", padx=(22, 0))
-        _shown = {"on": False}
-
-        def _mk_detail(d=_detail, rr=r):
-            rows = [("位置", rr["nm"]), ("组件", rr["component"])]
-            for t in rr["problems"]:
-                rows.append(("问题", t))
-            for t in rr["warnings"]:
-                rows.append(("提醒", t))
-            for k, v in rows:
-                line = ttk.Frame(d)
-                line.pack(anchor="w", fill="x", pady=1)
-                ttk.Label(line, text=k + "：", foreground=_MUTED, width=5
-                          ).pack(side="left", anchor="n")
-                ttk.Label(line, text=v, foreground=_INK, wraplength=540,
-                          justify="left").pack(side="left", anchor="w")
-
-        def _toggle_detail(_e=None, d=_detail, st=_shown, btn=None):
-            if st["on"]:
-                for w in d.winfo_children():
-                    w.destroy()
-                st["on"] = False
-                if btn is not None:
-                    btn.configure(text="详情 ▾")
-            else:
-                _mk_detail()
-                st["on"] = True
-                if btn is not None:
-                    btn.configure(text="详情 ▴")
-
-        _btn = ttk.Label(box, text="详情 ▾", foreground=_LINK, cursor="hand2")
-        _btn.pack(anchor="w", padx=(22, 0), pady=(2, 0))
-        _btn.bind("<Button-1>", lambda e, b=_btn: _toggle_detail(btn=b))
+        # 2026-11-03 用户要求：「纳入时里面的详情可以删掉，直接显示版本号就行」。
+        # 原来有「位置 / 组件 / 依赖 N 项 / 旧数据」+ 可展开的详情区，太啰嗦。
+        # 现在：
+        #   · 正常可纳入 → 只显示版本号（标题行已含），不追加任何说明
+        #   · **不可纳入** → 才多显示一行原因（用户需要知道为什么点不了）
+        if not r["ok"]:
+            _why = (r.get("problems") or ["安装文件不完整"])[0]
+            ttk.Label(box, text=_why, foreground=_RED,
+                      wraplength=600, justify="left"
+                      ).pack(anchor="w", padx=(22, 0))
         vars_.append((v, r))
 
     res = {"picked": None, "skipped": None}
@@ -5816,6 +5786,49 @@ def _apply_palette():
     st.configure("TLabelframe.Label", background=pal["app_bg"],
                  foreground=pal["muted"])
     st.configure("TSeparator", background=pal["divider"])
+    # 2026-11-03 修用户实测「安装根目录里的路径字看不清」：
+    # TEntry / TCombobox 从来没配过样式 —— 深色主题下它们仍是**浅底**，
+    # 而文字色被设成浅色，于是白底白字、完全读不出来。
+    # 这里补上：输入框/下拉框的背景、前景、边框都跟随主题。
+    try:
+        st.configure("TEntry",
+                     fieldbackground=pal["card_bg"], background=pal["card_bg"],
+                     foreground=pal["ink"], insertcolor=pal["ink"],
+                     bordercolor=pal["neutral_bd"], lightcolor=pal["card_bd"],
+                     darkcolor=pal["card_bd"])
+    except Exception:
+        pass
+    try:
+        st.configure("TCombobox",
+                     fieldbackground=pal["card_bg"], background=pal["neutral"],
+                     foreground=pal["ink"], arrowcolor=pal["ink"],
+                     bordercolor=pal["neutral_bd"])
+        # 下拉列表（popdown）是原生 Tk Listbox，只能通过 option 数据库改
+        root.option_add("*TCombobox*Listbox.background", pal["card_bg"])
+        root.option_add("*TCombobox*Listbox.foreground", pal["ink"])
+        root.option_add("*TCombobox*Listbox.selectBackground", _BRAND)
+        root.option_add("*TCombobox*Listbox.selectForeground", "white")
+    except Exception:
+        pass
+    # 单选/复选按钮的底色也要跟随（否则深色下那圈小方框会浮在浅色块上）
+    for _st in ("TRadiobutton", "TCheckbutton"):
+        try:
+            st.configure(_st, background=pal["app_bg"], foreground=pal["ink"],
+                         indicatorcolor=pal["card_bg"])
+            st.map(_st, background=[("active", pal["app_bg"])],
+                   foreground=[("disabled", pal["muted"])])
+        except Exception:
+            pass
+    # 滚动条（深色下默认是浅灰，很突兀）
+    try:
+        st.configure("Vertical.TScrollbar", background=pal["neutral"],
+                     troughcolor=pal["app_bg"], bordercolor=pal["neutral_bd"],
+                     arrowcolor=pal["muted"])
+        st.configure("Horizontal.TScrollbar", background=pal["neutral"],
+                     troughcolor=pal["app_bg"], bordercolor=pal["neutral_bd"],
+                     arrowcolor=pal["muted"])
+    except Exception:
+        pass
     # 原生 tk 控件（不进 ttk 样式体系，必须单独设）
     for w, key_bg, key_fg in ((root, "app_bg", "ink"),
                               (cards_frame, "app_bg", "ink")):
