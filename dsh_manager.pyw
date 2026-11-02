@@ -5873,6 +5873,11 @@ def _save_ui_field(key, value):
 #   · 非模态（不用 grab_set），这样点主界面上的东西仍然有反应，"实时看到变化"才成立。
 # 2026-11-02 用户要求「拉开一小段松手能被吸回，拉太远才分开」。
 # 阈值 60 → 100：100px 以内松手都会吸回去，超过才真正脱离。
+# 吸附时两窗外框重叠的像素数（左右顶部共用，保证四边观感一致）。
+# 为什么是 2：Windows 的 DWM 给每个窗口各加一圈约 1px 的阴影/边框，
+# 外框坐标贴合时视觉上仍有细缝；重叠 2px 正好吃掉它。
+_DOCK_OVERLAP = 2
+
 _DOCK = {"threshold": 100, "attached": False, "job": None, "side": "right"}
 
 
@@ -6060,7 +6065,7 @@ def _make_side_panel(win, width=380):
             except Exception:
                 cw_ = max(360, int(_DOCK.get("w") or w.winfo_width()))
                 ch_ = max(200, int(_DOCK.get("h") or w.winfo_height()))
-            OVERLAP = 2
+            OVERLAP = _DOCK_OVERLAP
 
             if best == d_right or best == d_left:
                 if best == d_right:
@@ -6531,14 +6536,40 @@ def _scroll_host(win):
     except Exception:
         pass
 
+    # 2026-11-02 修 bug（用户实测：滚鼠标看日志，设置界面也跟着动）：
+    # 原来用 canvas.bind_all("<MouseWheel>")，那是**全局绑定** ——
+    # 鼠标在主窗口日志区滚动也会触发这里的回调；而 Tk 在滚动越界时
+    # 会尝试"滚动整个窗口"，表现为设置窗跟着乱跳。
+    # 现在只在**设置窗区域内部**（canvas 及其子控件）绑定，主界面滚动与它无关。
     def _wheel(evt):
         try:
+            # 只在指针确实落在本 canvas 内时才滚
+            x, y = canvas.winfo_pointerxy()
+            cx, cy = canvas.winfo_rootx(), canvas.winfo_rooty()
+            if not (cx <= x <= cx + canvas.winfo_width() and
+                    cy <= y <= cy + canvas.winfo_height()):
+                return
             canvas.yview_scroll(int(-1 * (evt.delta / 120)), "units")
         except Exception:
             pass
 
+    def _bind_wheel(widget):
+        """把滚轮绑到这个控件及其所有子控件（只作用于设置窗内部）。"""
+        try:
+            widget.bind("<MouseWheel>", _wheel)
+        except Exception:
+            pass
+        try:
+            for ch in widget.winfo_children():
+                _bind_wheel(ch)
+        except Exception:
+            pass
+
     try:
-        canvas.bind_all("<MouseWheel>", _wheel)
+        canvas.bind("<MouseWheel>", _wheel)
+        inner.bind("<MouseWheel>", _wheel)
+        # 子控件是后续才创建的，延后一帧再统一绑一次
+        canvas.after(300, lambda: _bind_wheel(canvas))
     except Exception:
         pass
     return inner
