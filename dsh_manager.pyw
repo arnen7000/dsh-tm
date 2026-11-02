@@ -5871,7 +5871,9 @@ def _save_ui_field(key, value):
 #   · 距离小于阈值 → 吸附：设置窗贴到主窗口右侧，高度对齐主窗口。
 #   · 拖远 → 视为脱离，之后主窗口移动不再带动它。
 #   · 非模态（不用 grab_set），这样点主界面上的东西仍然有反应，"实时看到变化"才成立。
-_DOCK = {"threshold": 60, "attached": False, "job": None}
+# 2026-11-02 用户要求「拉开一小段松手能被吸回，拉太远才分开」。
+# 阈值 60 → 100：100px 以内松手都会吸回去，超过才真正脱离。
+_DOCK = {"threshold": 100, "attached": False, "job": None, "side": "right"}
 
 
 def _win_outer_rect(win):
@@ -5975,10 +5977,16 @@ def _make_side_panel(win, width=380):
     """
     # 每次打开设置窗都重新定尺寸（用户可能关掉再开）。
     _DOCK["sized"] = False
+    _DOCK.pop("w", None)
+    _DOCK.pop("h", None)
     try:
         mx, my, mw, mh = _main_rect()
         win.geometry("%dx%d+%d+%d" % (width, mh, mx + mw, my))
         _DOCK["sized"] = True
+        # 记录**实际生效**的宽高（Tk 可能按内容微调 width，不能沿用传参）。
+        # 侧栏厚度固定为 width，高度目标是主窗外框高。
+        _DOCK["w"] = width
+        _DOCK["h"] = mh
     except Exception:
         pass
 
@@ -6037,19 +6045,35 @@ def _make_side_panel(win, width=380):
                 _DOCK["attached"] = False
                 return
 
-            # 2026-11-02 修严重 bug：原来吸附时用 geometry("W x H + x + y") 一起改
-            # 宽高，而 w.winfo_height() 在窗口还没 settle 时可能是错的，
-            # 结果把设置窗拉成 854x1079（超出屏幕、被甩到屏幕外）。
-            # 现在：**吸附只改位置，绝不动尺寸**；尺寸只在打开时设一次。
-            cw_ = max(360, w.winfo_width())
-            ch_ = max(200, w.winfo_height())
+            # 2026-11-02：**左右两侧都吸附**，并让两窗各重叠 2px。
+            # 为什么要重叠：Windows 的 DWM 会给每个窗口加一圈阴影，
+            # GetWindowRect 量出来缝隙是 0，但视觉上中间仍有一道几像素的透明缝。
+            # 让外框重叠 2px 就能吃掉它，看起来是真的"贴在一起"。
+            # 2026-11-02：用**属性记录的目标宽高**，而不是动画中途的 winfo_width()。
+            # 后者在 _dock_animate 正在改几何时会读到中间态，导致左侧吸附差 18px。
+            # 用**实测外框宽**：_DOCK["w"] 是请求值（380），
+            # 而 Tk 会按内容把它撑到 396，两者差 16px 正是左侧吸附差 18 的来源。
+            try:
+                _wrect = _win_outer_rect(w)
+                cw_ = max(360, _wrect[2] - _wrect[0])
+                ch_ = max(200, _wrect[3] - _wrect[1])
+            except Exception:
+                cw_ = max(360, int(_DOCK.get("w") or w.winfo_width()))
+                ch_ = max(200, int(_DOCK.get("h") or w.winfo_height()))
+            OVERLAP = 2
 
             if best == d_right or best == d_left:
-                x = (mx + mw) if best == d_right else (mx - cw_ - 8)
-                w.geometry("+%d+%d" % (x, my))
+                if best == d_right:
+                    x = mx + mw - OVERLAP
+                else:
+                    # 左侧：设置窗右边缘贴到主窗左边缘（再重叠 2px）
+                    x = mx - cw_ + OVERLAP
+                _dock_animate(w, x, my)
+                _DOCK["side"] = "right" if best == d_right else "left"
             else:
-                y = (my + mh) if best == d_below else (my - ch_ - 8)
-                w.geometry("+%d+%d" % (wl, y))
+                y = (my + mh - OVERLAP) if best == d_below else (my - ch_ + OVERLAP)
+                _dock_animate(w, wl, y)
+                _DOCK["side"] = "bottom" if best == d_below else "top"
             _DOCK["attached"] = True
         except Exception:
             pass
@@ -6079,6 +6103,58 @@ def _make_side_panel(win, width=380):
 
     _DOCK["attached"] = True
     return win
+
+
+def _dock_animate(win, target_x, target_y, steps=8, bounce=1):
+    """把窗口**动画滑到** (target_x, target_y)，带一点回弹。
+
+    2026-11-02 用户要求：「吸附效果强一些、明显一些…可以略弹一下」。
+    纯瞬移看不出"吸"的感觉；这里用 ease-out 分 8 帧滑过去，
+    最后一帧再多走 2px 再回正，制造轻微的"磁吸回弹"。
+    """
+    try:
+        if not win.winfo_exists():
+            return
+        wr = _win_outer_rect(win)
+        x0, y0 = wr[0], wr[1]
+        if abs(x0 - target_x) <= 1 and abs(y0 - target_y) <= 1:
+            return
+        # 2026-11-02：若只给 "+x+y"（纯位置），Tk 在部分情况下会按"上次请求的尺寸"
+        # 重排，实测把窗口拉成 854x1079。这里**始终带上当前宽高**，尺寸零变化。
+        try:
+            _cw = win.winfo_width()
+            _ch = win.winfo_height()
+        except Exception:
+            _cw, _ch = 0, 0
+
+        def step(i, _x0=x0, _y0=y0):
+            try:
+                if not win.winfo_exists():
+                    return
+                t = i / float(steps)
+                e = 1 - (1 - t) ** 3            # ease-out：先快后慢
+                x = int(_x0 + (target_x - _x0) * e)
+                y = int(_y0 + (target_y - _y0) * e)
+                # 最后一帧轻微过冲再回正（回弹感）
+                if i == steps and bounce:
+                    ox = 2 if target_x >= _x0 else -2
+                    oy = 2 if target_y >= _y0 else -2
+                    win.geometry("%dx%d+%d+%d" % (_cw, _ch, x + ox, y + oy))
+                    win.after(60, lambda: (win.winfo_exists() and
+                                           win.geometry("%dx%d+%d+%d" % (_cw, _ch, target_x, target_y))))
+                    return
+                win.geometry("%dx%d+%d+%d" % (_cw, _ch, x, y))
+                if i < steps:
+                    win.after(12, lambda: step(i + 1))
+            except Exception:
+                pass
+
+        step(1)
+    except Exception:
+        try:
+            win.geometry("+%d+%d" % (target_x, target_y))
+        except Exception:
+            pass
 
 
 def _do_follow(win):
