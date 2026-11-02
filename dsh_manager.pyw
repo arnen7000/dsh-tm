@@ -3771,12 +3771,18 @@ def _adopt_picker_dialog(found):
 
     vars_ = []
     for i, r in enumerate(rows):
-        box = ttk.LabelFrame(inner, padding=(8, 5))
-        box.pack(fill="x", pady=3, padx=2)
+        # 2026-11-03 用户反馈：
+        #   · 「0.2.1 前面那个框格是什么」→ 那是 ttk.LabelFrame 的边框，不是勾选框；
+        #     勾选标记是它右边的 ✅。
+        #   · 「版本目录几个字有什么用，删掉」→ 删掉 [版本目录]。
+        # 现在：去掉外层 LabelFrame（不再画那个框），整行就是
+        #   ✅ 版本号
+        # 简洁、不误导。
+        box = ttk.Frame(inner)
+        box.pack(fill="x", pady=2, padx=2)
         v = tk.BooleanVar(value=r["ok"])       # 完好的默认勾上，坏的不勾
-        # 2026-11-01 用户反馈：原生 Checkbutton 的勾选态是「☒ / ☐」，看着像叉号/报错。
-        # 改成「✅ / 空」：用一个可点击的 Label 显示符号，点它就切换 BooleanVar。
-        _title = "%s   [%s]" % (r["version"], r["kind"])
+        # 勾选态用「✅ / 空」：原生 Checkbutton 的 ☒/☐ 看着像错误标记。
+        _title = str(r["version"] or "?")
         _row = ttk.Frame(box)
         _row.pack(anchor="w")
         _mark = ttk.Label(_row, text="✅" if v.get() else "  ",
@@ -6057,6 +6063,7 @@ def _make_side_panel(win, width=380):
         # 侧栏厚度固定为 width，高度目标是主窗外框高。
         _DOCK["w"] = width
         _DOCK["h"] = mh
+        _DOCK["panel_w"] = width      # 固定宽度，跟随主窗时不再重测
     except Exception:
         pass
 
@@ -6123,12 +6130,20 @@ def _make_side_panel(win, width=380):
             # 后者在 _dock_animate 正在改几何时会读到中间态，导致左侧吸附差 18px。
             # 用**实测外框宽**：_DOCK["w"] 是请求值（380），
             # 而 Tk 会按内容把它撑到 396，两者差 16px 正是左侧吸附差 18 的来源。
+            # 2026-11-03：优先用**打开时固定的侧栏宽度**。
+            # 原来这里用 _win_outer_rect 实测宽度，而那个值正是我们上一帧写进去的，
+            # 在几何未 settle 时会读到中间态 → 宽度被逐次放大（实测涨到 844px）。
+            cw_ = int(_DOCK.get("panel_w") or 0)
+            if cw_ < 300:
+                try:
+                    _wrect = _win_outer_rect(w)
+                    cw_ = max(360, _wrect[2] - _wrect[0])
+                except Exception:
+                    cw_ = max(360, int(_DOCK.get("w") or w.winfo_width()))
             try:
-                _wrect = _win_outer_rect(w)
-                cw_ = max(360, _wrect[2] - _wrect[0])
-                ch_ = max(200, _wrect[3] - _wrect[1])
+                _wrect2 = _win_outer_rect(w)
+                ch_ = max(200, _wrect2[3] - _wrect2[1])
             except Exception:
-                cw_ = max(360, int(_DOCK.get("w") or w.winfo_width()))
                 ch_ = max(200, int(_DOCK.get("h") or w.winfo_height()))
             OVERLAP = _DOCK_OVERLAP
 
@@ -6242,7 +6257,15 @@ def _do_follow(win):
             return
         mx, my, mw, mh = _main_rect()
         wr = _win_outer_rect(win)
-        cw_ = max(360, wr[2] - wr[0])
+        # 2026-11-03 修 bug（用户实测：拉长主窗后设置窗横向变化了）：
+        # 原来每次跟随都重新用 wr[2]-wr[0] 量宽度 —— 而那正是**我们上一帧
+        # 刚写进去的值**，在几何尚未 settle 时会读到中间态，于是宽度被反复
+        # 收缩/放大，看起来就是"横向变化"。
+        # 宽度改用**打开时固定的侧栏宽度**，只有高度跟随主窗。
+        cw_ = int(_DOCK.get("panel_w") or 0)
+        if cw_ < 300:
+            cw_ = max(360, wr[2] - wr[0])
+            _DOCK["panel_w"] = cw_
         frame_h = (wr[3] - wr[1]) - win.winfo_height()
         target_ch = max(200, mh - max(0, frame_h))
 
@@ -6641,6 +6664,15 @@ def _scroll_host(win):
             if not (cx <= x <= cx + canvas.winfo_width() and
                     cy <= y <= cy + canvas.winfo_height()):
                 return
+            # 2026-11-03 用户反馈：「上下长度够用的情况下为什么还能用滚轮滑动」。
+            # 内容不需要滚动时（全部可见），滚轮应当**完全无反应**，
+            # 否则画面会在边界处轻微位移，像"能滚但滚不动"，很别扭。
+            try:
+                first, last = canvas.yview()
+                if first <= 0.0 and last >= 1.0:
+                    return          # 内容全可见 → 不响应滚动
+            except Exception:
+                pass
             canvas.yview_scroll(int(-1 * (evt.delta / 120)), "units")
         except Exception:
             pass
@@ -6822,6 +6854,12 @@ def settings_hub_dialog():
     ttk.Button(_lrow2, text="清空…",
                command=lambda: (_clear_logs_dialog(win), _refresh_log_info())
                ).pack(side="left", expand=True, fill="x", padx=(3, 0))
+
+    # ── 关于项目（最下面）────────────────────────────────
+    proj = ttk.Frame(host)
+    proj.pack(padx=16, fill="x", pady=(4, 16))
+    ttk.Button(proj, text="★ 在 GitHub 上收藏本项目",
+               command=_open_project_page).pack(fill="x")
 
     win.bind("<Escape>", lambda e: win.destroy())
 
@@ -7154,9 +7192,7 @@ def _settings_display_dialog():
 # 2026-11-01：标题栏只留「设置」一个入口。
 # 「关于」「★ 在 GitHub 收藏」都收进设置页（用户要求：初始界面只有槽 + 日志 + 全启停）。
 ttk.Button(_hdr, text="设置", command=settings_dialog).pack(side="right", padx=(0, 6))
-# 「★ 在 GitHub 收藏」：2026-11-02 从设置里移到主界面（用户要求）
-ttk.Button(_hdr, text="★ 收藏", command=_open_project_page).pack(
-    side="right", padx=(0, 6))
+# 2026-11-03 用户要求：「把在 github 上收藏还是放进设置界面，放最下面」
 # 两个全启停按钮：放在「设置」左侧（pack side=right 时后 pack 的在更左边）
 _b_stopall = ttk.Button(_hdr, text="全部停止", style="Red.TButton",
                         command=stop_all_slots)
