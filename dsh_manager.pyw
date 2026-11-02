@@ -5822,22 +5822,65 @@ def _save_ui_field(key, value):
 _DOCK = {"threshold": 48, "attached": False, "job": None}
 
 
-def _main_rect():
-    """主窗口的屏幕矩形 (x, y, w, h)。"""
+def _win_outer_rect(win):
+    """窗口的**外框**屏幕矩形 (l, t, r, b)，含标题栏与边框。
+
+    2026-11-02 修「设置窗没和主界面平齐」：
+    `winfo_rooty()` 给的是**客户区**左上角（不含标题栏），而
+    `geometry("+x+y")` 定位的是**窗口外框**。两者相差一个标题栏高度，
+    直接拿来用就会让设置窗比主窗口低 30 来像素（实测 31px）。
+    这里统一走 Win32 GetWindowRect 取外框，两个窗口用同一套坐标。
+    """
     try:
-        root.update_idletasks()
-        return (root.winfo_rootx(), root.winfo_rooty(),
-                root.winfo_width(), root.winfo_height())
+        import ctypes
+        from ctypes import wintypes
+        win.update_idletasks()
+        hwnd = _top_hwnd(win)
+        if hwnd:
+            r = wintypes.RECT()
+            ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(r))
+            if r.right > r.left and r.bottom > r.top:
+                return (r.left, r.top, r.right, r.bottom)
+    except Exception:
+        pass
+    # 兜底：用 Tk 自己的坐标（会差一个标题栏，但至少能算）
+    try:
+        x, y = win.winfo_rootx(), win.winfo_rooty()
+        return (x, y, x + win.winfo_width(), y + win.winfo_height())
     except Exception:
         return (0, 0, 800, 600)
 
 
+def _main_rect():
+    """主窗口的**外框**屏幕矩形 (x, y, w, h)。"""
+    l, t, r, b = _win_outer_rect(root)
+    return (l, t, r - l, b - t)
+
+
 def _dock_settings_window(win):
-    """把设置窗贴到主窗口右侧、同高。"""
+    """把设置窗贴到主窗口右侧、顶边对齐、高度一致。
+
+    先把设置窗自己的**外框**量出来：Tk 的 geometry 宽高指的是**客户区**，
+    而主窗口的 mh 是外框高度。直接 `geometry("%dx%d" % (w, mh))` 会让
+    设置窗外框比主窗口高出一个标题栏，看起来不齐。
+    这里按"外框差"补偿：客户区高度 = 主窗外框高 - (设置窗外框高 - 设置窗客户区高)。
+    """
     try:
         mx, my, mw, mh = _main_rect()
-        win.geometry("+%d+%d" % (mx + mw + 8, my))
-        win.geometry("%dx%d" % (max(360, win.winfo_width()), mh))
+        # 设置窗的边框/标题栏占位：外框高 - 客户区高
+        try:
+            sl, st, sr, sb = _win_outer_rect(win)
+            frame_h = (sb - st) - win.winfo_height()
+            frame_w = (sr - sl) - win.winfo_width()
+        except Exception:
+            frame_h = 0
+            frame_w = 0
+        target_w = max(360, win.winfo_width())
+        win.geometry("%dx%d+%d+%d"
+                     % (target_w,
+                        max(200, mh - max(0, frame_h)),
+                        mx + mw + 8,
+                        my))
         _DOCK["attached"] = True
     except Exception:
         pass
