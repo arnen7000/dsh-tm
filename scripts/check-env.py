@@ -92,11 +92,13 @@ def check_optional():
     try:
         import pythoncom  # noqa: F401
         import win32com.client  # noqa: F401
-        ok("pywin32 可用（建桌面快捷方式会走 COM 方式，效果更好）")
+        ok("pywin32 可用（建桌面快捷方式走 COM 方式）")
     except ImportError:
-        warn("未装 pywin32 —— 不影响使用：build_lnk.py 会自动降级为"
-             "手工构造 .lnk，仍能建出图标快捷方式")
-        print("         想装：pip install pywin32")
+        # 2026-11-02 用户反馈：「日志里不要有未装 pywin32，用户还以为软件有问题」。
+        # 评估结论：pywin32 **只影响桌面快捷方式的生成方式**，且已有降级路径
+        # （build_lnk.py 手工构造 .lnk，效果等价）。它既不必要、也不该报警。
+        # 改为 [OK]：说明"不需要它"，而不是"缺了它"。
+        ok("桌面快捷方式：用内置方式生成（不需要 pywin32）")
 
 
 def _node_version(exe):

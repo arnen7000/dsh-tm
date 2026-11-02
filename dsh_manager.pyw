@@ -2217,15 +2217,16 @@ _hdr_title = ttk.Label(_hdr, text="dsh-tm",
 _hdr_title.pack(side="left")
 _hdr_ver = ttk.Label(_hdr, text="", font=("Segoe UI", 10))
 _hdr_ver.pack(side="left", padx=(8, 0))
-_hdr_sub = ttk.Label(_hdr, text="多版本隔离 · 独立进程 / 端口 / 数据",
-                     font=("Segoe UI", 9))
-_hdr_sub.pack(side="left", padx=(10, 0))
+# 2026-11-02 用户要求：版本号右侧那行说明字去掉（主界面保持简洁）
+_hdr_sub = None
 
 
 def _refresh_header_style():
     """按当前主题刷标题栏三种文字的颜色（深色下必须可读）。"""
     pal = _palette()
     for w, key in ((_hdr_title, "ink"), (_hdr_ver, "muted"), (_hdr_sub, "muted")):
+        if w is None:
+            continue
         try:
             w.configure(foreground=pal[key])
         except Exception:
@@ -5220,7 +5221,8 @@ def _build_fresh_guide():
         cards_frame.columnconfigure(0, weight=1)
         cards_frame.rowconfigure(0, weight=1)
 
-        _w = ttk.LabelFrame(cards_frame, text="开始使用", padding=(24, 20))
+        # 2026-11-02 用户要求：去掉「开始使用」这个多余的分组标题
+        _w = ttk.LabelFrame(cards_frame, text="", padding=(24, 20))
         _w.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
         _f = ttk.Frame(_w, style="Card.TFrame")
         _f.pack(fill="both", expand=True)
@@ -5928,10 +5930,35 @@ def _dock_settings_window(win):
         target_w = max(360, win.winfo_width())
         # 尺寸只在"还没定过"时设置一次；之后吸附一律只改位置，
         # 否则反复 geometry 会与用户的拖动互相打架（实测把窗口拉变形）。
+        #
+        # 2026-11-02 修「设置界面比主界面高 39px」：
+        # 刚创建时 winfo_height() 还没 settle，frame_h 算成 0，
+        # 于是客户区高度直接取了主窗外框高度 → 外框多出一个标题栏。
+        # 现在延后一帧再量：等 Tk 把窗口建好、拿到真实边框尺寸后重设一次高度。
+        # 2026-11-02：高度每次吸附都重算（幂等，不会抖）。
+        # 只算"外框高 - 客户区高"这个差值再反推客户区高度，保证**外框等高**。
+        def _apply_height():
+            try:
+                if not win.winfo_exists():
+                    return
+                wr2 = _win_outer_rect(win)
+                fh = (wr2[3] - wr2[1]) - win.winfo_height()
+                if fh > 0:
+                    win.geometry("%dx%d" % (target_w, max(200, mh - fh)))
+            except Exception:
+                pass
+
         if not _DOCK.get("sized"):
             win.geometry("%dx%d" % (target_w, max(200, mh - max(0, frame_h))))
             _DOCK["sized"] = True
-        win.geometry("+%d+%d" % (mx + mw + 8, my))
+        # 立即做一次 + 延后一次（Tk 在首帧后才知道真实边框尺寸）
+        _apply_height()
+        try:
+            win.after(150, _apply_height)
+        except Exception:
+            pass
+            _DOCK["sized"] = True
+        win.geometry("+%d+%d" % (mx + mw, my))
         _DOCK["attached"] = True
     except Exception:
         pass
@@ -5950,7 +5977,7 @@ def _make_side_panel(win, width=380):
     _DOCK["sized"] = False
     try:
         mx, my, mw, mh = _main_rect()
-        win.geometry("%dx%d+%d+%d" % (width, mh, mx + mw + 8, my))
+        win.geometry("%dx%d+%d+%d" % (width, mh, mx + mw, my))
         _DOCK["sized"] = True
     except Exception:
         pass
@@ -6018,10 +6045,10 @@ def _make_side_panel(win, width=380):
             ch_ = max(200, w.winfo_height())
 
             if best == d_right or best == d_left:
-                x = (mx + mw + 8) if best == d_right else (mx - cw_ - 8)
+                x = (mx + mw) if best == d_right else (mx - cw_ - 8)
                 w.geometry("+%d+%d" % (x, my))
             else:
-                y = (my + mh + 8) if best == d_below else (my - ch_ - 8)
+                y = (my + mh) if best == d_below else (my - ch_ - 8)
                 w.geometry("+%d+%d" % (wl, y))
             _DOCK["attached"] = True
         except Exception:
@@ -6031,8 +6058,39 @@ def _make_side_panel(win, width=380):
         win.bind("<Configure>", _on_configure, add="+")
     except Exception:
         pass
+
+    # 2026-11-02 用户要求：「拖动主界面时设置界面跟着一起动」。
+    # 做法：监听主窗口 <Configure>（位置或尺寸变化都会触发），
+    # 处于吸附状态时把侧栏重新贴到主窗右侧。
+    # 节流 16ms，避免拖动时每像素都改一次几何导致闪烁。
+    def _on_main_moved(evt=None):
+        if evt is not None and evt.widget is not root:
+            return
+        if not _DOCK.get("attached"):
+            return                       # 用户已把侧栏拖离 → 不跟随
+        if _DOCK.get("follow_job"):
+            return
+        _DOCK["follow_job"] = root.after(16, lambda: _do_follow(win))
+
+    try:
+        root.bind("<Configure>", _on_main_moved, add="+")
+    except Exception:
+        pass
+
     _DOCK["attached"] = True
     return win
+
+
+def _do_follow(win):
+    """把侧栏重新贴到主窗口右侧（仅吸附状态下由 _on_main_moved 调用）。"""
+    _DOCK["follow_job"] = None
+    try:
+        if not win.winfo_exists() or not _DOCK.get("attached"):
+            return
+        mx, my, mw, mh = _main_rect()
+        win.geometry("+%d+%d" % (mx + mw, my))
+    except Exception:
+        pass
 
 
 def _open_project_page():
@@ -6445,8 +6503,6 @@ def _dir_group_single(parent):
     else:
         ttk.Button(df, text="选择安装位置…", command=_ask_install_root
                    ).pack(anchor="w", pady=(8, 0))
-        ttk.Label(df, text="装第一个版本时也可以直接选",
-                  foreground=_MUTED).pack(anchor="w", pady=(8, 0))
 
 
 def settings_hub_dialog():
