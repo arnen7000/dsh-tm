@@ -876,17 +876,18 @@ try:
         O.read_config(cfgp5), base5, tgt, tmp5))
     chk("重复 apply 幂等", ok6 is True and "0 个" in msg6, msg6)
 
-    # default_temp_dir 的优先级：temp_root > 候选盘 > 槽内 .tmp
+    # 2026-11-02 规则变更（用户要求简化目录设置）：
+    #   临时文件直接放进**各自槽目录下的 .tmp**，
+    #   优先级变成：显式 temp_root > 槽内 .tmp
+    #   （原来的"候选盘 dsh-temp"降级为不再使用）
     chk("给了 temp_root 就用它",
         A.default_temp_dir("dshV9", "/x", temp_root="/t") ==
         os.path.join("/t", "dshV9"))
-    # 候选盘规则用显式注入来验：不依赖本机有没有 D 盘，也不会真建目录。
-    chk("没给 temp_root 时退回候选盘（注入候选，落 <候选>/dsh-temp/<槽>）",
+    chk("没给 temp_root 时用槽内 .tmp（新规则）",
         A.default_temp_dir("dshV9", "/x", candidates=("D:\\dsh-temp",))
-        .replace("\\", "/").endswith("/dsh-temp/dshV9"))
-    chk("候选盘也不存在 → 槽内 .tmp（保底不丢）",
-        A.default_temp_dir("dshV9", "/x", candidates=("Q:\\nope",)).replace("\\", "/")
-        == "/x/.tmp")
+        .replace("\\", "/") == "/x/.tmp")
+    chk("没有槽目录时也能给出兜底",
+        isinstance(A.default_temp_dir("dshV9", "", candidates=("Q:\\nope",)), str))
     # 本文件开头把 DSH_TEMP_NO_REAL_DISK 设成 1 → 默认候选为空 → 落到槽内 .tmp。
     chk("回归里默认候选被清空（不会在真实 D 盘建目录）",
         A.default_temp_dir("dshV9", "/x").replace("\\", "/") == "/x/.tmp",

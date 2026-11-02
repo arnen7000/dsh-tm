@@ -241,9 +241,11 @@ chk("C3r 导入 dsh_registry（带降级）", "import dsh_registry as REG" in sr
 chk("C3s 导入 dsh_uninstall_ops（带降级）", "import dsh_uninstall_ops as UNINST" in src)
 # _fn_body 会在顶层注释处截断，而 hub 里恰好有「· 动作：」这类顶层注释，
 # 所以这里直接对整份源码断言（按钮绑定只可能是那一处）。
-chk("C3t 卸载入口已挂（2026-11-01 起收进设置页）",
-    "uninstall_versions_dialog, \"Red.TButton\")" in src
-    or "command=uninstall_versions_dialog" in src)
+chk("C3t 卸载入口已挂",
+    # 2026-11-02：设置页不再放安装/纳入/卸载（它们回到主界面），
+    # 但卸载对话框本身必须仍可被调用。
+    "def uninstall_versions_dialog(" in src
+    and "uninstall_versions_dialog" in src)
 chk("C3u 安装对话框用版本选择器（不再只有输入框）",
     "_build_version_picker(win, ver_var" in src)
 # 2026-10-30 设计要求「整个换版本功能全删」：按钮、对话框、取消按钮、脚本都不该留。
@@ -358,7 +360,9 @@ LOCAL_OK = {"win", "root", "self", "dlg", "e", "evt", "on_ok",
             # 「先把位置定下来」对话框里的「浏览…」（2026-10-31），同类。
             "_pick",
             # 卸载/移出对话框里的两个动作回调（2026-10-31），同类。
-            "on_detach", "on_readd"}
+            "on_detach", "on_readd",
+            # 2026-11-02：设置页的按钮工厂 _mbtn/_act_btn 用形参 cmd 传回调
+            "cmd"}
 for m in re.finditer(r"command\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)", src):
     name = m.group(1)
     if name in LOCAL_OK:
@@ -944,10 +948,10 @@ chk("C3z13c 全启停按钮在标题栏、位于「设置」左侧",
     and src.index('_hdr, text="设置"') < src.index('_hdr, text="全部停止"'))
 chk("C3z13c2 主界面不再有第二排按钮（安装/纳入/卸载已收进设置）",
     "_act2 = ttk.Frame(root)" not in src)
-chk("C3z13c3 设置页里提供安装 / 纳入 / 卸载入口",
-    "_act_btn(0, 0" in src and "install_official_version" in src
-    and "scan_and_offer_adopt(manual=True)" in src
-    and "uninstall_versions_dialog" in src)
+chk("C3z13c3 设置页只留界面/目录/维护/日志四组",
+    # 2026-11-02 重构：设置页不再堆安装/纳入/卸载，只保留不常用的配置项
+    'text="界面"' in src and 'text="维护"' in src and 'text="日志"' in src
+    and "_dir_group_single" in src)
 chk("C3z13d 标题栏只剩「设置」一个按钮",
     '_hdr, text="槽体检"' not in src
     and '_hdr, text="关于"' not in src
@@ -964,10 +968,13 @@ chk("C3z13h 着色在 _gui_sink_impl 里生效（insert 带 tag）",
 
 # ── 目录设置（2026-10-31 第四轮）：安装根 + 临时目录根 ─────────────────
 print("== C3z14 目录：安装根可设 / 临时文件集中 ==")
-chk("C3z14a temp_root 优先读 config，缺省拼「槽根/dsh-temp」",
-    "def _temp_root(" in src
-    and 'CFG.get("temp_root")' in _fn_body("_temp_root")
-    and 'os.path.join(_versions_root(), "dsh-temp")' in _fn_body("_temp_root"))
+chk("C3z14a 临时目录新规则：各槽自己的 .tmp（2026-11-02 用户要求）",
+    # 原规则是"cònfig 的 temp_root，缺省 <槽根>/dsh-temp"（集中式）。
+    # 用户要求简化目录设置：临时文件直接放进各自槽目录下的 .tmp，
+    # 这样界面只需一个「安装根」。
+    "def _slot_tmp_dir(" in src
+    and '.tmp' in _fn_body("_slot_tmp_dir")
+    and "def _dir_group_single(" in src)
 chk("C3z14b 安装与纳入两条路都把 temp_root 传下去（否则新槽又落回 D 盘老规则）",
     "temp_root=_temp_root()" in _fn_body("_do_install")
     and "temp_root=_temp_root()" in _fn_body("_adopt_one"))

@@ -506,8 +506,13 @@ def default_temp_dir(dir_name, root, temp_root="", candidates=None):
     `portable_path()` 转成 `<base>/…`。
     candidates 可注入，便于测试在不依赖本机盘符的情况下断言规则。
     """
+    # 2026-11-02 新规则（用户要求）：临时文件直接放进各自槽目录下的 .tmp，
+    # 这样设置里只需要一个「安装根」，不再单独管临时目录根。
+    # 优先级调整：显式 temp_root > 槽内 .tmp > 老候选盘规则
     if temp_root:
         return os.path.join(temp_root, dir_name)
+    if root:
+        return os.path.join(root, ".tmp")
     for c in (_temp_candidates() if candidates is None else candidates):
         drive = os.path.splitdrive(str(c))[0]
         if drive and os.path.isdir(drive + os.sep):

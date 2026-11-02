@@ -3305,7 +3305,26 @@ def _temp_root():
     raw = str(CFG.get("temp_root") or "").strip()
     if raw:
         return resolve(raw)
-    return os.path.join(_versions_root(), "dsh-temp")
+    # 2026-11-02：默认值从「集中式 dsh-temp」改为**各槽自己的 .tmp**。
+    # 这里仍返回一个"根"，但新装槽的落点由 install_ops 用 _slot_tmp_dir() 算，
+    # 不再从这个根派生。保留返回值是为了兼容仍然调用它的旧代码路径。
+    return ""
+
+def _slot_tmp_dir(slot_root):
+    """某个槽的默认临时目录 = **该槽目录下的 .tmp**（2026-11-02 新规则）。
+
+    用户要求：「把临时文件直接放进各自 dshVX 的文件夹下」，
+    这样目录设置里只需要一个「安装根」，不必再单独管一个临时目录根。
+
+    ⚠ 只对**新装 / 新纳入**的槽生效。**已装的旧槽保持原 temp_dir 不动**：
+      改它要停进程、重建三件 bat、还可能影响正在跑的 dsh，
+      风险远大于收益；而临时目录本来就是"丢了也没关系"的东西，
+      没有必要为了统一规则去动存量环境。
+    """
+    if not slot_root:
+        return ""
+    return os.path.join(slot_root, ".tmp")
+
 
 def _detached_records():
     """config 顶层 `detached`：已移出管理、但**还在磁盘上**的槽。
@@ -6394,18 +6413,57 @@ def _scroll_host(win):
 _SETTINGS_WIN = {"win": None}
 
 
+def _dir_group_single(parent):
+    """「目录」分组：**只保留一个安装根**。
+
+    2026-11-02 用户要求：「目录这里是否还能简化，只留一个路径，
+    把临时文件直接放进各自 dshVX 的文件夹下」。
+
+    设计：
+      · 安装根 = 所有槽装在哪（<安装根>/dsh-versions/dshVx）
+      · 各槽的临时目录 = <槽目录>/.tmp，跟着槽走，**不再需要单独配置**
+      · 所以这里只显示一行安装根 + 「移动…」入口
+    已装的旧槽保持原 temp_dir 不动（改它要停进程、重写 bat，风险大于收益），
+    只对**新装/新纳入**的槽应用新规则。
+    """
+    df = ttk.LabelFrame(parent, text="目录", padding=(12, 10))
+    df.pack(padx=16, fill="x", pady=(0, 10))
+    locked = bool(SLOT_KEYS)
+
+    row = ttk.Frame(df)
+    row.pack(fill="x")
+    ttk.Label(row, text="安装根", width=8).pack(side="left")
+    ttk.Label(row, text=os.path.normpath(INSTALL_BASE),
+              foreground=_MUTED).pack(side="left", fill="x", expand=True)
+
+    if locked:
+        ttk.Button(df, text="移动安装根目录…", command=move_install_root_dialog
+                   ).pack(anchor="w", pady=(8, 0))
+        ttk.Label(df, text="版本装在：<安装根>\\dsh-versions\\<槽>；"
+                           "临时文件在各槽的 .tmp 下",
+                  foreground=_MUTED).pack(anchor="w", pady=(8, 0))
+    else:
+        ttk.Button(df, text="选择安装位置…", command=_ask_install_root
+                   ).pack(anchor="w", pady=(8, 0))
+        ttk.Label(df, text="装第一个版本时也可以直接选",
+                  foreground=_MUTED).pack(anchor="w", pady=(8, 0))
+
+
 def settings_hub_dialog():
-    """「设置」总入口（2026-11-01 重构）。
+    """「设置」侧栏（2026-11-02 按用户要求重新组织）。
 
-    用户要求：**初始界面只包含「各个槽 + 日志 + 全部启动/全部停止」**，
-    其余动作一律收进设置。所以这里把原来散在主界面上的入口集中成一页：
+    设计目标：**清晰、简洁**。原来的问题：
+      · 顶部有"设置"大标题 + 一句引导语，占地方且没信息量
+      · 「已移出管理」是低频动作，不该占一级按钮
+      · 「目录」里有安装根 + 临时目录根两项，但用户只关心"装在哪"
+      · 日志管理塞在「关于」里，混杂
+      · 槽体检/生成 bat 属于维护动作，应与环境检查放一起
 
-      · 动作：安装官方版 / 扫描已装并纳入 / 卸载·移出 / 已移出管理 / 生成 bat
-      · 外观：界面显示哪些槽、顺序、主题（浅色 / 深色 / 跟随系统）
-      · 目录：安装根（含移动）、临时目录根、浏览器
-      · 关于：版本信息、使用说明、槽体检、检查运行环境、GitHub 收藏
-
-    这样主窗口只剩"看状态 + 起停"，一眼就懂。
+    现在的分组：
+      界面     显示哪些槽 / 顺序 / 浏览器、主题
+      目录     只有「安装根」（临时目录自动落在各槽 .tmp 下）
+      维护     检查运行环境 / 槽体检 / 生成 bat / 使用说明
+      日志     大小 + 清理（独立成组）
     """
     win = tk.Toplevel(root)
     _SETTINGS_WIN["win"] = win
@@ -6416,121 +6474,78 @@ def settings_hub_dialog():
     except Exception:
         pass
     win.title("设置")
-    # 2026-11-01：改成**非模态并排窗口**。
-    #   · 不再 transient / grab_set —— 否则主界面被禁用，看不到改动的实时效果
-    #   · 初始贴在主窗口右侧、同高；拖走可脱离，拖回附近自动吸附（见 _make_side_panel）
     win.resizable(True, True)
     _apply_icon(win)
     _make_side_panel(win, width=380)
 
-    # 2026-11-01：并排窗口高度跟主窗口一致（约 640px），内容可能超出。
-    # 用一个可竖向滚动的 host 承载全部区块，避免"关于"被截断。
     host = _scroll_host(win)
 
-    ttk.Label(host, text="设置", font=("Microsoft YaHei UI", 13, "bold")
-              ).pack(padx=22, pady=(18, 2), anchor="w")
-    ttk.Label(host, text="日常启停在主界面；这里放的是不常用但必要的操作。",
-              foreground=_MUTED).pack(padx=22, pady=(0, 12), anchor="w")
+    # ── 界面 ──────────────────────────────────────────────
+    look = ttk.LabelFrame(host, text="界面", padding=(12, 10))
+    look.pack(padx=16, pady=(14, 10), fill="x")
 
-    # ── 动作 ──────────────────────────────────────────────
-    act = ttk.LabelFrame(host, text="操作", padding=(12, 10))
-    act.pack(padx=22, fill="x", pady=(0, 10))
+    ttk.Button(look, text="显示哪些槽 / 顺序 / 浏览器…",
+               command=_settings_display_dialog).pack(fill="x", pady=(0, 8))
+
+    lrow = ttk.Frame(look)
+    lrow.pack(fill="x", pady=(2, 0))
+    ttk.Label(lrow, text="主题", width=8).pack(side="left")
+    _theme_var = tk.StringVar(value=_theme_mode())
+    for _val, _lbl in (("system", "跟随系统"), ("light", "浅色"), ("dark", "深色")):
+        ttk.Radiobutton(lrow, text=_lbl, value=_val, variable=_theme_var,
+                        command=lambda v=_val: _apply_theme_mode(v)
+                        ).pack(side="left", padx=(0, 10))
+
+    # ── 目录（只剩一个安装根）──────────────────────────────
+    try:
+        _dir_group_single(host)
+    except Exception as e:
+        log("[设置] 目录分组构建失败：%s" % e)
+
+    # ── 维护 ──────────────────────────────────────────────
+    mnt = ttk.LabelFrame(host, text="维护", padding=(12, 10))
+    mnt.pack(padx=16, fill="x", pady=(0, 10))
     for _c in range(2):
-        act.columnconfigure(_c, weight=1)
+        mnt.columnconfigure(_c, weight=1)
 
-    def _act_btn(r, c, text, cmd, style=None):
-        kw = {"command": cmd}
-        if style:
-            kw["style"] = style
-        b = ttk.Button(act, text=text, **kw)
-        b.grid(row=r, column=c, padx=4, pady=3, sticky="ew")
+    def _mbtn(r, c, text, cmd):
+        b = ttk.Button(mnt, text=text, command=cmd)
+        b.grid(row=r, column=c, padx=3, pady=3, sticky="ew")
         try:
             BUSY["btns"].append(b)
         except Exception:
             pass
         return b
 
-    _act_btn(0, 0, "安装官方版 dsh", install_official_version, "Brand.TButton")
-    _act_btn(0, 1, "扫描已装 dsh 并纳入",
-             lambda: scan_and_offer_adopt(manual=True))
-    _act_btn(1, 0, "卸载 / 移出…", uninstall_versions_dialog, "Red.TButton")
-    _act_btn(1, 1, "已移出管理…", detached_manager_dialog)
-    _act_btn(2, 0, "生成启动/kill/CLI bat", gen_bats)
-    _act_btn(2, 1, "槽体检", lambda: _run_health(deep=True, dialog=True))
+    _mbtn(0, 0, "检查运行环境", _show_env_report)
+    _mbtn(0, 1, "槽体检", lambda: _run_health(deep=True, dialog=True))
+    _mbtn(1, 0, "生成启动/kill/CLI bat", gen_bats)
+    _mbtn(1, 1, "使用说明", _open_user_guide)
 
-    # ── 外观 ──────────────────────────────────────────────
-    look = ttk.LabelFrame(host, text="外观", padding=(12, 10))
-    look.pack(padx=22, fill="x", pady=(0, 10))
-    lrow = ttk.Frame(look)
-    lrow.pack(fill="x")
-    ttk.Label(lrow, text="主题", width=10).pack(side="left")
-    _theme_var = tk.StringVar(value=_theme_mode())
-    _THEME_CHOICES = (("system", "跟随系统"), ("light", "浅色"), ("dark", "深色"))
-    for _val, _lbl in _THEME_CHOICES:
-        ttk.Radiobutton(lrow, text=_lbl, value=_val, variable=_theme_var,
-                        command=lambda v=_val: _apply_theme_mode(v)
-                        ).pack(side="left", padx=(0, 12))
-
-    # ── 目录 ──────────────────────────────────────────────
-    try:
-        _dir_group(host)
-    except Exception as e:
-        log("[设置] 目录分组构建失败：%s" % e)
-
-    # ── 显示与浏览器：那块逻辑较长，单独一页更清爽 ─────────
-    more = ttk.Frame(host)
-    more.pack(padx=22, fill="x", pady=(0, 10))
-    ttk.Button(more, text="显示哪些槽 / 顺序 / 浏览器…",
-               command=_settings_display_dialog).pack(side="left")
-
-    # ── 关于 ──────────────────────────────────────────────
-    ab = ttk.LabelFrame(host, text="关于", padding=(12, 10))
-    ab.pack(padx=22, fill="x", pady=(0, 12))
-    ttk.Label(ab, text="DSH 版本管理器（dsh-tm）%s · 槽上限 %d · 当前 %d 个槽"
-                       % (_app_version(), MAX_SLOTS, len(SLOT_KEYS)),
-              foreground=_MUTED).pack(anchor="w", pady=(0, 8))
-    arow = ttk.Frame(ab)
-    arow.pack(anchor="w")
-    ttk.Button(arow, text="使用说明", command=_open_user_guide).pack(side="left")
-    ttk.Button(arow, text="检查运行环境", command=_show_env_report
-               ).pack(side="left", padx=(8, 0))
-    ttk.Button(arow, text="★ 在 GitHub 收藏", command=_open_project_page
-               ).pack(side="left", padx=(8, 0))
-
-    # ── 日志管理（2026-11-02 用户要求：能看到大小、自己决定要不要清）──
-    ttk.Separator(ab, orient="horizontal").pack(fill="x", pady=(10, 8))
+    # ── 日志 ──────────────────────────────────────────────
+    lg = ttk.LabelFrame(host, text="日志", padding=(12, 10))
+    lg.pack(padx=16, fill="x", pady=(0, 14))
     _lsz, _llines = _log_stats()
-    _lrow = ttk.Frame(ab)
-    _lrow.pack(anchor="w", fill="x")
-    ttk.Label(_lrow, text="日志", foreground=_MUTED).pack(side="left")
-    _linfo = ttk.Label(_lrow,
-                       text="  %s（%d 行）" % (_fmt_size(_lsz), _llines),
-                       foreground=_INK)
-    _linfo.pack(side="left")
+    _linfo = ttk.Label(lg, text="%s（%d 行）" % (_fmt_size(_lsz), _llines),
+                       foreground=_MUTED)
+    _linfo.pack(anchor="w", pady=(0, 8))
 
     def _refresh_log_info():
         sz, ln = _log_stats()
         try:
-            _linfo.configure(text="  %s（%d 行）" % (_fmt_size(sz), ln))
+            _linfo.configure(text="%s（%d 行）" % (_fmt_size(sz), ln))
         except Exception:
             pass
 
-    _lbtn = ttk.Frame(ab)
-    _lbtn.pack(anchor="w", pady=(6, 0))
-    ttk.Button(_lbtn, text="打开日志文件夹", command=_open_log_folder).pack(side="left")
-    ttk.Button(_lbtn, text="清空日志…",
+    _lrow2 = ttk.Frame(lg)
+    _lrow2.pack(fill="x")
+    ttk.Button(_lrow2, text="打开文件夹", command=_open_log_folder
+               ).pack(side="left", expand=True, fill="x", padx=(0, 3))
+    ttk.Button(_lrow2, text="清空…",
                command=lambda: (_clear_logs_dialog(win), _refresh_log_info())
-               ).pack(side="left", padx=(8, 0))
+               ).pack(side="left", expand=True, fill="x", padx=(3, 0))
 
-    # ── 底部 ──────────────────────────────────────────────
-    # 关闭按钮放进滚动内容里（否则它会浮在上面盖住「关于」那一段）
-    btns = ttk.Frame(host)
-    btns.pack(padx=22, pady=(0, 20), fill="x")
-    ttk.Button(btns, text="关闭", command=win.destroy).pack(side="right")
     win.bind("<Escape>", lambda e: win.destroy())
-    # （非模态：不 grab_set，主界面仍可操作 —— 见上面说明）
-
-
 
 
 def settings_dialog():
