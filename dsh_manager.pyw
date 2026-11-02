@@ -2206,10 +2206,36 @@ title_lbls  = {}            # 各槽卡片（LabelFrame），刷新时更新 tex
 # ── 顶部标题 ───────────────────────────────────────────────
 _hdr = ttk.Frame(root)
 _hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 8))
-ttk.Label(_hdr, text="DSH 版本管理器", font=("Segoe UI", 18, "bold"),
-          foreground=_INK).pack(side="left")
-ttk.Label(_hdr, text="多版本隔离 · 独立进程 / 端口 / 数据",
-          font=("Segoe UI", 9), foreground=_MUTED).pack(side="left", padx=(10, 0))
+# 2026-11-02 用户要求：
+#   · 标题显示 **dsh-tm 及版本号**（原来只写"DSH 版本管理器"，没版本）
+#   · 「在 GitHub 收藏」放主界面（原来在设置里）
+#   · 修深色模式下标题看不清
+#     （原来 foreground 固定成创建时的 _INK=浅色值，切深色后不会变）
+# 这里不固定 foreground，改由 _refresh_header_style() 在主题应用后统一刷。
+_hdr_title = ttk.Label(_hdr, text="dsh-tm",
+                       font=("Segoe UI", 18, "bold"))
+_hdr_title.pack(side="left")
+_hdr_ver = ttk.Label(_hdr, text="", font=("Segoe UI", 10))
+_hdr_ver.pack(side="left", padx=(8, 0))
+_hdr_sub = ttk.Label(_hdr, text="多版本隔离 · 独立进程 / 端口 / 数据",
+                     font=("Segoe UI", 9))
+_hdr_sub.pack(side="left", padx=(10, 0))
+
+
+def _refresh_header_style():
+    """按当前主题刷标题栏三种文字的颜色（深色下必须可读）。"""
+    pal = _palette()
+    for w, key in ((_hdr_title, "ink"), (_hdr_ver, "muted"), (_hdr_sub, "muted")):
+        try:
+            w.configure(foreground=pal[key])
+        except Exception:
+            pass
+    try:
+        _hdr_ver.configure(text="v" + _app_version())
+    except Exception:
+        pass
+
+
 # 按钮放在函数定义之后创建（见下方），避免又出现"引用早于定义"的 NameError——
 # .pyw 无控制台，这种错误会表现为"双击没反应"，极难定位。
 
@@ -5730,6 +5756,11 @@ def _apply_palette():
                            selectbackground=_BRAND)
         # 2026-11-02：日志分级的颜色也要跟着主题走（深色下必须可读）
         _apply_log_tags()
+        # 标题栏的标题/版本号/副标题同理（深色下原来几乎是黑的，看不清）
+        try:
+            _refresh_header_style()
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -5819,7 +5850,7 @@ def _save_ui_field(key, value):
 #   · 距离小于阈值 → 吸附：设置窗贴到主窗口右侧，高度对齐主窗口。
 #   · 拖远 → 视为脱离，之后主窗口移动不再带动它。
 #   · 非模态（不用 grab_set），这样点主界面上的东西仍然有反应，"实时看到变化"才成立。
-_DOCK = {"threshold": 48, "attached": False, "job": None}
+_DOCK = {"threshold": 60, "attached": False, "job": None}
 
 
 def _win_outer_rect(win):
@@ -5876,11 +5907,12 @@ def _dock_settings_window(win):
             frame_h = 0
             frame_w = 0
         target_w = max(360, win.winfo_width())
-        win.geometry("%dx%d+%d+%d"
-                     % (target_w,
-                        max(200, mh - max(0, frame_h)),
-                        mx + mw + 8,
-                        my))
+        # 尺寸只在"还没定过"时设置一次；之后吸附一律只改位置，
+        # 否则反复 geometry 会与用户的拖动互相打架（实测把窗口拉变形）。
+        if not _DOCK.get("sized"):
+            win.geometry("%dx%d" % (target_w, max(200, mh - max(0, frame_h))))
+            _DOCK["sized"] = True
+        win.geometry("+%d+%d" % (mx + mw + 8, my))
         _DOCK["attached"] = True
     except Exception:
         pass
@@ -5895,9 +5927,12 @@ def _make_side_panel(win, width=380):
 
     返回一个 bind 好的处理器；调用方只需在创建完控件后调用一次。
     """
+    # 每次打开设置窗都重新定尺寸（用户可能关掉再开）。
+    _DOCK["sized"] = False
     try:
         mx, my, mw, mh = _main_rect()
         win.geometry("%dx%d+%d+%d" % (width, mh, mx + mw + 8, my))
+        _DOCK["sized"] = True
     except Exception:
         pass
 
@@ -5920,10 +5955,16 @@ def _make_side_panel(win, width=380):
     # 现在：前 _DOCK_GRACE 次 Configure 一律强制吸附（把它们当作初始化噪声），
     # 之后才按真实拖动位置判断。
     _grace = {"n": 0}
-    _DOCK_GRACE = 6
+    _DOCK_GRACE = 3
 
     def _check_dock(w):
-        """拖动停下来后判断：靠得够近就吸回去。"""
+        """拖动停下后判断：靠得够近就吸过去（四边都算）。
+
+        2026-11-02 用户反馈「靠近时没有磁铁吸住的感觉」。原实现只判断
+        **与主窗口右边缘**的水平距离，而且要求垂直也接近 —— 从左侧或下方
+        拖过来时永远不会触发。
+        改成：分别算 设置窗四边 与 对应主窗边 的距离，任一边进入阈值就吸附到那一侧。
+        """
         _DOCK["job"] = None
         try:
             if not w.winfo_exists():
@@ -5932,14 +5973,38 @@ def _make_side_panel(win, width=380):
             if _grace["n"] <= _DOCK_GRACE:
                 _dock_settings_window(w)
                 return
-            mx, my, mw, mh = _main_rect()
-            wx, wy = w.winfo_rootx(), w.winfo_rooty()
-            gap = abs(wx - (mx + mw))
-            vgap = abs(wy - my)
-            if gap <= _DOCK["threshold"] and vgap <= _DOCK["threshold"] * 3:
-                _dock_settings_window(w)
-            else:
+            mr = _main_rect()
+            wr = _win_outer_rect(w)
+            if not mr or not wr:
+                return
+            mx, my, mw, mh = mr
+            wl, wt, wr_r, wb = wr
+            th = _DOCK["threshold"]
+            # 四个候选：吸到主窗 右侧 / 左侧 / 下方 / 上方
+            d_right = abs(wl - (mx + mw))      # 设置窗左边 ↔ 主窗右边
+            d_left = abs(wr_r - mx)            # 设置窗右边 ↔ 主窗左边
+            d_below = abs(wt - (my + mh))      # 设置窗上边 ↔ 主窗下边
+            d_above = abs(wb - my)             # 设置窗下边 ↔ 主窗上边
+
+            best = min(d_right, d_left, d_below, d_above)
+            if best > th:
                 _DOCK["attached"] = False
+                return
+
+            # 2026-11-02 修严重 bug：原来吸附时用 geometry("W x H + x + y") 一起改
+            # 宽高，而 w.winfo_height() 在窗口还没 settle 时可能是错的，
+            # 结果把设置窗拉成 854x1079（超出屏幕、被甩到屏幕外）。
+            # 现在：**吸附只改位置，绝不动尺寸**；尺寸只在打开时设一次。
+            cw_ = max(360, w.winfo_width())
+            ch_ = max(200, w.winfo_height())
+
+            if best == d_right or best == d_left:
+                x = (mx + mw + 8) if best == d_right else (mx - cw_ - 8)
+                w.geometry("+%d+%d" % (x, my))
+            else:
+                y = (my + mh + 8) if best == d_below else (my - ch_ - 8)
+                w.geometry("+%d+%d" % (wl, y))
+            _DOCK["attached"] = True
         except Exception:
             pass
 
@@ -6796,6 +6861,9 @@ def _settings_display_dialog():
 # 2026-11-01：标题栏只留「设置」一个入口。
 # 「关于」「★ 在 GitHub 收藏」都收进设置页（用户要求：初始界面只有槽 + 日志 + 全启停）。
 ttk.Button(_hdr, text="设置", command=settings_dialog).pack(side="right", padx=(0, 6))
+# 「★ 在 GitHub 收藏」：2026-11-02 从设置里移到主界面（用户要求）
+ttk.Button(_hdr, text="★ 收藏", command=_open_project_page).pack(
+    side="right", padx=(0, 6))
 # 两个全启停按钮：放在「设置」左侧（pack side=right 时后 pack 的在更左边）
 _b_stopall = ttk.Button(_hdr, text="全部停止", style="Red.TButton",
                         command=stop_all_slots)
