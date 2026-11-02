@@ -3899,9 +3899,54 @@ def scan_and_offer_adopt(manual=False):
         # 用户刚移出一个版本、下次启动就被当成"新发现了未纳入的 dsh"弹窗追问，
         # 而真正想接回来时又只能用「已移出管理」列表 —— 自相矛盾（用户实测踩到）。
         # 手动点「扫描已装 dsh 并纳入」时才用 include_detached=False（全量重扫）。
+        # 2026-11-02 用户反馈：「点击扫描并纳入怎么没有找到 C 盘里的 dsh 版本」。
+        # 实际原因是那个安装已经被「移出管理」，按原设计会被当成"已知"排除，
+        # 于是手动扫描也看不到 —— 用户无法理解"文件明明在，为什么扫不到"。
+        # 现在：**手动扫描**把已移出的也列进来（它们本来就是可纳入的），
+        # 这样用户点一下就能看到全部未在管的安装。
         found = dsh_adopt.detect_existing_installs(
             [_probe_npm_global()] if _probe_npm_global() else [],
-            _versions_root(), _managed_roots(include_detached=not manual))
+            _versions_root(),
+            _managed_roots(include_detached=not manual))
+
+        if manual:
+            # 把「已移出管理」的记录补进候选（它们仍在磁盘上、可原样接回）
+            try:
+                _det_roots = {os.path.normcase(os.path.abspath(r["root"]))
+                              for r in _detached_records() if r.get("root")}
+                for r in _detached_records():
+                    _rt = r.get("root") or ""
+                    if not _rt or not os.path.isdir(_rt):
+                        continue
+                    _dsh = os.path.join(_rt, "node_modules", "@deepseek-ai", "dsh")
+                    if not os.path.isdir(_dsh):
+                        continue
+                    _nm = os.path.join(_rt, "node_modules")
+                    # 已在 found 里就不重复加
+                    _dup = False
+                    for b in found:
+                        for loc in (b.get("locations") or []):
+                            if os.path.normcase(os.path.abspath(
+                                    loc.get("node_modules") or "")) == os.path.normcase(_nm):
+                                _dup = True
+                                break
+                        if _dup:
+                            break
+                    if _dup:
+                        continue
+                    try:
+                        import dsh_adopt as _A
+                        _ver = _A.read_package_version(_dsh) or ""
+                    except Exception:
+                        _ver = r.get("version") or ""
+                    found.append({
+                        "version": _ver,
+                        "locations": [{"kind": "versions-dir",
+                                       "path": _dsh,
+                                       "node_modules": _nm}],
+                    })
+            except Exception as _e:
+                log("[检测] 合并已移出记录时出错（忽略）：%s" % _e)
     except Exception as e:
         log("[检测] 扫描已装版本失败（不影响使用）：%s" % e)
         return
@@ -3929,17 +3974,24 @@ def scan_and_offer_adopt(manual=False):
                          % (len(_det),
                             "、".join((r.get("label") or r.get("root") or "?")
                                       for r in _det)))
+            # 2026-11-02 用户反馈：「弹出了一些窗口，还有移出管理，不知道你怎么设计的」。
+            # 原来的流程是：弹「没有可纳入的」→ 再弹「要打开已移出管理吗」→
+            # 确认后打开「卸载/移出」窗 —— 三层弹窗，且打开的那个窗跟"纳入"没关系。
+            # 改成：**只弹一个**说明框，把话一次说清，不再连环追问。
+            if _det:
+                _more = ("\n\n不过，你有 %d 个版本处于「已移出管理」状态"
+                         "（%s）。\n它们不在纳入扫描范围内 —— 要接回来，"
+                         "请到「设置 → 维护」里的卸载/移出窗口。"
+                         % (len(_det),
+                            "、".join((r.get("label") or r.get("root") or "?")
+                                      for r in _det)))
+            else:
+                _more = ""
             messagebox.showinfo(
                 "没有可纳入的 dsh",
                 "没扫到管理范围外的 dsh。\n\n"
-                "如果之前把某个安装「跳过」过，这次点按钮已经重新扫过一遍了 ——"
-                "能扫到的都列在列表里；一个都没有，说明本机确实没有未纳入的安装。"
-                + _hint)
-            # 光说不练最烦人：有已移出的就别让用户自己去翻菜单，直接问一句。
-            if _det and messagebox.askyesno(
-                    "要打开「已移出管理」列表吗？",
-                    "那里能把这些版本原样接回来（磁盘不动、端口沿用）。\n\n现在打开吗？"):
-                uninstall_versions_dialog()
+                "已经在你槽位里的版本、以及「已移出管理」的版本都不会出现在这里。"
+                + _more)
         return
 
     log("[检测] 发现 %d 个管理范围外的版本：%s"
@@ -5462,12 +5514,12 @@ def _ask_install_root():
             b = os.path.normpath(b)
         except Exception:
             pass
+        # 2026-11-02：临时文件改为各槽自己的 .tmp，不再有集中目录
         prev.config(text="版本装进：%s\n"
                          "卸载备份：%s\n"
-                         "临时文件：%s"
+                         "临时文件：各槽目录下的 .tmp"
                          % (os.path.join(b, "dsh-versions"),
-                            os.path.join(b, "dsh备份"),
-                            os.path.join(b, "dsh-versions", "dsh-temp")))
+                            os.path.join(b, "dsh备份")))
 
     pv.trace_add("write", _refresh)
     _refresh()
@@ -6163,13 +6215,40 @@ def _dock_animate(win, target_x, target_y, steps=8, bounce=1):
 
 
 def _do_follow(win):
-    """把侧栏重新贴到主窗口右侧（仅吸附状态下由 _on_main_moved 调用）。"""
+    """把侧栏重新贴到主窗口右侧，并把高度对齐（仅吸附状态下调用）。
+
+    2026-11-02 用户要求：「移动主界面位置时设置界面跟着动；
+    上下拉长或缩短主界面高度时，设置界面最好也能一起动」。
+    所以这里同时处理**位置**与**高度**：
+      · 位置：按当前吸附边（左/右）重新计算
+      · 高度：用"外框高 - 客户区高"反推，保证外框等高
+    """
     _DOCK["follow_job"] = None
     try:
         if not win.winfo_exists() or not _DOCK.get("attached"):
             return
         mx, my, mw, mh = _main_rect()
-        win.geometry("+%d+%d" % (mx + mw, my))
+        wr = _win_outer_rect(win)
+        cw_ = max(360, wr[2] - wr[0])
+        frame_h = (wr[3] - wr[1]) - win.winfo_height()
+        target_ch = max(200, mh - max(0, frame_h))
+
+        side = _DOCK.get("side") or "right"
+        if side == "left":
+            x = mx - cw_ + _DOCK_OVERLAP
+        elif side in ("top", "bottom"):
+            x = wr[0]
+        else:
+            x = mx + mw - _DOCK_OVERLAP
+
+        # 位置 + 高度一次给全，避免只改位置导致的尺寸抖动
+        if side == "top":
+            y = my - (target_ch + max(0, frame_h)) + _DOCK_OVERLAP
+        elif side == "bottom":
+            y = my + mh - _DOCK_OVERLAP
+        else:
+            y = my
+        win.geometry("%dx%d+%d+%d" % (cw_, target_ch, x, y))
     except Exception:
         pass
 
@@ -6598,8 +6677,31 @@ def _dir_group_single(parent):
     row = ttk.Frame(df)
     row.pack(fill="x")
     ttk.Label(row, text="安装根", width=8).pack(side="left")
-    ttk.Label(row, text=os.path.normpath(INSTALL_BASE),
-              foreground=_MUTED).pack(side="left", fill="x", expand=True)
+    # 2026-11-02 修 bug（用户实测：选了新位置后根目录没变化）：
+    # 这里原来是固定文本，选完新位置后**不会刷新**，看起来像没生效。
+    # 改成 StringVar，选择/移动后立刻更新。
+    _path_var = tk.StringVar(value=os.path.normpath(INSTALL_BASE))
+    ttk.Label(row, textvariable=_path_var, foreground=_MUTED
+              ).pack(side="left", fill="x", expand=True)
+
+    def _choose():
+        before = INSTALL_BASE
+        if _ask_install_root():
+            # 保存成功后，模块级 INSTALL_BASE 已被更新，这里同步刷新显示
+            try:
+                _path_var.set(os.path.normpath(INSTALL_BASE))
+            except Exception:
+                pass
+            log("[设置] 安装根目录已改为：%s（原：%s）" % (INSTALL_BASE, before))
+            try:
+                messagebox.showinfo(
+                    "安装位置已更新",
+                    "新的安装根目录：\n%s\n\n"
+                    "之后安装/纳入的版本会放这里。\n"
+                    "（已经装好的版本不受影响；如需整体搬家，用「移动安装根目录…」）"
+                    % os.path.normpath(INSTALL_BASE))
+            except Exception:
+                pass
 
     if locked:
         ttk.Button(df, text="移动安装根目录…", command=move_install_root_dialog
@@ -6608,7 +6710,7 @@ def _dir_group_single(parent):
                            "临时文件在各槽的 .tmp 下",
                   foreground=_MUTED).pack(anchor="w", pady=(8, 0))
     else:
-        ttk.Button(df, text="选择安装位置…", command=_ask_install_root
+        ttk.Button(df, text="选择安装位置…", command=_choose
                    ).pack(anchor="w", pady=(8, 0))
 
 

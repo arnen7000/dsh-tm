@@ -362,7 +362,9 @@ LOCAL_OK = {"win", "root", "self", "dlg", "e", "evt", "on_ok",
             # 卸载/移出对话框里的两个动作回调（2026-10-31），同类。
             "on_detach", "on_readd",
             # 2026-11-02：设置页的按钮工厂 _mbtn/_act_btn 用形参 cmd 传回调
-            "cmd"}
+            "cmd",
+            # 设置页「选择安装位置…」的嵌套回调
+            "_choose"}
 for m in re.finditer(r"command\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)", src):
     name = m.group(1)
     if name in LOCAL_OK:
@@ -1152,9 +1154,11 @@ chk("C3z17p 扫不到时明确指路「卸载 / 移出…」窗口下半部分�
     "已移出管理" in _adopt_seg and "重新纳入勾选的" in _adopt_seg)
 chk("C3z17q 有 detached 记录才提这条提示（没记录时不多话）",
     "_det = _detached_records()" in _adopt_seg and "if _det:" in _adopt_seg)
-chk("C3z17s 光说不练不算：扫不到且有已移出记录时，直接问要不要打开那个列表",
-    "uninstall_versions_dialog()" in _adopt_seg
-    and "要打开「已移出管理」列表吗？" in _adopt_seg)
+chk("C3z17s 扫不到时只弹一个说明框，不再连环追问",
+    # 2026-11-02 用户反馈「弹出了一些窗口，还有移出管理，不知道你怎么设计的」。
+    # 原流程：弹「没有可纳入的」→ 再问「要打开已移出管理吗」→ 打开「卸载/移出」窗。
+    # 已改为：只弹一个说明框，把"已移出的去哪找"写在同一段文字里。
+    "要打开「已移出管理」列表吗？" not in _adopt_seg)
 chk("C3z17r detached 记录里的 root 写成反斜杠（<base> 烘开后与其余部分是混写的）",
     "rec_root = os.path.normpath(root) if root else \"\"" in _uops)
 

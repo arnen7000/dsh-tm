@@ -285,14 +285,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -Targe
 
 浏览器也在同一个窗口里改（「选中的槽用哪个浏览器打开」）：下拉选 系统默认 / Chrome / Edge / Firefox / 选择其他程序…。**没装的会标注「（未安装）」**，选它也不报错，会兜底到系统默认。新装的槽默认就是系统默认浏览器。
 
-### 4.10 自定义位置（安装根 / 临时目录根）
+### 4.10 自定义位置（安装根）
 
 标题栏 **「设置 → 目录」** 有两行：
 
 | 项 | 能不能改 | 说明 |
 |---|---|---|
 | **安装根目录** | **只在还没有任何槽时可改**，装第一个版本/纳入时锁定 | 换位置等于搬家：备份目录、临时目录、空壳扫描、新槽落点全都跟着变。所以定在第一次，代价最小。改完**要重启管理器**才生效 |
-| **临时目录根** | 随时可改 | 保存时自动：建目录 → 改各槽 `temp_dir` → **重写三件 bat**。立即生效 |
 
 **两者不能一次同时改**：那会算出"基于新安装根、但槽还没搬过去"的临时目录，等于把 TEMP 指到一片空地。要换两处请分两步，先改安装根并保存，再回来改临时目录。
 
@@ -304,7 +303,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -Targe
    搬家时**不跟随 junction / 符号链接**；目标已有同名目录一律中止。
 2. 把槽全部「移出管理」（或卸载），锁自动解开 —— 因为锁定条件就是"有没有在管的槽"。
 
-**临时目录的落点规则**：`<临时目录根>\<槽目录名>`，缺省 `<槽根>\dsh-temp` —— 也就是**临时文件跟着安装根走**，换盘一起搬。
+**临时文件的落点**：新装/新纳入的槽固定放在 `<槽目录>\.tmp`（2026-11-02 起）。
+所以目录设置里**只需要一个安装根**，不必再管临时目录。已装的旧槽保持原路径不动。
 
 > 想省 C 盘，要改的是**安装根**而不是临时目录：真正占盘的是槽本身（`node_modules`，每槽 0.7–1.3 GB），临时目录通常只有几百 KB 到几 MB。
 
@@ -316,7 +316,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -Targe
 | 条目 | 谁建的 | 说明 |
 |---|---|---|
 | `dshV1`…`dshV6` | dsh-tm | 版本槽本体，搬移/卸载都由管理器负责 |
-| `dsh-temp\` | dsh-tm | 各槽的临时目录（TEMP 落点） |
+| `<槽>\.tmp\` | dsh-tm | 该槽的临时目录（TEMP 落点） |
 | `.plugin-install-backup-<时间>-<来源>` | **dsh 自己**（桌面版装插件时） | 插件安装前的 profile 备份；dsh-tm 不读也不删 |
 
 > 那个 `.plugin-install-backup-*` 是 **dsh 的行为**，不是本管理器的。它和槽并列在
@@ -466,14 +466,14 @@ dsh 官方文档站（`deepseek-harness.github.io`）在国内可能打不开，
 ```json
 {
   "install_base": "<home>",
-  "temp_root": "<base>/dsh-versions/dsh-temp",
+  // temp_root 已废弃：临时文件固定放在各槽的 .tmp 下
   "versions": {
     "v1": {
       "label": "dshV1",
       "node_exe": "<base>/dsh-versions/dshV1/node/node.exe",
       "bin_js":   "<base>/dsh-versions/dshV1/node_modules/@deepseek-ai/dsh/lib/bin.js",
       "dsh_home": "<base>/dsh-versions/dshV1/.dsh-home",
-      "temp_dir": "<base>/dsh-versions/dsh-temp/dshV1",
+      "temp_dir": "<base>/dsh-versions/dshV1/.tmp",
       "port": 4080,
       "browser": "default",
       "extra_args": ["web", "--host", "127.0.0.1", "--port", "4080", "--no-open"]
@@ -487,7 +487,7 @@ dsh 官方文档站（`deepseek-harness.github.io`）在国内可能打不开，
 | 字段 | 层 | 说明 |
 |---|---|---|
 | `install_base` | 顶层 | 安装根目录。**有槽之后锁定** |
-| `temp_root` | 顶层 | 临时目录根，缺省 `<槽根>/dsh-temp` |
+| `temp_root` | 顶层 | **已废弃**，保留仅为兼容旧配置。临时文件固定在各槽 `.tmp` |
 | `icon` | 顶层 | 窗口/快捷方式图标，相对管理器目录 |
 | `versions` | 顶层 | 槽字典，键 `v1`…`v6`，最多 6 个（`MAX_SLOTS`） |
 | `ui` | 顶层，可选 | `max_visible` / `order` / `visible`。管理器「设置」会写它，手写也行。**只影响渲染**，隐藏 ≠ 卸载 |
