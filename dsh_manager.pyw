@@ -7222,7 +7222,17 @@ root.after(1200, lambda: _run_health(deep=False))
 # 只读 config，没有缺失就什么都不写。
 if not FRESH_START:
     try:
-        _missing = [k for k in SLOT_KEYS if k not in set(_display_keys())]
+        # 2026-11-03 修自愈失效：
+        # 原来用 `_display_keys()` 判断"哪些槽没显示" —— 但那个函数**本身就是
+        # 按 ui.visible 过滤后的结果**，拿它比等于用过滤结果检验过滤本身，
+        # 永远查不出缺失（实测：v1 在 versions 里、不在 visible 里，自愈没触发）。
+        # 改为直接读 config 的 ui.visible 原始值来比。
+        _ui_raw = (CFG.get("ui") or {}) if isinstance(CFG.get("ui"), dict) else {}
+        _vis_raw = _ui_raw.get("visible")
+        if isinstance(_vis_raw, list):
+            _missing = [k for k in SLOT_KEYS if k not in set(_vis_raw)]
+        else:
+            _missing = []          # 没有 visible 键 = 全显示，无需补
         if _missing:
             _err = _ensure_slots_visible(_missing)
             if not _err:
