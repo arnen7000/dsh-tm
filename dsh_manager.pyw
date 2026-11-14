@@ -2414,8 +2414,11 @@ def _show_env_report():
         os.makedirs(os.path.dirname(tmp), exist_ok=True)
         import subprocess as _sp
         with open(tmp, "wb") as out:
+            # check-env.py 是独立进程，把当前语言传过去，否则它只会输出中文
+            _env = dict(os.environ)
+            _env["DSH_LANG"] = I18N.lang()
             rc = _sp.run([sys.executable, script], stdout=out,
-                         stderr=_sp.STDOUT,
+                         stderr=_sp.STDOUT, env=_env,
                          creationflags=CREATE_NO_WINDOW).returncode
         raw = open(tmp, "rb").read().decode("utf-8", "replace")
     except Exception as e:
