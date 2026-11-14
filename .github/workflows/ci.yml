@@ -27,14 +27,16 @@ jobs:
       # 否则所有内容挤在一个 step 的长日志里，网页和 API 都很难定位到底哪项挂了
       # （2026-11-14：CI 连红 20 次，就是卡在"看不到是哪个检查失败"）。
       #
-      # 两个 PowerShell 陷阱（第一次改就踩了）：
-      #   · `Write-Host` 的输出**不进管道**，`./script.ps1 | Tee-Object` 抓不到它
+      # 两个 PowerShell 陷阱（前两次改都踩了）：
+      #   · `Write-Host` 的输出**不进管道**，`./script.ps1 | Tee-Object` 抓不到
       #   · 管道里的脚本 `exit N` **不影响调用方的 `$LASTEXITCODE`**
-      # 所以必须先 `$out = & ./script 2>&1` 捕获，再自己输出。
+      #   · `Write-Host` 写的是 **Information stream（6）**，`2>&1` 只重定向
+      #     Error stream，必须用 `*>&1` 才能一起收进来
+      # 所以：先 `$out = & ./script *>&1` 捕获全部流，再自己输出和判断。
       - name: 发布前总检
         shell: pwsh
         run: |
-          $out = & ./scripts/check-all.ps1 2>&1
+          $out = & ./scripts/check-all.ps1 *>&1
           $code = $LASTEXITCODE
           $out | ForEach-Object { Write-Host "$_" }
           $bad = @($out | ForEach-Object { "$_" } | Where-Object { $_ -match '^\s*x\s' })
