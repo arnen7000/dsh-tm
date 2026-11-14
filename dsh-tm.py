@@ -37,6 +37,7 @@ import re
 import subprocess
 import sys
 import time
+from dsh_i18n import T
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
@@ -73,15 +74,15 @@ def _probe_npm_global():
 def load_config(path=CONFIG_PATH):
     """读 config.json。返回 (cfg, err)；失败时 cfg 为 None。"""
     if not os.path.exists(path):
-        return None, "找不到配置文件：%s" % path
+        return None, T("找不到配置文件：%s") % path
     try:
         # 必须无 BOM：有 BOM 时 json.load 直接抛异常（项目文档里的硬规矩）
         with open(path, "r", encoding="utf-8-sig") as f:
             cfg = json.load(f)
     except Exception as e:
-        return None, "config.json 解析失败：%s" % e
+        return None, T("config.json 解析失败：%s") % e
     if not isinstance(cfg, dict):
-        return None, "config.json 顶层必须是对象"
+        return None, T("config.json 顶层必须是对象")
     return cfg, ""
 
 
@@ -136,18 +137,18 @@ def _cfg_or_die(path=CONFIG_PATH):
         try:
             import shutil
             shutil.copyfile(EXAMPLE_PATH, path)
-            sys.stderr.write("[提示] 未找到 config.json，已从 config/config.example.json "
-                             "生成默认配置。\n")
+            sys.stderr.write(T("[提示] 未找到 config.json，已从 config/config.example.json "
+                             "生成默认配置。\n"))
         except Exception as e:
-            sys.stderr.write("[警告] 自动生成 config.json 失败：%s\n" % e)
+            sys.stderr.write(T("[警告] 自动生成 config.json 失败：%s\n") % e)
     cfg, err = load_config(path)
     if cfg is None:
-        sys.stderr.write("[错误] %s\n" % err)
+        sys.stderr.write(T("[错误] %s\n") % err)
         sys.exit(EXIT_CONFIG)
     if not isinstance(cfg.get("versions"), dict):
         cfg["versions"] = {}
     if len(cfg["versions"]) > MAX_SLOTS:
-        sys.stderr.write("[错误] versions 超过 %d 个槽上限\n" % MAX_SLOTS)
+        sys.stderr.write(T("[错误] versions 超过 %d 个槽上限\n") % MAX_SLOTS)
         sys.exit(EXIT_CONFIG)
     return cfg
 
@@ -211,15 +212,15 @@ def _spawn(ctx, key):
     """后台启动一个槽。返回 (ok, 说明)。"""
     c = ctx.slot(key)
     if c is None:
-        return False, "没有这个槽：%s" % key
+        return False, T("没有这个槽：%s") % key
     if _is_running(ctx, key):
-        return True, "已在运行（端口 %s）" % c.get("port")
+        return True, T("已在运行（端口 %s）") % c.get("port")
     bin_js = c.get("bin_js")
     if not bin_js or not os.path.exists(bin_js):
-        return False, "bin.js 不存在：%s" % bin_js
+        return False, T("bin.js 不存在：%s") % bin_js
     node = c.get("node_exe")
     if node and not os.path.exists(node):
-        return False, "node.exe 不存在：%s" % node
+        return False, T("node.exe 不存在：%s") % node
     cmd = _build_start_cmd(ctx, key)
     # 真正启动前才建 TEMP（见 _slot_env 的说明：算环境变量不该有副作用）
     _td = c.get("temp_dir")
@@ -238,22 +239,22 @@ def _spawn(ctx, key):
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          stdin=subprocess.DEVNULL, creationflags=flags)
     except Exception as e:
-        return False, "启动失败：%s" % e
-    return True, "已发出启动指令（端口 %s）" % c.get("port")
+        return False, T("启动失败：%s") % e
+    return True, T("已发出启动指令（端口 %s）") % c.get("port")
 
 
 def _stop(ctx, key):
     """走 dsh_kill 的签名门控停止（与 GUI「停止」同一条路，不误杀别的 node）。"""
     c = ctx.slot(key)
     if c is None:
-        return False, "没有这个槽：%s" % key
+        return False, T("没有这个槽：%s") % key
     if not _is_running(ctx, key):
-        return True, "本来就没在运行"
+        return True, T("本来就没在运行")
     try:
         sys.path.insert(0, BASE_DIR)
         import dsh_kill
     except Exception as e:
-        return False, "无法加载 dsh_kill：%s" % e
+        return False, T("无法加载 dsh_kill：%s") % e
     # dsh_kill 的 LOG 默认是 print：GUI 里那叫"日志区"，CLI 里就只是噪音。
     # 静音后由本模块自己输出一行结论；--verbose 时才恢复详细过程。
     if not _VERBOSE.get("on"):
@@ -265,13 +266,13 @@ def _stop(ctx, key):
         try:
             res = dsh_kill.kill_version(_make_sig(c), c.get("port"))
         except Exception as e:
-            return False, "停止失败：%s" % e
+            return False, T("停止失败：%s") % e
     except Exception as e:
-        return False, "停止失败：%s" % e
+        return False, T("停止失败：%s") % e
     time.sleep(0.6)
     if _is_running(ctx, key):
-        return False, "已发出停止指令，但端口 %s 仍被占用" % c.get("port")
-    return True, "已停止"
+        return False, T("已发出停止指令，但端口 %s 仍被占用") % c.get("port")
+    return True, T("已停止")
 
 
 def _make_sig(cfg):
@@ -314,18 +315,18 @@ def _entry_url(ctx, key):
 # ─────────────────────────── 子命令 ───────────────────────────
 def cmd_list(ctx, args):
     if not ctx.keys:
-        print("当前没有管理任何版本槽（config.json 的 versions 为空）。")
+        print(T("当前没有管理任何版本槽（config.json 的 versions 为空）。"))
         return EXIT_OK
     width = max([len(k) for k in ctx.keys] + [4])
-    print("%-*s  %-10s  %-6s  %-10s  %s" % (width, "槽", "标签", "端口", "状态", "版本"))
+    print("%-*s  %-10s  %-6s  %-10s  %s" % (width, T("槽"), T("标签"), T("端口"), T("状态"), T("版本")))
     print("-" * 78)
     for k in ctx.keys:
         c = ctx.slot(k)
         running = _is_running(ctx, k)
-        ver = _installed_version(c) or "未知"
+        ver = _installed_version(c) or T("未知")
         print("%-*s  %-10s  %-6s  %-10s  %s" % (
             width, k, c.get("label") or k, c.get("port"),
-            "运行中" if running else "已停止", ver))
+            T("运行中") if running else T("已停止"), ver))
     return EXIT_OK
 
 
@@ -360,7 +361,7 @@ def cmd_start(ctx, args):
         # 等端口真正开始监听再回报。dsh 从 spawn 到 listen 实测要 5~8 秒
         # （0.2.x 要加载插件树），固定 sleep 1.5s 会把"已启动"误报成"已停止"。
         _wait_until_listening(ctx, keys, timeout=float(getattr(args, "wait", 20)))
-        print("\n实际状态：")
+        print(T("\n实际状态："))
         rc |= cmd_list(ctx, args)
     return rc
 
@@ -375,7 +376,7 @@ def _wait_until_listening(ctx, keys, timeout=20.0, step=0.4):
             break
         time.sleep(step)
     for k in pending:
-        print("%-6s WARN  等了 %.0f 秒仍未监听（dsh 可能仍在加载插件，稍后自行确认）"
+        print(T("%-6s WARN  等了 %.0f 秒仍未监听（dsh 可能仍在加载插件，稍后自行确认）")
               % (k, timeout))
     return pending
 
@@ -396,7 +397,7 @@ def cmd_stop(ctx, args):
 def cmd_status(ctx, args):
     if args.slot:
         for k in _target_keys(ctx, args):
-            print("%s: %s" % (k, "运行中" if _is_running(ctx, k) else "已停止"))
+            print("%s: %s" % (k, T("运行中") if _is_running(ctx, k) else T("已停止")))
         return EXIT_OK
     return cmd_list(ctx, args)
 
@@ -414,10 +415,10 @@ def cmd_url(ctx, args):
             found += 1
             print(u or bare)
             if not u:
-                print("  （仅入口地址；带 token 的完整 URL 请在管理器点「复制入口 URL」）",
+                print(T("  （仅入口地址；带 token 的完整 URL 请在管理器点「复制入口 URL」）"),
                       file=sys.stderr)
         else:
-            print("%s  找不到入口地址（槽配置里没有 port）" % k)
+            print(T("%s  找不到入口地址（槽配置里没有 port）") % k)
     return EXIT_OK if found == len(keys) else EXIT_FAIL
 
 
@@ -426,7 +427,7 @@ def cmd_health(ctx, args):
         sys.path.insert(0, BASE_DIR)
         import dsh_health
     except Exception as e:
-        sys.stderr.write("[错误] 无法加载 dsh_health：%s\n" % e)
+        sys.stderr.write(T("[错误] 无法加载 dsh_health：%s\n") % e)
         return EXIT_FAIL
     keys = _target_keys(ctx, args)
     bad = 0
@@ -438,14 +439,14 @@ def cmd_health(ctx, args):
                 k, c, base=ctx.install_base, home=HOME, self_dir=BASE_DIR,
                 deep=bool(getattr(args, "deep", False)))
         except Exception as e:
-            print("  体检失败：%s" % e)
+            print(T("  体检失败：%s") % e)
             bad += 1
             continue
         if not items:
             # 浅查干净时 items 是空的。只打标题、下面一片空白会让人以为命令没跑，
             # 所以明确说一句「没发现问题」，并提示深查开关。
-            print("  未发现问题%s" % ("" if getattr(args, "deep", False)
-                                      else "（浅查；加 --deep 做依赖深查）"))
+            print(T("  未发现问题%s") % ("" if getattr(args, "deep", False)
+                                      else T("（浅查；加 --deep 做依赖深查）")))
         for lv, title, detail in items:
             print("  [%s] %s：%s" % (lv, title, detail))
             if lv == "错误":
@@ -469,7 +470,7 @@ def cmd_kill_stray(ctx, args):
         sys.path.insert(0, BASE_DIR)
         import dsh_kill
     except Exception as e:
-        sys.stderr.write("[错误] 无法加载 dsh_kill：%s\n" % e)
+        sys.stderr.write(T("[错误] 无法加载 dsh_kill：%s\n") % e)
         return EXIT_FAIL
     if not _VERBOSE.get("on"):
         dsh_kill.LOG = lambda *_a, **_k: None
@@ -479,18 +480,18 @@ def cmd_kill_stray(ctx, args):
         versions[k] = {"sig": _make_sig(c), "port": c.get("port")}
     sig_any = "@deepseek-ai/dsh"
     if not getattr(args, "yes", False):
-        print("将清理：本管理器管的 %d 个槽 + 所有命令行含 %s 的 node 进程。"
+        print(T("将清理：本管理器管的 %d 个槽 + 所有命令行含 %s 的 node 进程。")
               % (len(versions), sig_any))
-        print("（只杀 dsh，不碰其它软件的 node 进程）")
-        print("确认执行请加 --yes")
+        print(T("（只杀 dsh，不碰其它软件的 node 进程）"))
+        print(T("确认执行请加 --yes"))
         return EXIT_OK
     try:
         dsh_kill.kill_all(versions, sig_any=sig_any)
     except Exception as e:
-        sys.stderr.write("[错误] 清理失败：%s\n" % e)
+        sys.stderr.write(T("[错误] 清理失败：%s\n") % e)
         return EXIT_FAIL
     time.sleep(0.8)
-    print("已清理。当前状态：")
+    print(T("已清理。当前状态："))
     return cmd_list(ctx, args)
 
 
@@ -498,17 +499,17 @@ def _target_keys(ctx, args):
     """决定要操作哪些槽：--all / 指定槽名 / 缺省报错。"""
     if getattr(args, "all", False):
         if not ctx.keys:
-            sys.stderr.write("[错误] 当前没有任何槽\n")
+            sys.stderr.write(T("[错误] 当前没有任何槽\n"))
             return []
         return list(ctx.keys)
     if not args.slot:
-        sys.stderr.write("[错误] 请指定槽名（或用 --all）\n")
-        sys.stderr.write("可用槽：%s\n" % ("、".join(ctx.keys) or "（无）"))
+        sys.stderr.write(T("[错误] 请指定槽名（或用 --all）\n"))
+        sys.stderr.write(T("可用槽：%s\n") % ("、".join(ctx.keys) or T("（无）")))
         return []
     keys = [s for s in args.slot if s in ctx.versions]
     for s in args.slot:
         if s not in ctx.versions:
-            sys.stderr.write("[错误] 没有这个槽：%s\n" % s)
+            sys.stderr.write(T("[错误] 没有这个槽：%s\n") % s)
     return keys
 
 
@@ -531,37 +532,37 @@ def app_version():
 def build_parser():
     p = argparse.ArgumentParser(
         prog="dsh-tm",
-        description="dsh-tm 命令行接口（与图形界面共用同一份 config.json）",
-        epilog="示例：python dsh-tm.py start --all / python dsh-tm.py list")
-    p.add_argument("--config", default=CONFIG_PATH, help="配置文件路径（缺省同目录 config.json）")
-    p.add_argument("--verbose", action="store_true", help="打印底层详细过程（排障用）")
+        description=T("dsh-tm 命令行接口（与图形界面共用同一份 config.json）"),
+        epilog=T("示例：python dsh-tm.py start --all / python dsh-tm.py list"))
+    p.add_argument("--config", default=CONFIG_PATH, help=T("配置文件路径（缺省同目录 config.json）"))
+    p.add_argument("--verbose", action="store_true", help=T("打印底层详细过程（排障用）"))
     p.add_argument("--version", action="version", version="dsh-tm " + app_version(),
-                   help="打印版本号后退出")
+                   help=T("打印版本号后退出"))
     sub = p.add_subparsers(dest="cmd")
 
-    for name, help_text in (("list", "列出所有槽与运行状态"),
-                            ("status", "同 list，可指定槽"),
-                            ("url", "打印入口地址（不含 token）"),
-                            ("health", "槽体检（只读）")):
+    for name, help_text in (("list", T("列出所有槽与运行状态")),
+                            ("status", T("同 list，可指定槽")),
+                            ("url", T("打印入口地址（不含 token）")),
+                            ("health", T("槽体检（只读）"))):
         sp = sub.add_parser(name, help=help_text)
-        sp.add_argument("slot", nargs="*", help="槽名（如 v1）；可给多个")
-        sp.add_argument("--all", action="store_true", help="对所有槽执行")
+        sp.add_argument("slot", nargs="*", help=T("槽名（如 v1）；可给多个"))
+        sp.add_argument("--all", action="store_true", help=T("对所有槽执行"))
         if name == "health":
-            sp.add_argument("--deep", action="store_true", help="深度体检")
+            sp.add_argument("--deep", action="store_true", help=T("深度体检"))
 
-    for name, help_text in (("start", "启动槽（支持 --all）"),
-                            ("stop", "停止槽（支持 --all）")):
+    for name, help_text in (("start", T("启动槽（支持 --all）")),
+                            ("stop", T("停止槽（支持 --all）"))):
         sp = sub.add_parser(name, help=help_text)
-        sp.add_argument("slot", nargs="*", help="槽名（如 v1）；可给多个")
-        sp.add_argument("--all", action="store_true", help="对全部槽执行")
+        sp.add_argument("slot", nargs="*", help=T("槽名（如 v1）；可给多个"))
+        sp.add_argument("--all", action="store_true", help=T("对全部槽执行"))
         if name == "start":
-            sp.add_argument("--wait", type=float, default=20.0, metavar="秒",
-                            help="等待端口监听的超时秒数（缺省 20）")
+            sp.add_argument("--wait", type=float, default=20.0, metavar=T("秒"),
+                            help=T("等待端口监听的超时秒数（缺省 20）"))
 
     sp = sub.add_parser(
         "kill-stray",
-        help="清理槽外 dsh 残留（排障用；旧版界面按钮已移除）")
-    sp.add_argument("--yes", action="store_true", help="确认执行（不加只打印计划）")
+        help=T("清理槽外 dsh 残留（排障用；旧版界面按钮已移除）"))
+    sp.add_argument("--yes", action="store_true", help=T("确认执行（不加只打印计划）"))
 
     return p
 

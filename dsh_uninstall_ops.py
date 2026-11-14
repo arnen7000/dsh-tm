@@ -138,24 +138,24 @@ def is_safe_to_delete(path, slot_root_dir, keep_paths, home, repo):
       d) 不是 home 或 repo 的**上级**（防止配置写错把整片目录端掉）。
     """
     if not path or not os.path.exists(path):
-        return (False, "不存在")
+        return (False, T("不存在"))
     if not slot_root_dir:
-        return (False, "反推不出槽根目录，拒绝删除")
+        return (False, T("反推不出槽根目录，拒绝删除"))
     n = norm(path)
     for k in (keep_paths or []):
         if k and n == norm(k):
-            return (False, "用户数据/临时目录，保留")
+            return (False, T("用户数据/临时目录，保留"))
     if not is_under(path, slot_root_dir):
-        return (False, "不在槽根目录之内")
+        return (False, T("不在槽根目录之内"))
     if is_drive_root(path):
-        return (False, "盘符根目录")
-    for prot, why in ((home, "用户主目录"), (repo, "管理器目录")):
+        return (False, T("盘符根目录"))
+    for prot, why in ((home, T("用户主目录")), (repo, T("管理器目录"))):
         if not prot:
             continue
         if n == norm(prot):
             return (False, why)
         if is_under(prot, path):
-            return (False, "是%s的上级目录" % why)
+            return (False, T("是%s的上级目录") % why)
     return (True, "")
 
 
@@ -268,7 +268,7 @@ def _robocopy(src, dst):
     exe = shutil.which("robocopy") or os.path.join(
         os.environ.get("SystemRoot", r"C:\Windows"), "System32", "robocopy.exe")
     if not os.path.isfile(exe):
-        return (False, "找不到 robocopy")
+        return (False, T("找不到 robocopy"))
     cmd = [exe, src, dst, "/E", "/XJ", "/COPY:DAT", "/DCOPY:DAT",
            "/MT:8", "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS", "/NP"]
     try:
@@ -277,12 +277,12 @@ def _robocopy(src, dst):
                               creationflags=getattr(subprocess,
                                                     "CREATE_NO_WINDOW", 0))
     except Exception as e:
-        return (False, "无法启动 robocopy：%s" % e)
+        return (False, T("无法启动 robocopy：%s") % e)
     # robocopy 的退出码是**位标志**：0–7 都是成功（0=无变化，1=有拷贝，2=有额外项…），
     # >=8 才是真失败。按"非 0 即失败"判断会把正常备份当成错误。
     if proc.returncode < 8:
         return (True, "")
-    return (False, "robocopy 退出码 %d" % proc.returncode)
+    return (False, T("robocopy 退出码 %d") % proc.returncode)
 
 
 def _copy_user_data(src, dst, failures=None):
@@ -318,7 +318,7 @@ def _copy_user_data(src, dst, failures=None):
         try:
             entries = list(os.scandir(s))
         except OSError as e:
-            fails.append((os.path.relpath(s, src) or ".", "读不到目录：%s" % e))
+            fails.append((os.path.relpath(s, src) or ".", T("读不到目录：%s") % e))
             continue
         for e in entries:
             target = os.path.join(d, e.name)
@@ -437,7 +437,7 @@ def _force_rmtree(path):
 
     _walk(path)
     if os.path.exists(path):
-        raise OSError("有 %d 项删不掉（可能被进程占用或权限不足），首个：%s"
+        raise OSError(T("有 %d 项删不掉（可能被进程占用或权限不足），首个：%s")
                       % (len(errors) or 1, errors[0] if errors else path))
 
 
@@ -452,29 +452,29 @@ def mark_incomplete(dirpath, kind, total, missing, fails):
     返回 True 表示标记写成功（写不进去也不算致命，调用方已经在抛错了）。
     """
     lines = [
-        "这份备份【不完整】，不要拿它当后悔药。",
+        T("这份备份【不完整】，不要拿它当后悔药。"),
         "",
-        "类型：%s" % (kind or "备份"),
-        "时间：%s" % time.strftime("%Y-%m-%d %H:%M:%S"),
-        "应备份 %d 个文件，缺 %d 个，拷不动 %d 个。" % (
+        T("类型：%s") % (kind or T("备份")),
+        T("时间：%s") % time.strftime("%Y-%m-%d %H:%M:%S"),
+        T("应备份 %d 个文件，缺 %d 个，拷不动 %d 个。") % (
             total or 0, len(missing or []), len(fails or [])),
         "",
     ]
     if missing:
-        lines.append("缺失（源里有、这里没有）：")
+        lines.append(T("缺失（源里有、这里没有）："))
         for p in list(missing)[:20]:
             lines.append("  - %s" % p)
         if len(missing) > 20:
-            lines.append("  … 还有 %d 个" % (len(missing) - 20))
+            lines.append(T("  … 还有 %d 个") % (len(missing) - 20))
         lines.append("")
     if fails:
-        lines.append("拷不动（被占用 / 权限不足）：")
+        lines.append(T("拷不动（被占用 / 权限不足）："))
         for p, why in list(fails)[:20]:
             lines.append("  - %s —— %s" % (p, why))
         if len(fails) > 20:
-            lines.append("  … 还有 %d 个" % (len(fails) - 20))
+            lines.append(T("  … 还有 %d 个") % (len(fails) - 20))
         lines.append("")
-    lines.append("原目录一个文件都没删。处理好占用/权限后重试即可。")
+    lines.append(T("原目录一个文件都没删。处理好占用/权限后重试即可。"))
     try:
         with open(os.path.join(dirpath, "_INCOMPLETE.txt"), "w",
                   encoding="utf-8-sig", newline="\r\n") as f:
@@ -545,18 +545,18 @@ def _backup_slot(plan, key, backup_root, stamp):
                 # 改名失败（目录被占用/权限）就退回原名 —— 但必须留下**明确的**
                 # 标记文件，否则这份"名字正常的半份备份"就是上面说的那种危险品。
                 bad = dst
-            mark_incomplete(bad, "卸载备份", total, missing, fails)
+            mark_incomplete(bad, T("卸载备份"), total, missing, fails)
             raise IOError(
-                "备份不完整，已中止（槽目录一个文件都没删）：\n"
+                T("备份不完整，已中止（槽目录一个文件都没删）：\n"
                 "  · 应备份 %d 个文件，缺 %d 个%s\n"
                 "  · 拷不动 %d 个%s\n"
                 "常见原因：该槽的 dsh 还在运行（锁住了 .dsh-home 里的文件）、"
                 "或杀软正在扫描。请先停止该槽再重试。\n"
-                "已拷出的部分留在：%s"
+                "已拷出的部分留在：%s")
                 % (total, len(missing),
-                   ("（例：%s）" % missing[0]) if missing else "",
+                   (T("（例：%s）") % missing[0]) if missing else "",
                    len(fails),
-                   ("（例：%s —— %s）" % fails[0]) if fails else "",
+                   (T("（例：%s —— %s）") % fails[0]) if fails else "",
                    bad))
     if links:
         # 跳过的链接单独记一份，别让"备份看起来完整"变成误判
@@ -587,10 +587,10 @@ def _backup_slot(plan, key, backup_root, stamp):
         "dsh_home": home,
         "temp_dir": plan.get("temp_dir"),
         "backed_up_at": stamp,
-        "note": "dsh 版本管理器卸载前自动备份。"
+        "note": T("dsh 版本管理器卸载前自动备份。"
                 ".dsh-home 内容在本目录；插件清单见 _slot-package*.json。"
                 "junction/符号链接**未复制**（它们指向槽的 node_modules 或槽外目录，"
-                "不是用户数据），清单见 _links.json。",
+                "不是用户数据），清单见 _links.json。"),
         "skipped_links": len(links),
         "verify": verify,
         "config_snippet": plan.get("config") or {},
@@ -664,22 +664,22 @@ def plan_slot(key, cfg, base, home, repo, self_dir, versions_root=""):
     }
 
     if not root:
-        plan["blocked"] = "反推不出槽根目录（bin_js 不在本地 node_modules 布局里）"
+        plan["blocked"] = T("反推不出槽根目录（bin_js 不在本地 node_modules 布局里）")
         return plan
     # 全局安装：先于「目录是否存在」判断 —— 否则一个不存在的全局路径会被当成
     # 「目录已不在，直接移出配置」，用户会以为卸干净了，实际全局包还在。
     if is_global_install(cfg, base, home, self_dir):
-        plan["blocked"] = ("这是 npm 全局安装（bin_js 在 npm 全局 node_modules 下），"
-                           "不能按槽删除 —— 请用 npm uninstall -g @deepseek-ai/dsh")
+        plan["blocked"] = (T("这是 npm 全局安装（bin_js 在 npm 全局 node_modules 下），"
+                           "不能按槽删除 —— 请用 npm uninstall -g @deepseek-ai/dsh"))
         return plan
     # 槽根自身的合法性：必须在 versions_root 之内，且不是 home/repo/盘符根。
     # 这一条也要在「存在与否」之前 —— 配置写错指向盘根时，绝不能因为"目录不存在"
     # 就跳过校验。
     if versions_root and not is_under(root, versions_root):
-        plan["blocked"] = "槽根目录不在版本根之内（%s 不在 %s 下），拒绝删除" % (root, versions_root)
+        plan["blocked"] = T("槽根目录不在版本根之内（%s 不在 %s 下），拒绝删除") % (root, versions_root)
         return plan
     if is_drive_root(root) or norm(root) in (norm(home), norm(repo)):
-        plan["blocked"] = "槽根目录是系统/用户/仓库目录，拒绝删除：%s" % root
+        plan["blocked"] = T("槽根目录是系统/用户/仓库目录，拒绝删除：%s") % root
         return plan
     if not plan["exists"]:
         # 目录已不在（手工删过 / 装到一半失败）：仍允许把它从 config.json 移除，
@@ -689,7 +689,7 @@ def plan_slot(key, cfg, base, home, repo, self_dir, versions_root=""):
     try:
         names = sorted(os.listdir(root))
     except Exception as e:
-        plan["blocked"] = "列不出槽根目录内容：%s" % e
+        plan["blocked"] = T("列不出槽根目录内容：%s") % e
         return plan
 
     for name in names:
@@ -825,16 +825,16 @@ def detach_slots(keys, config_path, home, repo, self_dir, versions_root="",
     p = progress or OPS.Progress()
     keys = [k for k in (keys or []) if k]
     if not keys:
-        return (False, None, "没有选择要移出的槽")
+        return (False, None, T("没有选择要移出的槽"))
 
     try:
         cfg = OPS.read_config(config_path)
     except Exception as e:
-        return (False, None, "读 config.json 失败：%s" % e)
+        return (False, None, T("读 config.json 失败：%s") % e)
     versions = cfg.get("versions") or {}
     missing = [k for k in keys if k not in versions]
     if missing:
-        return (False, None, "config.json 里没有这些槽：%s" % ", ".join(missing))
+        return (False, None, T("config.json 里没有这些槽：%s") % ", ".join(missing))
 
     base = install_base_of(cfg, home, self_dir)
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -852,13 +852,13 @@ def detach_slots(keys, config_path, home, repo, self_dir, versions_root="",
         if not root:
             # 反推不出槽根也能移出（毕竟只是删 config 里一条），但重新纳入时
             # 得让用户手工指路径 —— 说清楚，别让人以为还能一键回来。
-            d["warnings"].append("反推不出槽根目录，记录里没有路径；重新纳入时要手工指定")
+            d["warnings"].append(T("反推不出槽根目录，记录里没有路径；重新纳入时要手工指定"))
         if running_fn:
             try:
                 if running_fn(key, plan["port"]):
                     d["errors"].append(
-                        "这个槽正在运行，请先点「停止」再移出 —— "
-                        "移出后管理器就不再跟踪它的进程了")
+                        T("这个槽正在运行，请先点「停止」再移出 —— "
+                        "移出后管理器就不再跟踪它的进程了"))
                     kept.append(key)
                     p.on_step(T("[%s] 跳过：正在运行") % key)
                     continue
@@ -888,14 +888,14 @@ def detach_slots(keys, config_path, home, repo, self_dir, versions_root="",
     if not moved:
         msgs = ["%s：%s" % (d["key"], "；".join(d["errors"])) for d in details if d["errors"]]
         return (False, {"moved": [], "kept_in_config": kept, "details": details},
-                "没有槽被移出。\n\n" + "\n".join(msgs or ["（原因未知）"]))
+                T("没有槽被移出。\n\n") + "\n".join(msgs or [T("（原因未知）")]))
 
     # 先备份 config 再写：移出是「只改配置」，配置写坏了就全丢
     try:
         OPS.backup_config(config_path, stamp=stamp)
     except IOError as e:
         return (False, {"moved": [], "kept_in_config": keys, "details": details},
-                "备份 config.json 失败，已中止（什么都没改）：%s" % e)
+                T("备份 config.json 失败，已中止（什么都没改）：%s") % e)
 
     try:
         cfg = OPS.read_config(config_path)
@@ -906,21 +906,21 @@ def detach_slots(keys, config_path, home, repo, self_dir, versions_root="",
         OPS.write_config_atomic(config_path, cfg)
     except Exception as e:
         return (False, {"moved": [], "kept_in_config": keys, "details": details},
-                "写 config.json 失败（磁盘上的东西一个都没动，配置可能仍是原样，"
-                "请检查）：%s" % e)
+                T("写 config.json 失败（磁盘上的东西一个都没动，配置可能仍是原样，"
+                "请检查）：%s") % e)
 
     payload = {"moved": moved, "kept_in_config": kept, "details": details,
                "records": new_recs, "stamp": stamp}
-    parts = ["已移出管理：%s" % ", ".join(moved)]
-    parts.append("磁盘上一个字节都没动 —— 这些槽仍然可以自己双击 dsh.bat 启动。")
+    parts = [T("已移出管理：%s") % ", ".join(moved)]
+    parts.append(T("磁盘上一个字节都没动 —— 这些槽仍然可以自己双击 dsh.bat 启动。"))
     if kept:
-        parts.append("没移出的（仍在管理里）：%s" % ", ".join(kept))
+        parts.append(T("没移出的（仍在管理里）：%s") % ", ".join(kept))
     for d in details:
         for w in d["warnings"]:
             parts.append("  · %s：%s" % (d["key"], w))
     if not (cfg.get("versions") or {}):
-        parts.append("现在管理器不管理任何版本了 —— 安装根目录已解锁，"
-                     "可以在「设置 → 目录」里换到别的位置，再装/纳入新的 dsh。")
+        parts.append(T("现在管理器不管理任何版本了 —— 安装根目录已解锁，"
+                     "可以在「设置 → 目录」里换到别的位置，再装/纳入新的 dsh。"))
     return (True, payload, "\n".join(parts))
 
 
@@ -944,13 +944,13 @@ def repair_slot(root, node_src=""):
     root = os.path.normpath(os.path.abspath(root or ""))
     actions = []
     if not root or not os.path.isdir(root):
-        return (False, actions, "目录不存在：%s" % (root or "(空)"))
+        return (False, actions, T("目录不存在：%s") % (root or T("(空)")))
 
     bin_js = os.path.join(root, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js")
     if not os.path.isfile(bin_js):
         return (False, actions,
-                "缺 lib/bin.js —— 这是程序本体，补不了（等于重装）。\n"
-                "请删掉这个目录后用「安装官方版 dsh」重装一份。")
+                T("缺 lib/bin.js —— 这是程序本体，补不了（等于重装）。\n"
+                "请删掉这个目录后用「安装官方版 dsh」重装一份。"))
 
     node_dir = os.path.join(root, "node")
     has_node = (os.path.isfile(os.path.join(node_dir, "node.exe"))
@@ -958,23 +958,23 @@ def repair_slot(root, node_src=""):
     if not has_node:
         if not (node_src and os.path.isfile(node_src)):
             return (False, actions,
-                    "缺 node 运行时，而且没有可复制的来源（先装/保留一个别的槽）。")
+                    T("缺 node 运行时，而且没有可复制的来源（先装/保留一个别的槽）。"))
         try:
             os.makedirs(node_dir, exist_ok=True)
             _nm = "node.exe" if node_src.lower().endswith(".exe") else "node"
             shutil.copy2(node_src, os.path.join(node_dir, _nm))
-            actions.append("补上 node 运行时（从 %s 复制）" % node_src)
+            actions.append(T("补上 node 运行时（从 %s 复制）") % node_src)
         except Exception as e:
-            return (False, actions, "复制 node 失败：%s" % e)
+            return (False, actions, T("复制 node 失败：%s") % e)
 
     for sub in (".dsh-home", ".tmp"):
         p = os.path.join(root, sub)
         if not os.path.isdir(p):
             try:
                 os.makedirs(p, exist_ok=True)
-                actions.append("补建 %s 目录" % sub)
+                actions.append(T("补建 %s 目录") % sub)
             except Exception as e:
-                return (False, actions, "创建 %s 失败：%s" % (sub, e))
+                return (False, actions, T("创建 %s 失败：%s") % (sub, e))
 
     # 补完再体检一次：缺依赖 / 缺包 package.json 这类**补不了**的，不能回
     # "已完成（无需改动）" —— 那会让用户以为好了，下次启动照样炸（2026-11-14）。
@@ -985,12 +985,12 @@ def repair_slot(root, node_src=""):
     except Exception as _e:
         return (True, actions, "")          # 体检本身不可用就别误报失败
     if not _info.get("ok"):
-        _why = (_info.get("problems") or ["安装仍不完整"])[0]
-        _head = ("已补上：%s\n\n" % "、".join(actions)) if actions else ""
+        _why = (_info.get("problems") or [T("安装仍不完整")])[0]
+        _head = (T("已补上：%s\n\n") % "、".join(actions)) if actions else ""
         return (False, actions,
-                _head + "但仍有问题补不了：%s\n\n"
+                _head + T("但仍有问题补不了：%s\n\n"
                         "这一类（程序本体 / 依赖 / 包清单缺失）等于重装 —— "
-                        "请删掉这个目录后用「安装官方版 dsh」重装一份。" % _why)
+                        "请删掉这个目录后用「安装官方版 dsh」重装一份。") % _why)
 
     return (True, actions, "")
 
@@ -1014,12 +1014,12 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
     p = progress or OPS.Progress()
     roots = [os.path.normpath(os.path.abspath(r)) for r in (roots or []) if r]
     if not roots:
-        return (False, None, "没有选择要重新纳入的槽")
+        return (False, None, T("没有选择要重新纳入的槽"))
 
     try:
         cfg = OPS.read_config(config_path)
     except Exception as e:
-        return (False, None, "读 config.json 失败：%s" % e)
+        return (False, None, T("读 config.json 失败：%s") % e)
     recs = detached_records(cfg)
     versions = cfg.get("versions") or {}
     base = install_base_of(cfg, home, self_dir)
@@ -1064,7 +1064,7 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
         details.append(d)
 
         if not os.path.isdir(root):
-            d["errors"].append("目录已经不在了：%s" % root)
+            d["errors"].append(T("目录已经不在了：%s") % root)
             continue
         # 2026-11-14：接回也走**同一套体检**（复制纳入早就这么做）。
         # 只查 bin.js 不够 —— 缺 package.json、缺依赖的目录接回后一启动就炸，
@@ -1074,17 +1074,17 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
             _info = _A.inspect_adopt_source(
                 os.path.join(root, "node_modules")) or {}
         except Exception as _e:
-            _info = {"ok": False, "problems": ["体检失败：%s" % _e]}
+            _info = {"ok": False, "problems": [T("体检失败：%s") % _e]}
         for _w in (_info.get("warnings") or []):
             # 只是提醒，不阻断：比如「没找到原来的用户数据目录（.dsh-home）」
             # —— 用户可能自己删了，接回来就是一个干净的新槽，必须让他知道。
             d["warnings"].append(_w)
         if not _info.get("ok"):
-            _why = (_info.get("problems") or ["安装不完整"])[0]
+            _why = (_info.get("problems") or [T("安装不完整")])[0]
             d["errors"].append(
-                "这个安装不完整，不能接回：%s\n"
+                T("这个安装不完整，不能接回：%s\n"
                 "可以手动删掉这个目录；或用「安装官方版 dsh」装到别的编号"
-                "（它占着自己的编号，不会被自动复用）。" % _why)
+                "（它占着自己的编号，不会被自动复用）。") % _why)
             continue
         # 缺 node 运行时 → **不代劳**。用户可能是故意删的（省空间 / 换自己那份），
         # 自动从别的槽复制会悄悄推翻他的意图，还可能带进不同 ABI 的 node
@@ -1096,12 +1096,12 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
                 node_exe = alt
             else:
                 d["errors"].append(
-                    "槽里没有自带的 node 运行时（缺 node/node.exe），不能接回。\n"
+                    T("槽里没有自带的 node 运行时（缺 node/node.exe），不能接回。\n"
                     "如果你是自己删掉的，把 node 放回 node\\ 下即可；\n"
-                    "也可以删掉这个目录，或用「安装官方版 dsh」装到别的编号。")
+                    "也可以删掉这个目录，或用「安装官方版 dsh」装到别的编号。"))
                 continue
         if norm(root) in managed:
-            d["errors"].append("这个目录已经在管理里（槽 %s），不需要重复纳入"
+            d["errors"].append(T("这个目录已经在管理里（槽 %s），不需要重复纳入")
                                % managed[norm(root)])
             continue
 
@@ -1115,10 +1115,10 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
                     key = "v%d" % i
                     break
             if not key:
-                d["errors"].append("槽位已满，没法再纳入")
+                d["errors"].append(T("槽位已满，没法再纳入"))
                 continue
             if key0:
-                d["warnings"].append("槽键 %s 已被别的目录占用，改用 %s" % (key0, key))
+                d["warnings"].append(T("槽键 %s 已被别的目录占用，改用 %s") % (key0, key))
         label = d["label"] or ("dsh" + key.upper())
         # 标签必须唯一（它是卡片标题）：目录名已被别的槽占用时，改用槽键派生的名字。
         # 这正是「槽 v4 显示成 dshV3」那个 bug 的另一半 —— 光修槽键不够，
@@ -1128,7 +1128,7 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
         if label.lower() in _used:
             _alt = "dsh" + key.upper()
             label = _alt if _alt.lower() not in _used else "%s-%s" % (label, key)
-            d["warnings"].append("显示名 %s 已被别的槽占用，改用 %s"
+            d["warnings"].append(T("显示名 %s 已被别的槽占用，改用 %s")
                                  % (d["label"], label))
 
         # ── 端口：bat 里写的是事实 ────────────────────────────
@@ -1136,10 +1136,10 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
         if port and port in taken:
             newp = _free(port + 1) or _free(4080)
             if not newp:
-                d["errors"].append("原端口 %d 已被别的槽占用，也找不到空闲端口" % port)
+                d["errors"].append(T("原端口 %d 已被别的槽占用，也找不到空闲端口") % port)
                 continue
-            d["warnings"].append("原端口 %d 已被别的槽占用，改用 %d"
-                                 "（三件 bat 会同步重写）" % (port, newp))
+            d["warnings"].append(T("原端口 %d 已被别的槽占用，改用 %d"
+                                 "（三件 bat 会同步重写）") % (port, newp))
             port_changed[key] = (port, newp)
             port = newp
         elif not port:
@@ -1147,10 +1147,10 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
             newp = (adopt_mod.suggest_port(idx, taken, probe=probe)
                     if adopt_mod is not None else None)
             if not newp:
-                d["errors"].append("分配不到空闲端口")
+                d["errors"].append(T("分配不到空闲端口"))
                 continue
-            d["warnings"].append("槽里的 bat 没有端口信息，新分配 %d"
-                                 "（三件 bat 会同步重写）" % newp)
+            d["warnings"].append(T("槽里的 bat 没有端口信息，新分配 %d"
+                                 "（三件 bat 会同步重写）") % newp)
             port_changed[key] = (0, newp)
             port = newp
 
@@ -1185,14 +1185,14 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
         msgs = ["%s：%s" % (d["root"], "；".join(d["errors"]))
                 for d in details if d["errors"]]
         return (False, {"added": [], "details": details},
-                "没有槽被重新纳入。\n\n" + "\n".join(msgs or ["（原因未知）"]))
+                T("没有槽被重新纳入。\n\n") + "\n".join(msgs or [T("（原因未知）")]))
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     try:
         OPS.backup_config(config_path, stamp=stamp)
     except IOError as e:
         return (False, {"added": [], "details": details},
-                "备份 config.json 失败，已中止（什么都没改）：%s" % e)
+                T("备份 config.json 失败，已中止（什么都没改）：%s") % e)
     try:
         cfg["versions"] = versions
         drop_n = {norm(x) for x in drop}
@@ -1210,10 +1210,10 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
         OPS.write_config_atomic(config_path, cfg)
     except Exception as e:
         return (False, {"added": [], "details": details},
-                "写 config.json 失败（磁盘未改动）：%s" % e)
+                T("写 config.json 失败（磁盘未改动）：%s") % e)
 
-    parts = ["已重新纳入：%s" % ", ".join(added)]
-    parts.append("磁盘上一个字节都没动 —— 原来怎么装的还是怎么装的。")
+    parts = [T("已重新纳入：%s") % ", ".join(added)]
+    parts.append(T("磁盘上一个字节都没动 —— 原来怎么装的还是怎么装的。"))
     for d in details:
         for w in d["warnings"]:
             parts.append("  · %s：%s" % (d["key"] or d["root"], w))
@@ -1239,19 +1239,19 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
     stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
     keys = [k for k in (keys or []) if k]
     if not keys:
-        return (False, None, "没有选择要卸载的槽")
+        return (False, None, T("没有选择要卸载的槽"))
 
     try:
         cfg = OPS.read_config(config_path)
     except Exception as e:
-        return (False, None, "读 config.json 失败：%s" % e)
+        return (False, None, T("读 config.json 失败：%s") % e)
     versions = cfg.get("versions") or {}
     missing = [k for k in keys if k not in versions]
     if missing:
-        return (False, None, "config.json 里没有这些槽：%s" % ", ".join(missing))
+        return (False, None, T("config.json 里没有这些槽：%s") % ", ".join(missing))
 
     base = install_base_of(cfg, home, self_dir)
-    backup_root = backup_root or os.path.join(base, "dsh备份")
+    backup_root = backup_root or os.path.join(base, T("dsh备份"))
 
     p.on_step(T("备份 config.json…"))
     try:
@@ -1287,7 +1287,7 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
                 stop_fn(key, port)
                 d["stopped"] = True
             except Exception as e:
-                d["warnings"].append("停进程失败（继续尝试删除）：%s" % e)
+                d["warnings"].append(T("停进程失败（继续尝试删除）：%s") % e)
 
         # 2) 备份用户数据 + 插件清单 + 版本信息（**在删任何东西之前**）
         #    2026-10-30 起备份内容扩展：除了 .dsh-home（会话/配置/凭据/插件配置），
@@ -1301,7 +1301,7 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
             d["verify"] = vfy
         except Exception as e:
             # 备份失败就不删程序 —— 用户数据没保险，宁可中止这个槽
-            d["errors"].append("备份失败（已中止该槽，未删除任何文件）：%s" % e)
+            d["errors"].append(T("备份失败（已中止该槽，未删除任何文件）：%s") % e)
             kept.append(key)
             p.on_step(T("[%s] 中止：备份失败 %s") % (key, e))
             continue
@@ -1309,15 +1309,15 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
             # 没有用户数据 → 不建备份目录（见 _backup_slot 开头）。日志里留版本号，
             # 以后想装回同一个版本照着抄即可。
             p.on_step(T("[%s] 没有用户数据（.dsh-home 为空），未生成备份（实装 %s）")
-                      % (key, d.get("version") or "未知"))
+                      % (key, d.get("version") or T("未知")))
         if d["backup"]:
             p.on_step(T("[%s] 已备份并核对通过：%d 个文件 → %s")
                       % (key, vfy.get("checked", 0), d["backup"]))
             # 大小不一致 = 备份过程中源文件被改过（多半是 dsh 没停干净）。
             # 文件都在，不阻断；但必须让用户看见，否则"备份完整"是假的。
             if vfy.get("size_changed"):
-                msg = ("备份期间有 %d 个文件大小变了（该槽可能仍在运行，"
-                       "备份的是当时那一刻的内容）" % vfy["size_changed"])
+                msg = (T("备份期间有 %d 个文件大小变了（该槽可能仍在运行，"
+                       "备份的是当时那一刻的内容）") % vfy["size_changed"])
                 d["warnings"].append(msg)
                 p.on_step(T("[%s] 注意：%s") % (key, msg))
 
@@ -1338,13 +1338,13 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
                         os.remove(ch["path"])
                     d["bytes"] += ch["size"]
                 except Exception as e:
-                    d["errors"].append("删除 %s 失败：%s" % (ch["name"], e))
+                    d["errors"].append(T("删除 %s 失败：%s") % (ch["name"], e))
                     # 用户数据删不掉就**立刻停手**：此时程序文件还没动，槽仍然完整可用，
                     # 用户关掉占用程序/修好权限后重试即可。继续删程序会留下
                     # 「程序没了、数据还在」的半残槽（2026-10-30 实测踩到）。
                     if ch["action"] == "purge":
                         d["errors"].append(
-                            "已停止删除该槽的其余部分（程序文件保持完整，可修好后重试）")
+                            T("已停止删除该槽的其余部分（程序文件保持完整，可修好后重试）"))
                         p.on_step(T("[%s] 中止删除：%s 删不掉") % (key, ch["name"]))
                         break
 
@@ -1364,7 +1364,7 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
                         time.sleep(0.4)
                 if not d["purged_root"]:
                     d["warnings"].append(
-                        "槽目录没能整个删掉（%s）：%s —— 下次装同一槽可能会被命名成 %s-2"
+                        T("槽目录没能整个删掉（%s）：%s —— 下次装同一槽可能会被命名成 %s-2")
                         % (plan["root"], last, os.path.basename(plan["root"])))
                     p.on_step(T("[%s] 提示：槽目录没能整个删掉（%s），下次装同名槽会复用或改名")
                               % (key, last))
@@ -1386,8 +1386,8 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
                 (cfg.get("versions") or {}).pop(k, None)
             OPS.write_config_atomic(config_path, cfg)
         except Exception as e:
-            return (False, {"details": details}, "删除已完成，但写 config.json 失败：%s\n"
-                                                 "请手动从 config.json 里删掉 %s"
+            return (False, {"details": details}, T("删除已完成，但写 config.json 失败：%s\n"
+                                                 "请手动从 config.json 里删掉 %s")
                     % (e, ", ".join(removed)))
 
     payload = {
@@ -1402,35 +1402,35 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
         for d in details:
             if d["errors"]:
                 msgs.append("%s：%s" % (d["key"], "；".join(d["errors"])))
-        return (False, payload, "没有槽被卸载。\n\n" + "\n".join(msgs or ["（原因未知）"]))
+        return (False, payload, T("没有槽被卸载。\n\n") + "\n".join(msgs or [T("（原因未知）")]))
 
-    parts = ["已卸载：%s（释放 %s）" % (", ".join(removed), human_size(total_bytes))]
+    parts = [T("已卸载：%s（释放 %s）") % (", ".join(removed), human_size(total_bytes))]
     for d in details:
         _f = d.get("foreign") or []
         if _f and not d.get("errors"):
-            parts.append("  · %s 里另有 %d 个非 dsh 条目被一并删除：%s"
+            parts.append(T("  · %s 里另有 %d 个非 dsh 条目被一并删除：%s")
                          % (d["key"], len(_f), "、".join(_f[:6])
                             + ("…" if len(_f) > 6 else "")))
     if kept:
-        parts.append("保留在配置里（未完全清理，可重试）：%s" % ", ".join(kept))
+        parts.append(T("保留在配置里（未完全清理，可重试）：%s") % ", ".join(kept))
     _with_bak = [d for d in details if d.get("backup")]
     _no_bak = [d for d in details if not d.get("backup") and not d.get("errors")]
     if _with_bak:
-        parts.append("备份（用户数据 + 插件清单 + 版本信息）在：%s" % backup_root)
+        parts.append(T("备份（用户数据 + 插件清单 + 版本信息）在：%s") % backup_root)
         for d in _with_bak:
             parts.append("  · %s → %s" % (d["key"], d["backup"]))
     if _no_bak:
         # 没有用户数据就不建备份目录（2026-11-14）—— 别让用户去一个空目录里找东西
-        parts.append("未生成备份（这些槽没有用户数据）：%s"
+        parts.append(T("未生成备份（这些槽没有用户数据）：%s")
                      % ", ".join(d["key"] for d in _no_bak))
     # 槽目录现在整个删掉了（含 .dsh-home/.tmp），所以下次装同一槽不会再变成
     # `dshV4-2`。万一某个槽根没删成（被占用等），如实说出来 —— 那才会导致 -2 后缀。
     leftover = [d["root"] for d in details
                 if d.get("root") and os.path.isdir(d["root"])]
     if leftover:
-        parts.append("注意：这些槽目录没能整个删掉：%s\n"
+        parts.append(T("注意：这些槽目录没能整个删掉：%s\n"
                      "下次往同一槽装版本可能被命名成带 -2 后缀的目录，"
-                     "确认上面的备份无误后可手动删掉它们。" % "、".join(leftover))
+                     "确认上面的备份无误后可手动删掉它们。") % "、".join(leftover))
     # 槽外临时目录（<临时目录根>\<槽>）不归槽所有，不动它，但要说一声免得残留
     ext = []
     for d in details:
@@ -1439,12 +1439,12 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
         if t and os.path.isdir(t) and not (r and is_under(t, r)):
             ext.append(t)
     if ext:
-        parts.append("槽外的临时目录未动（不是槽的一部分，可自行清理）：%s"
+        parts.append(T("槽外的临时目录未动（不是槽的一部分，可自行清理）：%s")
                      % "、".join(ext))
     warns = []
     for d in details:
         for w in d.get("warnings") or []:
             warns.append("%s：%s" % (d["key"], w))
     if warns:
-        parts.append("注意：\n  " + "\n  ".join(warns))
+        parts.append(T("注意：\n  ") + "\n  ".join(warns))
     return (True, payload, "\n".join(parts))

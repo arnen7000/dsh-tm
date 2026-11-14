@@ -24,6 +24,8 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
+from dsh_i18n import T
+
 # 官方源优先；国内网络访问 npmjs 常被墙/超时，镜像兜底。
 # 镜像与官方同步有延迟（通常几分钟），所以只在官方源失败时才用。
 DEFAULT_REGISTRIES = (
@@ -111,9 +113,9 @@ def format_line(item):
     """列表里一行怎么显示：版本号 + 标记。给界面用，也便于测试断言。"""
     marks = []
     for t in item.get("tags") or []:
-        marks.append({"latest": "最新", "next": "预览"}.get(t, t))
+        marks.append({"latest": T("最新"), "next": T("预览")}.get(t, t))
     if item.get("deprecated"):
-        marks.append("已弃用")
+        marks.append(T("已弃用"))
     return item["version"] + (("　（%s）" % "，".join(marks)) if marks else "")
 
 

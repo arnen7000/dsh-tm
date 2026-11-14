@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import time
+from dsh_i18n import T
 
 # 官方版本号形态（实测自 npm registry dist-tags 与 versions 键）：
 #   0.0.1-rc.1 / 0.1.0-rc.2 / 0.1.2-alpha.5 / 0.1.5-alpha.1 / 0.1.6-alpha.2 / 0.2.0-rc.2
@@ -55,7 +56,7 @@ def normalize_version(text):
 
 def version_hint():
     """给用户的格式说明（放在输入框下方，避免他凭空猜）。"""
-    return "官方版本号形如 0.2.0-rc.2 / 0.1.6-alpha.2（三段数字 + -rc.N 或 -alpha.N）"
+    return T("官方版本号形如 0.2.0-rc.2 / 0.1.6-alpha.2（三段数字 + -rc.N 或 -alpha.N）")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -120,11 +121,11 @@ def guess_source_home(node_modules):
     parent = os.path.dirname(nm)
     own = os.path.join(parent, ".dsh-home")
     if os.path.isdir(own):
-        return (own, "安装目录里的 .dsh-home")
+        return (own, T("安装目录里的 .dsh-home"))
     if is_global_install(nm):
         default_home = os.path.join(os.path.expanduser("~"), ".dsh")
         if os.path.isdir(default_home):
-            return (default_home, "全局安装的默认 home ~/.dsh")
+            return (default_home, T("全局安装的默认 home ~/.dsh"))
     return ("", "")
 
 
@@ -151,12 +152,12 @@ def inspect_adopt_source(node_modules, report_limit=5):
             "source_home_why": ""}
     nm = os.path.abspath(node_modules or "")
     if not nm or not os.path.isdir(nm):
-        info["problems"].append("目录不存在：%s" % (nm or "(空)"))
+        info["problems"].append(T("目录不存在：%s") % (nm or T("(空)")))
         return info
 
     dsh_dir = _looks_like_dsh_install(nm)
     if not dsh_dir:
-        info["problems"].append("这里没有 @deepseek-ai/dsh（不是 dsh 的 node_modules）")
+        info["problems"].append(T("这里没有 @deepseek-ai/dsh（不是 dsh 的 node_modules）"))
         return info
     info["dsh_dir"] = dsh_dir
 
@@ -164,25 +165,25 @@ def inspect_adopt_source(node_modules, report_limit=5):
     pj = os.path.join(dsh_dir, "package.json")
     meta = {}
     if not os.path.isfile(pj):
-        info["problems"].append("缺 package.json（装了一半，或被删过）")
+        info["problems"].append(T("缺 package.json（装了一半，或被删过）"))
     else:
         try:
             with open(pj, "r", encoding="utf-8-sig") as f:
                 meta = json.load(f)
         except Exception as e:
             meta = {}
-            info["problems"].append("package.json 读不出来：%s" % e)
+            info["problems"].append(T("package.json 读不出来：%s") % e)
         ver = str((meta or {}).get("version") or "")
         if ver and not VERSION_RE.match(ver):
-            info["problems"].append("版本号形态不对：%r" % ver)
+            info["problems"].append(T("版本号形态不对：%r") % ver)
         elif not ver:
-            info["problems"].append("package.json 里没有 version")
+            info["problems"].append(T("package.json 里没有 version"))
         info["version"] = ver if VERSION_RE.match(ver or "") else ""
 
     # 2) 入口文件
     bin_js = os.path.join(dsh_dir, "lib", "bin.js")
     if not os.path.isfile(bin_js):
-        info["problems"].append("缺 lib/bin.js（没有入口，纳入后必然启动失败）")
+        info["problems"].append(T("缺 lib/bin.js（没有入口，纳入后必然启动失败）"))
     lib = os.path.join(dsh_dir, "lib")
     try:
         n_lib = len([x for x in os.listdir(lib) if x.lower().endswith(".js")]) \
@@ -190,7 +191,7 @@ def inspect_adopt_source(node_modules, report_limit=5):
     except Exception:
         n_lib = 0
     if os.path.isdir(lib) and n_lib == 0:
-        info["problems"].append("lib/ 里一个 .js 都没有（空壳目录）")
+        info["problems"].append(T("lib/ 里一个 .js 都没有（空壳目录）"))
 
     # 3) 依赖是否装全（只看 package.json 声明的一层依赖，npm 会提升到顶层）
     deps = {}
@@ -207,30 +208,30 @@ def inspect_adopt_source(node_modules, report_limit=5):
     info["deps_missing"] = missing
     if missing:
         shown = ", ".join(missing[:report_limit])
-        more = "" if len(missing) <= report_limit else "（还有 %d 个）" % (
+        more = "" if len(missing) <= report_limit else T("（还有 %d 个）") % (
             len(missing) - report_limit)
         info["problems"].append(
-            "依赖没装全：%d 个声明依赖找不到 —— %s%s" % (len(missing), shown, more))
+            T("依赖没装全：%d 个声明依赖找不到 —— %s%s") % (len(missing), shown, more))
 
     # 4) 只是提醒的差异
     if not os.path.isfile(os.path.join(nm, "..", "package-lock.json")):
-        info["warnings"].append("没有 package-lock.json（依赖版本没被钉住）")
+        info["warnings"].append(T("没有 package-lock.json（依赖版本没被钉住）"))
     norm = nm.replace("\\", "/").lower()
     if is_global_install(nm):
         info["warnings"].append(
-            "这是 npm 全局安装（%s）—— 纳入会复制一份独立副本，"
-            "全局那份不受影响，但两者以后各升各的" % nm)
+            T("这是 npm 全局安装（%s）—— 纳入会复制一份独立副本，"
+            "全局那份不受影响，但两者以后各升各的") % nm)
     if os.path.isdir(os.path.join(nm, "node-pty")) or \
             os.path.isdir(os.path.join(dsh_dir, "node_modules", "node-pty")):
         info["warnings"].append(
-            "含原生模块 node-pty：复制过来的那份必须配同 ABI 的 node，"
-            "所以纳入时会一并复制一个自带 node")
+            T("含原生模块 node-pty：复制过来的那份必须配同 ABI 的 node，"
+            "所以纳入时会一并复制一个自带 node"))
 
     home, why = guess_source_home(nm)
     info["source_home"], info["source_home_why"] = home, why
     if not home:
         info["warnings"].append(
-            "没找到原来的用户数据目录（.dsh-home / ~/.dsh）—— 纳入后是一个干净的新槽")
+            T("没找到原来的用户数据目录（.dsh-home / ~/.dsh）—— 纳入后是一个干净的新槽"))
 
     info["ok"] = not info["problems"]
     return info
@@ -556,13 +557,13 @@ def copy_tree(src, dst):
     """复制目录树（用于把已装好的 dsh 整理进新槽）。返回 (成功, 说明)。"""
     src, dst = os.path.abspath(src), os.path.abspath(dst)
     if not os.path.isdir(src):
-        return (False, "源目录不存在：%s" % src)
+        return (False, T("源目录不存在：%s") % src)
     if os.path.exists(dst):
-        return (False, "目标已存在：%s" % dst)
+        return (False, T("目标已存在：%s") % dst)
     try:
         shutil.copytree(src, dst)
     except Exception as e:
-        return (False, "复制失败：%s" % e)
+        return (False, T("复制失败：%s") % e)
     return (True, "")
 
 
@@ -579,19 +580,19 @@ def copy_node_exe(src_node, dst_root):
     elif os.path.isdir(src_node):
         src_dir = src_node
     else:
-        return (None, "找不到可用的 node 运行时：%s" % src_node)
+        return (None, T("找不到可用的 node 运行时：%s") % src_node)
 
     # 必须是能真正跑的 node.exe，否则复制了也是废的（只拷个目录进来更误导）
     exe = os.path.join(src_dir, "node.exe")
     if not os.path.isfile(exe):
-        return (None, "该目录下没有 node.exe：%s" % src_dir)
+        return (None, T("该目录下没有 node.exe：%s") % src_dir)
 
     dst_dir = os.path.join(dst_root, "node")
     try:
         os.makedirs(dst_dir, exist_ok=True)
         shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
     except Exception as e:
-        return (None, "复制 node 失败：%s" % e)
+        return (None, T("复制 node 失败：%s") % e)
     return (os.path.join(dst_dir, "node.exe"), "")
 
 
@@ -607,15 +608,15 @@ def adopt_plan(node_modules, versions_root, slot_key, taken_ports,
     标准流程启动/停止/换版本，不需要为"外来安装"写任何特判。"""
     nm = os.path.abspath(node_modules or "")
     if not os.path.isdir(nm):
-        return {"ok": False, "error": "node_modules 目录不存在：%s" % nm}
+        return {"ok": False, "error": T("node_modules 目录不存在：%s") % nm}
 
     root, dir_name = unique_dir(versions_root, "dsh%s" % slot_key.upper())
     if not root:
-        return {"ok": False, "error": "无法在 %s 下分配目录名（试了 999 次都被占用）" % versions_root}
+        return {"ok": False, "error": T("无法在 %s 下分配目录名（试了 999 次都被占用）") % versions_root}
 
     port = suggest_port(int(re.sub(r"\D", "", slot_key) or 1), taken_ports)
     if port is None:
-        return {"ok": False, "error": "4080 起的端口段都找不到空闲端口，请手工指定"}
+        return {"ok": False, "error": T("4080 起的端口段都找不到空闲端口，请手工指定")}
 
     temp_root = temp_root or ""
     temp_dir = default_temp_dir(dir_name, root, temp_root=temp_root)
@@ -713,7 +714,7 @@ def copy_tree_nolinks(src, dst, failures=None):
         try:
             entries = list(os.scandir(s))
         except OSError as e:
-            fails.append((os.path.relpath(s, src) or ".", "读不到目录：%s" % e))
+            fails.append((os.path.relpath(s, src) or ".", T("读不到目录：%s") % e))
             continue
         for e in entries:
             if _is_reparse(e.path):
@@ -847,7 +848,7 @@ def backup_dsh_home(dsh_home, backup_root, stamp=None):
     `-INCOMPLETE` 并返回 None —— 调用方据此中止纳入。以前这里只返回一句
     "备份失败" 就算完，而"半份备份"名字正常，用户会以为数据已经安全了。"""
     if not dsh_home or not os.path.isdir(dsh_home):
-        return (None, "数据目录不存在，跳过备份：%s" % dsh_home)
+        return (None, T("数据目录不存在，跳过备份：%s") % dsh_home)
     # 2026-11-12：源目录是空的（刚装好、从没启动过的槽）就别建备份目录 ——
     # 否则 `dsh备份/` 里会多出一个空文件夹，用户不知道那是什么。
     # 返回空串（而不是 None）：调用方据此区分「无需备份」与「备份失败」。
@@ -856,7 +857,7 @@ def backup_dsh_home(dsh_home, backup_root, stamp=None):
     except Exception:
         _n_files = -1
     if _n_files == 0:
-        return ("", "源数据目录为空，无需备份")
+        return ("", T("源数据目录为空，无需备份"))
     stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
     fails = []
     try:
@@ -864,7 +865,7 @@ def backup_dsh_home(dsh_home, backup_root, stamp=None):
         dst = os.path.join(backup_root, "dsh-home-%s" % stamp)
         copy_tree_nolinks(dsh_home, dst, fails)
     except Exception as e:
-        return (None, "备份失败（已中止纳入，请手动复制后再试）：%s" % e)
+        return (None, T("备份失败（已中止纳入，请手动复制后再试）：%s") % e)
     missing, _changed, total = verify_copy(dsh_home, dst)
     if missing or fails:
         bad = dst + "-INCOMPLETE"
@@ -876,19 +877,19 @@ def backup_dsh_home(dsh_home, backup_root, stamp=None):
             bad = dst
         try:
             import dsh_uninstall_ops as _U
-            _U.mark_incomplete(bad, "纳入前的用户数据备份", total, missing, fails)
+            _U.mark_incomplete(bad, T("纳入前的用户数据备份"), total, missing, fails)
         except Exception:
             pass
         return (None,
-                "备份不完整，已中止纳入（原数据一个字节都没动）：\n"
+                T("备份不完整，已中止纳入（原数据一个字节都没动）：\n"
                 "  · 应备份 %d 个文件，缺 %d 个%s\n"
                 "  · 拷不动 %d 个%s\n"
                 "常见原因：那个 dsh 还在运行（锁住了 .dsh-home 里的文件）、"
                 "或杀软正在扫描。请先退出它再重试。\n"
-                "已拷出的部分留在：%s"
+                "已拷出的部分留在：%s")
                 % (total, len(missing),
-                   ("（例：%s）" % missing[0]) if missing else "",
+                   (T("（例：%s）") % missing[0]) if missing else "",
                    len(fails),
-                   ("（例：%s —— %s）" % fails[0]) if fails else "",
+                   (T("（例：%s —— %s）") % fails[0]) if fails else "",
                    bad))
     return (dst, "")

@@ -26,13 +26,14 @@
 import json
 import os
 import subprocess
+from dsh_i18n import T
 
 try:
     import dsh_install_ops as _OPS
 except Exception:                                    # 离线单测时可缺
     _OPS = None
 
-LEVEL_ERROR, LEVEL_WARN, LEVEL_INFO = "错误", "警告", "提示"
+LEVEL_ERROR, LEVEL_WARN, LEVEL_INFO = T("错误"), T("警告"), T("提示")
 
 # dsh 靠它做终端，Windows 上必须有预编译的 .node；缺了启动就崩，
 # 而崩的地方在 dsh 内部，报错完全看不出跟这个有关。
@@ -189,46 +190,46 @@ def check_slot(key, cfg, base="", home="", self_dir="", deep=False, node_version
 
     # ── 1. 程序入口 ────────────────────────────────────────────
     if not bin_js:
-        out.append((LEVEL_ERROR, "入口", "config.json 里没配 bin_js"))
+        out.append((LEVEL_ERROR, T("入口"), T("config.json 里没配 bin_js")))
     elif not os.path.isfile(bin_js):
-        out.append((LEVEL_ERROR, "入口",
-                    "找不到 %s（槽可能被删过、或没装完）" % bin_js))
+        out.append((LEVEL_ERROR, T("入口"),
+                    T("找不到 %s（槽可能被删过、或没装完）") % bin_js))
     elif root and not os.path.isdir(root):
-        out.append((LEVEL_ERROR, "槽目录", "槽根目录不存在：%s" % root))
+        out.append((LEVEL_ERROR, T("槽目录"), T("槽根目录不存在：%s") % root))
 
     # ── 2. node 运行时 ─────────────────────────────────────────
     if not node_exe:
-        out.append((LEVEL_ERROR, "node", "config.json 里没配 node_exe"))
+        out.append((LEVEL_ERROR, "node", T("config.json 里没配 node_exe")))
     elif node_exe.strip().lower() in ("node", "node.exe"):
         out.append((LEVEL_WARN, "node",
-                    "用的是系统 PATH 上的 node（没有自带 node\\，与其它槽不同构；"
-                    "系统 node 一升级，这个槽可能因原生模块 ABI 不匹配而崩）"))
+                    T("用的是系统 PATH 上的 node（没有自带 node\\，与其它槽不同构；"
+                    "系统 node 一升级，这个槽可能因原生模块 ABI 不匹配而崩）")))
     elif not os.path.isfile(node_exe):
-        out.append((LEVEL_ERROR, "node", "找不到 %s" % node_exe))
+        out.append((LEVEL_ERROR, "node", T("找不到 %s") % node_exe))
 
     # ── 3. 数据目录 / 临时目录 ─────────────────────────────────
     if not dsh_home:
-        out.append((LEVEL_ERROR, "数据目录", "config.json 里没配 dsh_home"))
+        out.append((LEVEL_ERROR, T("数据目录"), T("config.json 里没配 dsh_home")))
     elif not os.path.isdir(dsh_home):
-        out.append((LEVEL_WARN, "数据目录",
-                    "目录还不存在（首次启动会自动建）：%s" % dsh_home))
+        out.append((LEVEL_WARN, T("数据目录"),
+                    T("目录还不存在（首次启动会自动建）：%s") % dsh_home))
     if not temp_dir:
-        out.append((LEVEL_WARN, "临时目录",
-                    "没配 temp_dir，会继承系统 TEMP，多版本之间不隔离"))
+        out.append((LEVEL_WARN, T("临时目录"),
+                    T("没配 temp_dir，会继承系统 TEMP，多版本之间不隔离")))
     elif not os.path.isdir(temp_dir):
-        out.append((LEVEL_WARN, "临时目录", "目录还不存在：%s" % temp_dir))
+        out.append((LEVEL_WARN, T("临时目录"), T("目录还不存在：%s") % temp_dir))
 
     # ── 4. 三件 bat（缺了不影响管理器，但双击启动会失效）───────
     if root and os.path.isdir(root):
         for n in _BAT_NAMES:
             if not os.path.isfile(os.path.join(root, n)):
-                out.append((LEVEL_WARN, "启动脚本",
-                            "缺 %s（可在管理器里点「生成启动/kill/CLI bat」补）" % n))
+                out.append((LEVEL_WARN, T("启动脚本"),
+                            T("缺 %s（可在管理器里点「生成启动/kill/CLI bat」补）") % n))
         if port:
             kb = os.path.join(root, "kill-%s.bat" % port)
             if not os.path.isfile(kb):
-                out.append((LEVEL_WARN, "启动脚本",
-                            "缺 kill-%s.bat（同上）" % port))
+                out.append((LEVEL_WARN, T("启动脚本"),
+                            T("缺 kill-%s.bat（同上）") % port))
             else:
                 txt = ""
                 try:
@@ -237,8 +238,8 @@ def check_slot(key, cfg, base="", home="", self_dir="", deep=False, node_version
                 except Exception:
                     pass
                 if txt and (":%d" % int(port)) not in txt and str(port) not in txt:
-                    out.append((LEVEL_WARN, "启动脚本",
-                                "kill-%s.bat 里没写端口 %s —— 可能改过端口没重新生成 bat"
+                    out.append((LEVEL_WARN, T("启动脚本"),
+                                T("kill-%s.bat 里没写端口 %s —— 可能改过端口没重新生成 bat")
                                 % (port, port)))
 
         # 4b) dsh.bat 里的 TEMP 是否与 config 的 temp_dir 一致（2026-10-31）
@@ -260,9 +261,9 @@ def check_slot(key, cfg, base="", home="", self_dir="", deep=False, node_version
                     got = s.split("=", 1)[1].strip().strip('"')
                     break
             if got and _norm(got) != _norm(temp_dir):
-                out.append((LEVEL_WARN, "临时目录",
-                            "dsh.bat 里的 TEMP 与配置不符（bat: %s / 配置: %s）—— "
-                            "点「生成启动/kill/CLI bat」重建" % (got, temp_dir)))
+                out.append((LEVEL_WARN, T("临时目录"),
+                            T("dsh.bat 里的 TEMP 与配置不符（bat: %s / 配置: %s）—— "
+                            "点「生成启动/kill/CLI bat」重建") % (got, temp_dir)))
 
         # 4c) 槽内 .tmp：只有**确实不是当前 TEMP、且里面还有东西**才叫历史遗留。
         # 2026-11-11 修：11-02 起新规则就是把临时文件放各槽 `.tmp`，
@@ -277,9 +278,9 @@ def check_slot(key, cfg, base="", home="", self_dir="", deep=False, node_version
             except Exception:
                 pass
             if n:
-                out.append((LEVEL_WARN, "临时目录",
-                            "槽内还有历史遗留的 .tmp（%d 项，旧规则留下的，"
-                            "现在的 TEMP 已不指向它，可整个删除）" % n))
+                out.append((LEVEL_WARN, T("临时目录"),
+                            T("槽内还有历史遗留的 .tmp（%d 项，旧规则留下的，"
+                            "现在的 TEMP 已不指向它，可整个删除）") % n))
 
     # 4d) 临时目录里堆了多少残留（强杀时 dsh 来不及清理自己建的临时目录）
     if temp_dir and os.path.isdir(temp_dir):
@@ -288,8 +289,8 @@ def check_slot(key, cfg, base="", home="", self_dir="", deep=False, node_version
         except Exception:
             n = 0
         if n > 20:
-            out.append((LEVEL_WARN, "临时目录",
-                        "%s 累积了 %d 项（多为强杀/崩溃留下的残留，可清空）"
+            out.append((LEVEL_WARN, T("临时目录"),
+                        T("%s 累积了 %d 项（多为强杀/崩溃留下的残留，可清空）")
                         % (temp_dir, n)))
 
     # ── 5. 深层：包本身是否完整 ────────────────────────────────
@@ -298,28 +299,28 @@ def check_slot(key, cfg, base="", home="", self_dir="", deep=False, node_version
         node_modules = os.path.join(root, "node_modules")
         pj = _read_json(os.path.join(dsh_dir, "package.json"))
         if pj is None:
-            out.append((LEVEL_ERROR, "包清单",
-                        "读不到 %s（目录可能被删/被改）" % os.path.join(dsh_dir, "package.json")))
+            out.append((LEVEL_ERROR, T("包清单"),
+                        T("读不到 %s（目录可能被删/被改）") % os.path.join(dsh_dir, "package.json")))
         else:
             ver = str(pj.get("version") or "")
             if ver:
-                out.append((LEVEL_INFO, "实装版本", ver))
+                out.append((LEVEL_INFO, T("实装版本"), ver))
             deps, miss = _missing_deps(node_modules, dsh_dir)
             if miss:
-                out.append((LEVEL_ERROR, "依赖",
-                            "dsh 声明的 %d 个依赖里有 %d 个找不到：%s%s"
+                out.append((LEVEL_ERROR, T("依赖"),
+                            T("dsh 声明的 %d 个依赖里有 %d 个找不到：%s%s")
                             % (len(deps), len(miss), "、".join(miss[:6]),
-                               " 等" if len(miss) > 6 else "")))
+                               T(" 等") if len(miss) > 6 else "")))
             else:
-                out.append((LEVEL_INFO, "依赖", "%d 个依赖齐备" % len(deps)))
+                out.append((LEVEL_INFO, T("依赖"), T("%d 个依赖齐备") % len(deps)))
             for dep in _NATIVE_DEPS:
                 if dep not in deps:
                     continue
                 ok = _native_ok(node_modules, dep)
                 if ok is False:
-                    out.append((LEVEL_ERROR, "原生模块",
-                                "%s 目录在，但里面没有任何 .node 二进制 —— "
-                                "启动会崩（多半是 npm 装的时候没跑 postinstall）" % dep))
+                    out.append((LEVEL_ERROR, T("原生模块"),
+                                T("%s 目录在，但里面没有任何 .node 二进制 —— "
+                                "启动会崩（多半是 npm 装的时候没跑 postinstall）") % dep))
             # node 版本 vs dsh 要求的 engines
             need = _min_node(pj.get("engines"))
             if need:
@@ -329,18 +330,18 @@ def check_slot(key, cfg, base="", home="", self_dir="", deep=False, node_version
                     if not got_txt:
                         # node.exe 在，但跑不起来 —— 被换成别的文件、或缺 DLL。
                         # 这比"版本太低"更常见，且症状一样是启动即崩。
-                        out.append((LEVEL_WARN, "node 版本",
-                                    "node.exe 在，但跑 `--version` 失败 —— "
-                                    "文件可能损坏或被替换"))
+                        out.append((LEVEL_WARN, T("node 版本"),
+                                    T("node.exe 在，但跑 `--version` 失败 —— "
+                                    "文件可能损坏或被替换")))
                 got = _parse_version(got_txt)
                 if got and got < need:
-                    out.append((LEVEL_ERROR, "node 版本",
-                                "该版本 dsh 要求 node >= %d.%d，本槽是 %s —— "
-                                "原生模块会因 ABI 不匹配而崩"
+                    out.append((LEVEL_ERROR, T("node 版本"),
+                                T("该版本 dsh 要求 node >= %d.%d，本槽是 %s —— "
+                                "原生模块会因 ABI 不匹配而崩")
                                 % (need[0], need[1], got_txt)))
                 elif got:
-                    out.append((LEVEL_INFO, "node 版本",
-                                "%s（要求 >= %d.%d）" % (got_txt, need[0], need[1])))
+                    out.append((LEVEL_INFO, T("node 版本"),
+                                T("%s（要求 >= %d.%d）") % (got_txt, need[0], need[1])))
     return out
 
 
@@ -364,8 +365,8 @@ def check_all(versions, base="", home="", self_dir="", deep=False, node_version=
     glob = []
     for port, keys in sorted(seen.items()):
         if len(keys) > 1:
-            glob.append((LEVEL_ERROR, "端口冲突",
-                         "%s 都配了端口 %d —— 后启动的必然失败" % ("、".join(keys), port)))
+            glob.append((LEVEL_ERROR, T("端口冲突"),
+                         T("%s 都配了端口 %d —— 后启动的必然失败") % ("、".join(keys), port)))
 
     # 两个槽指向同一个槽目录（2026-11-13 新增）。
     # 旧版「重新纳入」会把旧记录的 label / port / 路径整套复制到新槽键上，
@@ -380,9 +381,9 @@ def check_all(versions, base="", home="", self_dir="", deep=False, node_version=
             dirs.setdefault(_norm(r), []).append(key)
     for _d, keys in sorted(dirs.items()):
         if len(keys) > 1:
-            glob.append((LEVEL_ERROR, "重复槽",
-                         "%s 指向同一个槽目录（%s）—— 其实是同一个版本，"
-                         "删掉多余的那条记录即可" % ("、".join(keys), _d)))
+            glob.append((LEVEL_ERROR, T("重复槽"),
+                         T("%s 指向同一个槽目录（%s）—— 其实是同一个版本，"
+                         "删掉多余的那条记录即可") % ("、".join(keys), _d)))
     result["_global"] = glob
     return result
 
@@ -399,9 +400,9 @@ def worst_level(items):
 def summary(items):
     """一行摘要，如「2 个错误、1 个警告」。"""
     if not items:
-        return "未发现问题"
+        return T("未发现问题")
     cnt = {}
     for it in items:
         cnt[it[0]] = cnt.get(it[0], 0) + 1
     order = [LEVEL_ERROR, LEVEL_WARN, LEVEL_INFO]
-    return "、".join("%d 个%s" % (cnt[lv], lv) for lv in order if cnt.get(lv))
+    return "、".join(T("%d 个%s") % (cnt[lv], lv) for lv in order if cnt.get(lv))

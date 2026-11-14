@@ -21,6 +21,7 @@ import json
 import os
 import shutil
 import stat
+from dsh_i18n import T
 
 # Windows 上 junction / 符号链接的 reparse 属性位
 _REPARSE_FLAG = 0x400
@@ -50,7 +51,7 @@ def tree_stats(root):
     links = 0
     errors = []
     if not os.path.isdir(root):
-        return {"files": 0, "bytes": 0, "links": 0, "errors": ["不是目录：%s" % root]}
+        return {"files": 0, "bytes": 0, "links": 0, "errors": [T("不是目录：%s") % root]}
     for dirpath, dirnames, filenames in os.walk(root, topdown=True):
         # 剪掉 junction/链接目录，防止走到槽外
         keep = []
@@ -131,7 +132,7 @@ def _safe_rmtree(path):
 
     _walk(path)
     if os.path.exists(path):
-        return "；".join(errors[:3]) or ("无法删除：%s" % path)
+        return "；".join(errors[:3]) or (T("无法删除：%s") % path)
     return ""
 
 
@@ -182,7 +183,7 @@ def _copy_tree_no_follow(src, dst):
             try:
                 shutil.copy2(full, os.path.join(tgt_dir, fn))
             except Exception as e:
-                raise RuntimeError("复制 %s 失败：%s" % (full, e))
+                raise RuntimeError(T("复制 %s 失败：%s") % (full, e))
     return copied_links
 
 
@@ -204,7 +205,7 @@ def _free_bytes(path):
         return None
 
 
-def plan_move(src_base, dst_base, slot_dirs, backup_dirname="dsh备份",
+def plan_move(src_base, dst_base, slot_dirs, backup_dirname=T("dsh备份"),
               temp_rootname="dsh-temp"):
     """算出搬迁计划，不改任何东西。
 
@@ -217,7 +218,7 @@ def plan_move(src_base, dst_base, slot_dirs, backup_dirname="dsh备份",
     dst_base = os.path.normpath(os.path.abspath(dst_base))
 
     if os.path.normcase(src_base) == os.path.normcase(dst_base):
-        return {"ok": False, "error": "目标位置与当前位置相同，无需移动。", "steps": [], "slots": []}
+        return {"ok": False, "error": T("目标位置与当前位置相同，无需移动。"), "steps": [], "slots": []}
 
     # 目标不能是源的一部分（会自己搬自己）
     def _inside(child, parent):
@@ -227,8 +228,8 @@ def plan_move(src_base, dst_base, slot_dirs, backup_dirname="dsh备份",
 
     if _inside(dst_base, src_base) or _inside(src_base, dst_base):
         return {"ok": False,
-                "error": "目标位置与当前位置互相包含（一个在另一个里面），无法移动。\n"
-                         "请选一个完全分开的位置。", "steps": [], "slots": []}
+                "error": T("目标位置与当前位置互相包含（一个在另一个里面），无法移动。\n"
+                         "请选一个完全分开的位置。"), "steps": [], "slots": []}
 
     src_versions = os.path.join(src_base, "dsh-versions")
     dst_versions = os.path.join(dst_base, "dsh-versions")
@@ -238,29 +239,29 @@ def plan_move(src_base, dst_base, slot_dirs, backup_dirname="dsh备份",
         s = os.path.join(src_versions, name)
         d = os.path.join(dst_versions, name)
         if not os.path.isdir(s):
-            return {"ok": False, "error": "源槽不存在：%s" % s, "steps": [], "slots": []}
+            return {"ok": False, "error": T("源槽不存在：%s") % s, "steps": [], "slots": []}
         if os.path.exists(d):
             return {"ok": False,
-                    "error": "目标位置已存在同名目录，为避免覆盖已中止：\n%s" % d,
+                    "error": T("目标位置已存在同名目录，为避免覆盖已中止：\n%s") % d,
                     "steps": [], "slots": []}
         st = tree_stats(s)
         slots.append({"name": name, "src": s, "dst": d, "stats": st})
-        steps.append("复制 %s → %s（%d 个文件，%.1f MB）"
+        steps.append(T("复制 %s → %s（%d 个文件，%.1f MB）")
                      % (s, d, st["files"], st["bytes"] / 1048576.0))
 
     if not slots:
-        return {"ok": False, "error": "没有要移动的槽。", "steps": [], "slots": []}
+        return {"ok": False, "error": T("没有要移动的槽。"), "steps": [], "slots": []}
 
     # 备份目录
     src_bak = os.path.join(src_base, backup_dirname)
     dst_bak = os.path.join(dst_base, backup_dirname)
     if os.path.isdir(src_bak):
-        steps.append("复制备份目录 %s → %s" % (src_bak, dst_bak))
+        steps.append(T("复制备份目录 %s → %s") % (src_bak, dst_bak))
     # 临时目录
     src_tmp = os.path.join(src_base, temp_rootname)
     dst_tmp = os.path.join(dst_base, temp_rootname)
     if os.path.isdir(src_tmp):
-        steps.append("复制临时目录 %s → %s" % (src_tmp, dst_tmp))
+        steps.append(T("复制临时目录 %s → %s") % (src_tmp, dst_tmp))
 
     # 空间预检（2026-11-14）：跨盘搬迁最常见的失败就是「拷到一半盘满」。
     # 与其拷到 70% 再报错（旧位置还占着、新位置一堆残件），不如事前算清楚。
@@ -275,9 +276,9 @@ def plan_move(src_base, dst_base, slot_dirs, backup_dirname="dsh备份",
     margin = int(need * 0.05) + 200 * 1048576      # 5% + 200MB 余量
     if free is not None and need + margin > free:
         return {"ok": False,
-                "error": ("目标磁盘空间不足，已中止（什么都没动）：\n"
+                "error": (T("目标磁盘空间不足，已中止（什么都没动）：\n"
                           "需要约 %.2f GB（含 5%% 余量），该盘可用 %.2f GB。\n\n"
-                          "请清理空间，或换一个位置。"
+                          "请清理空间，或换一个位置。")
                           % ((need + margin) / 1073741824.0,
                              free / 1073741824.0)),
                 "steps": [], "slots": []}
@@ -297,7 +298,7 @@ def move_now(plan, config_path, progress=None):
     **只有校验通过才改 config 和删源**；任何失败都保留源、回滚 config。
     """
     if not isinstance(plan, dict) or not plan.get("ok"):
-        return False, (plan or {}).get("error") or "搬迁计划无效"
+        return False, (plan or {}).get("error") or T("搬迁计划无效")
 
     def step(msg):
         if progress is not None:
@@ -310,20 +311,20 @@ def move_now(plan, config_path, progress=None):
 
     # ① 复制并校验每个槽
     for s in plan["slots"]:
-        step("复制 %s …" % s["name"])
+        step(T("复制 %s …") % s["name"])
         try:
             _copy_tree_no_follow(s["src"], s["dst"])
         except Exception as e:
             _safe_rmtree(s["dst"])
-            return False, "复制 %s 失败：%s\n源未改动。" % (s["name"], e)
+            return False, T("复制 %s 失败：%s\n源未改动。") % (s["name"], e)
         # ② 校验
-        step("校验 %s …" % s["name"])
+        step(T("校验 %s …") % s["name"])
         a = s["stats"]
         b = tree_stats(s["dst"])
         if b["files"] != a["files"] or b["bytes"] != a["bytes"]:
             _safe_rmtree(s["dst"])
-            return False, ("%s 校验失败（源 %d 文件 / %d 字节，目标 %d 文件 / %d 字节），"
-                           "已删除目标副本，源未改动。"
+            return False, (T("%s 校验失败（源 %d 文件 / %d 字节，目标 %d 文件 / %d 字节），"
+                           "已删除目标副本，源未改动。")
                            % (s["name"], a["files"], a["bytes"],
                               b["files"], b["bytes"]))
 
@@ -332,19 +333,19 @@ def move_now(plan, config_path, progress=None):
         src = plan.get("src_%s" % key)
         dst = plan.get("dst_%s" % key)
         if src and os.path.isdir(src) and not os.path.exists(dst):
-            step("复制 %s …" % os.path.basename(src))
+            step(T("复制 %s …") % os.path.basename(src))
             try:
                 shutil.copytree(src, dst, symlinks=True)
             except Exception:
                 pass        # 备份/临时目录复制失败不阻断主流程
 
     # ④ 改 config.json：把 <base> 之类解析后的旧根换成新根
-    step("更新 config.json …")
+    step(T("更新 config.json …"))
     try:
         with open(config_path, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
     except Exception as e:
-        return False, "读取 config.json 失败（副本已复制到新位置，源未删）：%s" % e
+        return False, T("读取 config.json 失败（副本已复制到新位置，源未删）：%s") % e
 
     old_base = plan["src_base"]
     new_base = plan["dst_base"]
@@ -390,18 +391,18 @@ def move_now(plan, config_path, progress=None):
             os.remove(tmp)
         except Exception:
             pass
-        return False, "写入 config.json 失败（副本已复制，源未删）：%s" % e
+        return False, T("写入 config.json 失败（副本已复制，源未删）：%s") % e
 
     # ⑤ 删源
     failed = []
     for s in plan["slots"]:
-        step("清理旧位置 %s …" % s["name"])
+        step(T("清理旧位置 %s …") % s["name"])
         err = _safe_rmtree(s["src"])
         if err:
             failed.append("%s（%s）" % (s["name"], err))
 
     if failed:
-        return True, ("搬迁完成，config 已指向新位置。\n"
-                      "但以下旧目录未能删除，可以手动清理：\n  " + "\n  ".join(failed))
+        return True, (T("搬迁完成，config 已指向新位置。\n"
+                      "但以下旧目录未能删除，可以手动清理：\n  ") + "\n  ".join(failed))
 
-    return True, "搬迁完成：%d 个槽已移到新位置，config.json 已更新。" % len(plan["slots"])
+    return True, T("搬迁完成：%d 个槽已移到新位置，config.json 已更新。") % len(plan["slots"])

@@ -668,9 +668,9 @@ def _clean_stale_lock(key):
     except Exception:
         pid = None
     if pid is None:
-        stale, why = True, "内容不是 PID"
+        stale, why = True, T("内容不是 PID")
     elif not _pid_alive(pid):
-        stale, why = True, "持有者已死"
+        stale, why = True, T("持有者已死")
     elif not _holder_is_this_slot(key, pid):
         stale, why = True, T("pid=%d 存活但不是本槽 dsh（PID 复用）") % pid
     else:
@@ -2052,7 +2052,7 @@ try:
         _ct.windll.user32.SendMessageW(_hwnd, 0x80, 0, _hs or _hb)
         _rb = _ct.windll.user32.GetClassLongPtrW(_hwnd, -14)
         log(T("已在窗口显示前设置顶层窗口(%s)图标，回读 GCLP_HICON=%s")
-            % (_hwnd, "成功" if _rb == _hb else "失败(%s)" % _rb))
+            % (_hwnd, T("成功") if _rb == _hb else T("失败(%s)") % _rb))
     else:
         log(T("未能取到 ico 帧或顶层窗口，窗口将使用 Tk 默认图标"))
 except Exception as _e:
@@ -4249,7 +4249,7 @@ def _adopt_row_info(version, loc):
         info = dsh_adopt.inspect_adopt_source(nm) if dsh_adopt else {}
     except Exception as e:
         info = {"ok": False, "problems": [T("体检失败：%s") % e], "warnings": []}
-    kind = "npm 全局" if (loc or {}).get("kind") == "npm-global" else "版本目录"
+    kind = T("npm 全局") if (loc or {}).get("kind") == "npm-global" else T("版本目录")
     ver = version or info.get("version") or "?"
     dsh_dir = info.get("dsh_dir") or ""
     have = lambda rel: bool(dsh_dir) and os.path.isfile(os.path.join(dsh_dir, rel))
@@ -4268,16 +4268,17 @@ def _adopt_row_info(version, loc):
     # 2026-11-02：给普通用户一句**能看懂**的摘要；下面的逐项体检细节收进"详情"。
     _deps_missing = len(info.get("deps_missing") or [])
     if info.get("ok") and not _deps_missing:
-        _summary = "可以纳入"
+        _summary = T("可以纳入")
     elif info.get("ok"):
         _summary = T("可以纳入（有 %d 个可选依赖缺失，一般不影响使用）") % _deps_missing
     else:
-        _summary = "这个安装不完整，暂时不能纳入"
+        _summary = T("这个安装不完整，暂时不能纳入")
     # 2026-11-14：告诉用户「勾了之后会发生什么」—— 版本根下的原地接回（几秒），
     # 别处的要复制一份（几百 MB）。原来只在顶部写一段笼统说明，看不出这一行是哪种。
     _root = os.path.dirname(os.path.abspath(nm)) if nm else ""
     try:
-        _action = "原地接回" if _is_under_path(_root, _versions_root()) else "复制一份"
+        _action = (T("原地接回") if _is_under_path(_root, _versions_root())
+                   else T("复制一份"))
     except Exception:
         _action = ""
     return {"ok": bool(info.get("ok")), "version": ver, "kind": kind, "nm": nm,
@@ -4958,7 +4959,7 @@ def _slot_brief(key):
     ver = INSTALLED.get(key) or T("未知")
     running = port_open(cfg["port"]) or proc_alive(procs.get(key))
     return T("%s（%s，端口 %d，实装 %s）· %s") % (
-        key, cfg["label"], cfg["port"], ver, "运行中" if running else "已停止")
+        key, cfg["label"], cfg["port"], ver, T("运行中") if running else T("已停止"))
 
 
 def _stop_for_uninstall(key, port):
@@ -5838,7 +5839,7 @@ for key in SLOT_KEYS:
     log(T("[%s] 实装版本=%s") % (key, INSTALLED.get(key) or T("未知（读 package.json 失败，可能未装好）")))
     log("[%s] cmd  = %s" % (key, " ".join(_build_cmd(key))))
     log("[%s] DSH_HOME=%s  port=%d  browser=%s"
-        % (key, cfg["dsh_home"] or "(默认 ~/.dsh)", cfg["port"], cfg["browser"]))
+        % (key, cfg["dsh_home"] or T("(默认 ~/.dsh)"), cfg["port"], cfg["browser"]))
     # 逐槽对一遍「形状」：自带 node / bin.js / 数据目录 / 临时目录 / 三件 bat。
     # 只写日志不弹框 —— 缺个 kill bat 之类不值得打断启动，但排障时能一眼看到
     # 「哪个槽和别的槽不一样」。启动失败时的弹框在 _start_slot 里另有一套。
@@ -6600,8 +6601,9 @@ def _apply_theme_mode(mode, persist=True):
             _save_ui_field("theme", _THEME_CUR["mode"])
         except Exception:
             pass
-    log(T("[主题] 已切换为：%s") % {"system": "跟随系统", "light": "浅色",
-                                 "dark": "深色"}.get(_THEME_CUR["mode"], mode))
+    # 主题名也要跟着界面语言走 —— 它是显示用的，不是枚举值
+    log(T("[主题] 已切换为：%s") % T({"system": "跟随系统", "light": "浅色",
+                                    "dark": "深色"}.get(_THEME_CUR["mode"], mode)))
 
 
 def _save_ui_field(key, value):
@@ -7185,7 +7187,7 @@ def move_install_root_dialog():
 
     cur = ttk.Frame(win)
     cur.pack(padx=20, fill="x")
-    ttk.Label(cur, text=T("当前位置")).pack(side="left")
+    ttk.Label(cur, text=T("当前位置")).pack(side="left", padx=(0, 6))
     ttk.Label(cur, text=os.path.normpath(INSTALL_BASE),
               foreground=_MUTED).pack(side="left")
 
@@ -7193,7 +7195,7 @@ def move_install_root_dialog():
 
     row = ttk.Frame(win)
     row.pack(padx=20, pady=(8, 0), fill="x")
-    ttk.Label(row, text=T("新位置")).pack(side="left")
+    ttk.Label(row, text=T("新位置")).pack(side="left", padx=(0, 6))
     ent = ttk.Entry(row, textvariable=newv, width=42, font=("Consolas", 9))
     ent.pack(side="left", padx=(0, 6), fill="x", expand=True)
 
@@ -7969,7 +7971,7 @@ def _settings_display_dialog():
             d = T("其他程序：%s") % os.path.basename(cur)
             _bmap[d] = cur
             vals.append(d)
-        vals.append(_B_OTHER)
+        vals.append(T(_B_OTHER))
         return vals
 
     def _b_display(v):

@@ -1536,7 +1536,7 @@ chk("C3z27g 修复入口在槽体检里，且只对「有错误/警告」的槽�
 
 
 chk("C3z26d _adopt_row_info 按位置算出 action",
-    'action = "原地接回"' in _fn_body("_adopt_row_info")
+    'T("原地接回")' in _fn_body("_adopt_row_info")
     and '"action": _action' in _fn_body("_adopt_row_info"))
 chk("C3z21c 挑 node 来源时传 dict（曾传 list 报 items 错误）",
     # 2026-11-14：这段逻辑抽成了 _pick_node_source（接回也要用）

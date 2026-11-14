@@ -25,6 +25,7 @@
 import hashlib
 import json
 import os
+from dsh_i18n import T
 
 # 每个 profile 里要盯的文件（相对 profiles/<name>/）。只挑「改了就说明配置变了」的：
 #   cordis.yml        —— 插件启停与配置
@@ -135,30 +136,30 @@ def diff(old, new):
     np = (new.get("profiles") or {})
 
     for name in sorted(set(np) - set(op)):
-        out.append("新 profile：%s（%d 个插件）" % (name, len(np[name].get("deps") or {})))
+        out.append(T("新 profile：%s（%d 个插件）") % (name, len(np[name].get("deps") or {})))
     for name in sorted(set(op) - set(np)):
-        out.append("profile 消失：%s" % name)
+        out.append(T("profile 消失：%s") % name)
 
     for name in sorted(set(op) & set(np)):
         o, n = op[name], np[name]
         od, nd = o.get("deps") or {}, n.get("deps") or {}
         for pkg in sorted(set(nd) - set(od)):
-            out.append("插件 +%s@%s（%s）" % (pkg, nd[pkg], name))
+            out.append(T("插件 +%s@%s（%s）") % (pkg, nd[pkg], name))
         for pkg in sorted(set(od) - set(nd)):
-            out.append("插件 -%s（%s）" % (pkg, name))
+            out.append(T("插件 -%s（%s）") % (pkg, name))
         for pkg in sorted(set(od) & set(nd)):
             if od[pkg] != nd[pkg]:
-                out.append("插件 ~%s %s→%s（%s）" % (pkg, od[pkg], nd[pkg], name))
+                out.append(T("插件 ~%s %s→%s（%s）") % (pkg, od[pkg], nd[pkg], name))
         ob, nb = set(o.get("bundles") or []), set(n.get("bundles") or [])
         for b in sorted(nb - ob):
-            out.append("启用列表 +%s（%s）" % (b, name))
+            out.append(T("启用列表 +%s（%s）") % (b, name))
         for b in sorted(ob - nb):
-            out.append("启用列表 -%s（%s）" % (b, name))
+            out.append(T("启用列表 -%s（%s）") % (b, name))
         of, nf = o.get("files") or {}, n.get("files") or {}
         for fn in sorted(set(of) | set(nf)):
             if of.get(fn) != nf.get(fn):
-                what = "新增" if fn not in of else ("被删除" if fn not in nf else "被修改")
-                out.append("配置 %s/%s %s" % (name, fn, what))
+                what = T("新增") if fn not in of else (T("被删除") if fn not in nf else T("被修改"))
+                out.append(T("配置 %s/%s %s") % (name, fn, what))
     return out
 
 
@@ -171,15 +172,15 @@ def plugin_lines(home, limit=0):
         deps = info.get("deps") or {}
         bundles = info.get("bundles") or []
         if not deps:
-            lines.append("%s：没有装插件" % name)
+            lines.append(T("%s：没有装插件") % name)
             continue
         items = ["%s@%s" % (k, v) for k, v in sorted(deps.items())]
         if limit and len(items) > limit:
             shown = "、".join(items[:limit])
-            lines.append("%s：%d 个 —— %s …（另 %d 个）"
+            lines.append(T("%s：%d 个 —— %s …（另 %d 个）")
                          % (name, len(items), shown, len(items) - limit))
         else:
-            lines.append("%s：%d 个 —— %s" % (name, len(items), "、".join(items)))
+            lines.append(T("%s：%d 个 —— %s") % (name, len(items), "、".join(items)))
         if bundles:
-            lines.append("%s 启用顺序：%s" % (name, "、".join(bundles)))
+            lines.append(T("%s 启用顺序：%s") % (name, "、".join(bundles)))
     return lines

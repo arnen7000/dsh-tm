@@ -67,7 +67,7 @@ def backup_config(path, stamp=None):
         shutil.copyfile(path, bak)
         return bak
     except Exception as e:
-        raise IOError("备份 config.json 失败（已中止，避免写坏配置）：%s" % e)
+        raise IOError(T("备份 config.json 失败（已中止，避免写坏配置）：%s") % e)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -102,7 +102,7 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
     返回 (ok, 新槽 key, 说明)。"""
     p = progress or Progress()
     if adopt_mod is None:
-        return (False, "", "缺少 dsh_adopt.py 模块，无法规划槽位")
+        return (False, "", T("缺少 dsh_adopt.py 模块，无法规划槽位"))
 
     # ── 1) 体检来源 ────────────────────────────────────────────────────
     # 为什么必须体检：纳入的动作是「复制一份并登记」。来源若是半装/装坏的
@@ -111,15 +111,15 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
     # 的启动逻辑有问题。所以这里宁可拒绝：坏的就该重新装（「安装官方版 dsh」）。
     info = adopt_mod.inspect_adopt_source(node_modules)
     if not info.get("ok"):
-        return (False, "", "这个目录不能纳入（体检不通过）：\n  "
-                + "\n  ".join(info.get("problems") or ["原因未知"])
-                + "\n\n建议：改用「安装官方版 dsh」从官方源装一份完整的。")
+        return (False, "", T("这个目录不能纳入（体检不通过）：\n  ")
+                + "\n  ".join(info.get("problems") or [T("原因未知")])
+                + T("\n\n建议：改用「安装官方版 dsh」从官方源装一份完整的。"))
     dsh_dir = info["dsh_dir"]
     ver = info["version"]
 
     existing = (read_config(config_path).get("versions") or {})
     if len(existing) >= max_slots:
-        return (False, "", "槽位已满（%d/%d），请先用「设置 → 版本管理 → 卸载 / 移出管理」卸掉不用的槽"
+        return (False, "", T("槽位已满（%d/%d），请先用「设置 → 版本管理 → 卸载 / 移出管理」卸掉不用的槽")
                 % (len(existing), max_slots))
 
     # 注意：不要把 backup_root 当 temp_root 传下去 —— 那是「用户数据备份目录」，
@@ -128,12 +128,12 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
                                 taken_ports, node_exe_source=node_exe_source,
                                 browser=browser, temp_root=temp_root)
     if not plan.get("ok"):
-        return (False, "", plan.get("error") or "规划槽位失败")
+        return (False, "", plan.get("error") or T("规划槽位失败"))
 
     root = plan["root"]
     if not backup_root:
         base_for_backup = install_base or os.path.dirname(os.path.abspath(versions_root))
-        backup_root = os.path.join(base_for_backup, "dsh备份")
+        backup_root = os.path.join(base_for_backup, T("dsh备份"))
 
     p.on_step(T("备份配置…"))
     try:
@@ -164,8 +164,8 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
         # 空串 = 源数据目录为空、无需备份（不是失败）；None 才是真失败。
         # 2026-11-12：以前用 `if not src_backup`，空目录会被当成失败中止纳入。
         if src_backup is None:
-            return (False, "", "备份原来的用户数据失败，已中止（没有做任何改动）：\n%s"
-                    % (berr or "原因未知"))
+            return (False, "", T("备份原来的用户数据失败，已中止（没有做任何改动）：\n%s")
+                    % (berr or T("原因未知")))
         p.on_step(T("已备份到 %s") % src_backup)
 
     # node 运行时：源可能是文件或目录；找不到就别硬来——没有独立 node 的槽
@@ -190,7 +190,7 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
         os.makedirs(plan["temp_dir"], exist_ok=True)
     except Exception as e:
         _cleanup_partial(root, versions_root)
-        return (False, "", "创建数据/临时目录失败（已清理未完成目录）：%s" % e)
+        return (False, "", T("创建数据/临时目录失败（已清理未完成目录）：%s") % e)
 
     # 只复制（源目录与备份都不动）：新槽仍是独立的一份，用户打开还是原来的会话。
     # 复制完当场核对 —— 不完整就中止，不能"新槽看着正常、只少了几个会话"。
@@ -204,22 +204,22 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
         except Exception as e:
             _cleanup_partial(root, versions_root)
             return (False, "",
-                    "把原用户数据复制进新槽失败，已中止（原数据与备份都没动）：%s\n"
-                    "备份仍在：%s" % (e, src_backup))
+                    T("把原用户数据复制进新槽失败，已中止（原数据与备份都没动）：%s\n"
+                    "备份仍在：%s") % (e, src_backup))
         if missing or copy_fails:
             _cleanup_partial(root, versions_root)
             return (False, "",
-                    "原用户数据复制不完整，已中止（原数据与备份都没动）：\n"
+                    T("原用户数据复制不完整，已中止（原数据与备份都没动）：\n"
                     "  · 应复制 %d 个文件，缺 %d 个%s\n"
                     "  · 拷不动 %d 个%s\n"
                     "常见原因：那个 dsh 还在运行，锁住了 .dsh-home 里的文件。"
-                    "请先退出它再重试。\n备份仍在：%s"
+                    "请先退出它再重试。\n备份仍在：%s")
                     % (total, len(missing),
-                       ("（例：%s）" % missing[0]) if missing else "",
+                       (T("（例：%s）") % missing[0]) if missing else "",
                        len(copy_fails),
-                       ("（例：%s —— %s）" % copy_fails[0]) if copy_fails else "",
+                       (T("（例：%s —— %s）") % copy_fails[0]) if copy_fails else "",
                        src_backup))
-        data_note = "，原用户数据已带过来（备份在 %s）" % src_backup
+        data_note = T("，原用户数据已带过来（备份在 %s）") % src_backup
 
     # 先把体积/文件数报出来：复制 700+ MB / 6 万文件时进度窗只有一行文字，
     # 不给数字用户会以为卡死（2026-11-12 实测，等到强杀）。
@@ -235,7 +235,7 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
                         dirs_exist_ok=True)
     except Exception as e:
         _cleanup_partial(root, versions_root)
-        return (False, "", "复制程序目录失败（已清理未完成目录）：%s" % e)
+        return (False, "", T("复制程序目录失败（已清理未完成目录）：%s") % e)
 
     # 复制完再验一次：版本号必须与体检时读到的一致，入口文件必须在。
     # 复制几百 MB 时偶发"复制到一半中断/杀软锁文件"，不验就会登记一个坏槽。
@@ -244,15 +244,15 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
     new_ver = adopt_mod.read_package_version(new_dsh_dir)
     if not new_ver:
         _cleanup_partial(root, versions_root)
-        return (False, "", "复制后读不到版本号（复制可能被中断，已清理未完成目录）。"
-                           "请重试，或改用「安装官方版 dsh」。")
+        return (False, "", T("复制后读不到版本号（复制可能被中断，已清理未完成目录）。"
+                           "请重试，或改用「安装官方版 dsh」。"))
     if ver and new_ver != ver:
         _cleanup_partial(root, versions_root)
-        return (False, "", "复制后版本号不一致（体检时 %s，复制后 %s），已清理未完成目录。"
+        return (False, "", T("复制后版本号不一致（体检时 %s，复制后 %s），已清理未完成目录。")
                 % (ver, new_ver))
     if not os.path.isfile(os.path.join(new_dsh_dir, "lib", "bin.js")):
         _cleanup_partial(root, versions_root)
-        return (False, "", "复制后缺 lib/bin.js（复制不完整，已清理未完成目录）。")
+        return (False, "", T("复制后缺 lib/bin.js（复制不完整，已清理未完成目录）。"))
 
     # 把被跳过的 junction 重建回来（插件就挂在这些链接上）。
     # 指向旧安装目录的改指新槽，指向槽外仓库的原样指回去。
@@ -267,9 +267,9 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
             made, lost = [], [(r, t) for r, t in src_links]
             p.on_step(T("提示：重建插件链接失败：%s") % e)
         if made:
-            data_note += "，%d 个插件链接已重建" % len(made)
+            data_note += T("，%d 个插件链接已重建") % len(made)
         if lost:
-            data_note += ("，%d 个链接的目标已不存在（插件可能要在管理器里重装）"
+            data_note += (T("，%d 个链接的目标已不存在（插件可能要在管理器里重装）")
                           % len(lost))
 
     p.on_step(T("写入配置…"))
@@ -283,7 +283,7 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
         write_config_atomic(config_path, cfg)
     except Exception as e:
         _cleanup_partial(root, versions_root)
-        return (False, "", "写 config.json 失败（已清理未完成目录，原文件保持不变）：%s" % e)
+        return (False, "", T("写 config.json 失败（已清理未完成目录，原文件保持不变）：%s") % e)
 
     # ── 4) 与既有槽对齐：三件 bat + 形状校验 ──────────────────────────
     # 纳入出来的槽若缺 dsh.bat / dsh-cli.bat / kill-<port>.bat，用户双击目录
@@ -293,7 +293,7 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
         bat_note = _gen_slot_bats(adopt_mod, slot_cfg, root, plan["slot_key"],
                                install_base)
     except Exception as e:
-        bat_note = "（生成 bat 失败：%s；可在管理器里点「生成启动/kill/CLI bat」补）" % e
+        bat_note = T("（生成 bat 失败：%s；可在管理器里点「生成启动/kill/CLI bat」补）") % e
 
     shape = slot_shape_problems(slot_cfg, install_base or "",
                                 os.path.expanduser("~"),
@@ -314,10 +314,10 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
     })
     tail = data_note + bat_note
     if info.get("warnings"):
-        tail += "\n\n来源体检的提醒：\n  " + "\n  ".join(info["warnings"])
+        tail += T("\n\n来源体检的提醒：\n  ") + "\n  ".join(info["warnings"])
     if hard:
-        tail += "\n\n注意：纳入后仍有问题：\n  " + "\n  ".join(hard)
-    return (True, plan["slot_key"], "已纳入为槽 %s（%s，端口 %d）%s"
+        tail += T("\n\n注意：纳入后仍有问题：\n  ") + "\n  ".join(hard)
+    return (True, plan["slot_key"], T("已纳入为槽 %s（%s，端口 %d）%s")
             % (plan["slot_key"], plan["label"], plan["port"], tail))
 
 
@@ -408,7 +408,7 @@ def _reuse_empty_shell(versions_root, dir_name):
         return ""
     if os.path.exists(p):
         return ""
-    return "%s 是上次卸载残留的空目录（没有任何文件），已清掉并复用这个槽名" % dir_name
+    return T("%s 是上次卸载残留的空目录（没有任何文件），已清掉并复用这个槽名") % dir_name
 
 
 def _drop_partial_install(root, dsh_home, versions_root=""):
@@ -480,7 +480,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
     p = progress or Progress()
 
     if adopt_mod is None:
-        return (False, "", "缺少 dsh_adopt.py 模块")
+        return (False, "", T("缺少 dsh_adopt.py 模块"))
     # dist-tag（latest / next / beta / alpha）是 npm 的合法入参，安装内核
     # 也直接支持（`@deepseek-ai/dsh@latest`）。用户从版本列表里可能直接手填标签，
     # 这里不能按"版本号格式不对"打回去 —— 装完会用 package.json 的真实版本回填 label。
@@ -490,13 +490,13 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
     else:
         ver = adopt_mod.normalize_version(version_text)
         if not ver:
-            return (False, "", "版本号「%s」不符合官方格式。%s"
+            return (False, "", T("版本号「%s」不符合官方格式。%s")
                     % (version_text, adopt_mod.version_hint()))
 
     existing = (read_config(config_path).get("versions") or {})
     if len(existing) >= max_slots:
-        return (False, "", "槽位已满（%d/%d）。管理器最多管理 %d 个版本，"
-                          "请先用「设置 → 版本管理 → 卸载 / 移出管理」卸掉不用的槽。"
+        return (False, "", T("槽位已满（%d/%d）。管理器最多管理 %d 个版本，"
+                          "请先用「设置 → 版本管理 → 卸载 / 移出管理」卸掉不用的槽。")
                 % (len(existing), max_slots, max_slots))
 
     versions_root = versions_root or os.path.join(install_base, "dsh-versions")
@@ -507,13 +507,13 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
     reuse_note = _reuse_empty_shell(versions_root, dir_name)
     root, dir_name = adopt_mod.unique_dir(versions_root, dir_name)
     if versions_names and dir_name in versions_names:
-        return (False, "", "槽名 %s 已在使用" % dir_name)
+        return (False, "", T("槽名 %s 已在使用") % dir_name)
     if not root:
-        return (False, "", "无法在 %s 下分配目录名" % versions_root)
+        return (False, "", T("无法在 %s 下分配目录名") % versions_root)
 
     port = adopt_mod.suggest_port(int(slot_key[1:]), taken_ports)
     if not port:
-        return (False, "", "4080 起找不到空闲端口，请手工在 config.json 里指定")
+        return (False, "", T("4080 起找不到空闲端口，请手工在 config.json 里指定"))
 
     # 目录重名而加后缀时，同一个 slot_key 会算出同一个端口 —— 新槽就与旧槽
     # 撞端口了（两个 dsh 抢同一个监听口，后启动的那个直接失败，而且界面只显示
@@ -538,7 +538,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
         os.makedirs(dsh_home, exist_ok=True)
         os.makedirs(temp_dir, exist_ok=True)
     except Exception as e:
-        return (False, "", "创建目录失败：%s" % e)
+        return (False, "", T("创建目录失败：%s") % e)
 
     # ── node 必须**复制**一份进新槽，不能只引用别槽的 ──────────────────
     # 隔离的设计前提是「每槽自带 node」：换版本时用本槽的 node 跑 npm，
@@ -551,7 +551,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
         p.on_step(T("复制 node 运行时到本槽（每槽独立，ABI 稳定）…"))
         node_exe, nerr = adopt_mod.copy_node_exe(node_src, root)
         if not node_exe:
-            return (False, "", "复制 node 运行时失败：%s" % nerr)
+            return (False, "", T("复制 node 运行时失败：%s") % nerr)
     else:
         # 首槽 / 既有槽都没自带 node 时才退回系统 node，并说清代价，
         # 别让用户以为拿到了完整隔离。
@@ -580,7 +580,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
         write_config_atomic(config_path, cfg)
     except Exception as e:
         _drop_partial_install(root, dsh_home, versions_root)
-        return (False, "", "写 config.json 失败：%s" % e)
+        return (False, "", T("写 config.json 失败：%s") % e)
 
     p.on_step(T("从官方仓库安装 %s（走 npm registry，可能要几分钟）…") % ver)
     rc, out = _npm_install_slot(node_exe, root, ver, progress=p)
@@ -588,21 +588,21 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
     if rc != 0:
         hint = ""
         if _looks_like_network_error(out):
-            hint = ("\n\n这是**网络中断**（ECONNRESET / 超时之类），"
+            hint = (T("\n\n这是**网络中断**（ECONNRESET / 超时之类），"
                     "官方源和镜像 %s 都没成功。\n"
                     "常见原因：代理 / VPN 干扰、公司网络限制、或 npm 源临时故障。"
-                    "稍后重试通常可恢复。" % FALLBACK_REGISTRY)
+                    "稍后重试通常可恢复。") % FALLBACK_REGISTRY)
         elif rc < 0:
-            hint = ("\n\n负数退出码多为网络类错误（-4077=ECONNRESET 连接被重置、"
-                    "-4078=ECONNREFUSED 等），稍后重试通常可恢复。")
+            hint = (T("\n\n负数退出码多为网络类错误（-4077=ECONNRESET 连接被重置、"
+                    "-4078=ECONNREFUSED 等），稍后重试通常可恢复。"))
         # 失败当场收回残件：否则 package.json（npm init -y 的产物）会让这个目录
         # 不再算"空壳"，下次重试就变成 dshV1-2。详见 _drop_partial_install。
         cleaned = _drop_partial_install(root, dsh_home, versions_root)
         if cleaned:
             _unregister_slot(config_path, slot_key)
-            hint += ("\n\n本次未完成的目录已清理（槽名 %s 已还回来），"
-                     "直接重试即可，不会再多出一个 %s-2。" % (dir_name, dir_name))
-        return (False, "", "安装失败（退出码 %d）。最后几行输出：\n%s%s"
+            hint += (T("\n\n本次未完成的目录已清理（槽名 %s 已还回来），"
+                     "直接重试即可，不会再多出一个 %s-2。") % (dir_name, dir_name))
+        return (False, "", T("安装失败（退出码 %d）。最后几行输出：\n%s%s")
                 % (rc, _tail(out), hint))
 
     p.on_step(T("校验安装结果…"))
@@ -610,11 +610,11 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
         cleaned = _drop_partial_install(root, dsh_home, versions_root)
         if cleaned:
             _unregister_slot(config_path, slot_key)
-        return (False, slot_key, "安装结束但没找到 %s。请看日志里的 npm 输出，"
-                                 "多半是网络或镜像问题。%s"
+        return (False, slot_key, T("安装结束但没找到 %s。请看日志里的 npm 输出，"
+                                 "多半是网络或镜像问题。%s")
                 % (bin_js,
-                   "未完成的目录已清理，可直接重试。" if cleaned
-                   else "配置已保留，可重试安装。"))
+                   T("未完成的目录已清理，可直接重试。") if cleaned
+                   else T("配置已保留，可重试安装。")))
 
     # ── 自带 node：必须和既有槽一样有一份 ──────────────────────────────
     # 2026-10-29 实测：_pick_node_exe 拿占位符去 isfile() 恒为 False，于是每个
@@ -636,11 +636,11 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
                     _c["versions"][slot_key]["node_exe"] = slot_cfg["node_exe"]
                     write_config_atomic(config_path, _c)
                 except Exception as e:
-                    node_note = "（node 已复制，但写回 config 失败：%s）" % e
+                    node_note = T("（node 已复制，但写回 config 失败：%s）") % e
             else:
-                node_note = "（补 node 失败：%s）" % nerr
+                node_note = T("（补 node 失败：%s）") % nerr
         else:
-            node_note = "（找不到可复用的 node 运行时，本槽将用系统 node，无 ABI 隔离）"
+            node_note = T("（找不到可复用的 node 运行时，本槽将用系统 node，无 ABI 隔离）")
 
     # 装完把真实版本号报出来，但**不改 label**。
     #
@@ -659,7 +659,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
         real_ver = adopt_mod.read_package_version(dsh_package_dir(bin_js)) or ver
         if real_ver != ver:
             p.on_step(T("注意：实际装到 %s（请求的是 %s）") % (real_ver, ver))
-            ver_note = "（实际装到 %s）" % real_ver
+            ver_note = T("（实际装到 %s）") % real_ver
     except Exception:
         pass        # 只是显示名，失败不影响使用
 
@@ -673,7 +673,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
     try:
         bat_note = _gen_slot_bats(adopt_mod, slot_cfg, root, slot_key, install_base)
     except Exception as e:
-        bat_note = "（生成 bat 失败：%s；可在管理器里点「生成启动/kill/CLI bat」补）" % e
+        bat_note = T("（生成 bat 失败：%s；可在管理器里点「生成启动/kill/CLI bat」补）") % e
 
     # ── 最后再对一遍「形状」────────────────────────────────────────────
     # 判据不是「npm 退出码 0」，而是「和既有槽长得一样」：自带 node、依赖齐全、
@@ -686,7 +686,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
     soft = [t for lv, t in shape if lv != "错误"]
     if hard:
         return (False, slot_key,
-                "安装结束，但槽结构和其它槽不一致（配置已保留，可重试）：\n  "
+                T("安装结束，但槽结构和其它槽不一致（配置已保留，可重试）：\n  ")
                 + "\n  ".join(hard))
     for t in soft:
         p.on_step(T("提示：%s") % t)
@@ -696,8 +696,8 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
     tail = "%s%s%s%s" % (reuse_note and "（%s）" % reuse_note,
                          ver_note, node_note, bat_note)
     if soft:
-        tail += "\n\n以下与其它槽不同，需要时可手工补齐：\n  " + "\n  ".join(soft)
-    return (True, slot_key, "已安装官方版 %s 到槽 %s（%s，端口 %d）%s"
+        tail += T("\n\n以下与其它槽不同，需要时可手工补齐：\n  ") + "\n  ".join(soft)
+    return (True, slot_key, T("已安装官方版 %s 到槽 %s（%s，端口 %d）%s")
             % (ver, slot_key, dir_name, port, tail))
 
 
@@ -765,11 +765,11 @@ def _gen_slot_bats(adopt_mod, slot_cfg, root, slot_key, install_base=""):
             with open(path, "w", encoding="gbk", newline="") as f:
                 f.write(text)
             made.append(name)
-        return "，并生成了 %s" % "、".join(made)
+        return T("，并生成了 %s") % "、".join(made)
     except Exception as e:
         # 静默失败过一次（路径多退一层找不到主程序），排查时毫无线索。
         # 这里把原因带回给调用方，由它写进用户可见的提示/日志。
-        return "（未能生成 bat：%s；可在管理器里点「生成启动/kill/CLI bat」补）" % e
+        return T("（未能生成 bat：%s；可在管理器里点「生成启动/kill/CLI bat」补）") % e
 
 
 def dsh_package_dir(bin_js):
@@ -889,7 +889,7 @@ def apply_temp_relocation(config_path, changes):
     try:
         cfg = read_config(config_path)
     except Exception as e:
-        return (False, "读 config.json 失败：%s" % e)
+        return (False, T("读 config.json 失败：%s") % e)
     versions = cfg.get("versions") or {}
     changed = 0
     for ch in changes:
@@ -904,13 +904,13 @@ def apply_temp_relocation(config_path, changes):
         for ch in changes:
             os.makedirs(ch["new_abs"], exist_ok=True)
     except Exception as e:
-        return (False, "创建临时目录失败：%s" % e)
+        return (False, T("创建临时目录失败：%s") % e)
     if changed:
         try:
             write_config_atomic(config_path, cfg)
         except Exception as e:
-            return (False, "写 config.json 失败：%s" % e)
-    return (True, "已更新 %d 个槽的临时目录" % changed)
+            return (False, T("写 config.json 失败：%s") % e)
+    return (True, T("已更新 %d 个槽的临时目录") % changed)
 
 
 def bundled_node_exe():
@@ -985,36 +985,36 @@ def slot_shape_problems(cfg, base="", home="", self_dir=""):
     root = slot_root_from_bin_js(bin_js)
 
     if not bin_js:
-        out.append(("错误", "bin_js 没配"))
+        out.append((T("错误"), T("bin_js 没配")))
     elif not os.path.isfile(bin_js):
-        out.append(("错误", "bin_js 不存在：%s" % bin_js))
+        out.append((T("错误"), T("bin_js 不存在：%s") % bin_js))
 
     if not node:
-        out.append(("错误", "node_exe 没配"))
+        out.append((T("错误"), T("node_exe 没配")))
     elif node.strip().lower() == "node":
-        out.append(("警告", "用的是系统 node（没有自带 node\\，与其它槽不同构）"))
+        out.append((T("警告"), T("用的是系统 node（没有自带 node\\，与其它槽不同构）")))
     elif not os.path.isfile(node):
-        out.append(("错误", "node_exe 不存在：%s" % node))
+        out.append((T("错误"), T("node_exe 不存在：%s") % node))
 
     if not dsh_home:
-        out.append(("错误", "dsh_home 没配"))
+        out.append((T("错误"), T("dsh_home 没配")))
     elif not os.path.isdir(dsh_home):
-        out.append(("警告", "数据目录还不存在（首次启动会创建）：%s" % dsh_home))
+        out.append((T("警告"), T("数据目录还不存在（首次启动会创建）：%s") % dsh_home))
 
     if not temp:
-        out.append(("警告", "temp_dir 没配（会继承系统 TEMP，隔离性变差）"))
+        out.append((T("警告"), T("temp_dir 没配（会继承系统 TEMP，隔离性变差）")))
     elif not os.path.isdir(temp):
-        out.append(("警告", "临时目录还不存在（启动前会创建）：%s" % temp))
+        out.append((T("警告"), T("临时目录还不存在（启动前会创建）：%s") % temp))
 
     if root:
         for n in ("dsh.bat", "dsh-cli.bat"):
             if not os.path.isfile(os.path.join(root, n)):
-                out.append(("警告", "缺 %s（可在管理器里点「生成启动/kill/CLI bat」补）" % n))
+                out.append((T("警告"), T("缺 %s（可在管理器里点「生成启动/kill/CLI bat」补）") % n))
         port = cfg.get("port")
         if port and not os.path.isfile(os.path.join(root, "kill-%s.bat" % port)):
-            out.append(("警告", "缺 kill-%s.bat（同上，可在管理器里补）" % port))
+            out.append((T("警告"), T("缺 kill-%s.bat（同上，可在管理器里补）") % port))
     else:
-        out.append(("警告", "bin_js 不在本地 node_modules 布局里，无法检查槽目录内容"))
+        out.append((T("警告"), T("bin_js 不在本地 node_modules 布局里，无法检查槽目录内容")))
     return out
 
 
@@ -1080,7 +1080,7 @@ def _run_npm(node_exe, npm_cli, args, cwd=None):
                                                           "CREATE_NO_WINDOW", 0))
             rc = proc.wait()
     except Exception as e:
-        return (-1, "无法启动 npm（%s）：%s" % (node_exe, e))
+        return (-1, T("无法启动 npm（%s）：%s") % (node_exe, e))
     try:
         with open(tmp, "rb") as f:
             raw = f.read()
@@ -1139,7 +1139,7 @@ def _pick_registry(node_exe, npm_cli, spec, slow_secs=4.0):
         return rc, out, (time.monotonic() - t0)
 
     rc, out, dt = _probe("")
-    tried.append("npm 默认源")
+    tried.append(T("npm 默认源"))
     if rc == 0:
         if dt <= slow_secs:
             return (True, "", "")
@@ -1150,9 +1150,9 @@ def _pick_registry(node_exe, npm_cli, spec, slow_secs=4.0):
         return (True, "", "")
     if not (rc < 0 or _looks_like_network_error(out)):
         # 到这里才是真的「版本不存在」（E404/ETARGET）。换源也没用，直接报。
-        return (False, "", "npm 上找不到 %s（npm 默认源 返回 %d）。\n%s\n"
+        return (False, "", T("npm 上找不到 %s（npm 默认源 返回 %d）。\n%s\n"
                            "请确认版本号是否写对（可用 npm view @deepseek-ai/dsh "
-                           "versions 查全部版本）。"
+                           "versions 查全部版本）。")
                 % (spec, rc, _tail(out, 5)))
 
     rc2, out2, _dt2 = _probe(FALLBACK_REGISTRY)
@@ -1160,12 +1160,12 @@ def _pick_registry(node_exe, npm_cli, spec, slow_secs=4.0):
     if rc2 == 0:
         return (True, FALLBACK_REGISTRY, "")
     if not (rc2 < 0 or _looks_like_network_error(out2)):
-        return (False, "", "npm 上找不到 %s（镜像 返回 %d）。\n%s\n"
+        return (False, "", T("npm 上找不到 %s（镜像 返回 %d）。\n%s\n"
                            "请确认版本号是否写对（可用 npm view @deepseek-ai/dsh "
-                           "versions 查全部版本）。"
+                           "versions 查全部版本）。")
                 % (spec, rc2, _tail(out2, 5)))
-    return (False, "", "npm 预检失败：%s 均不可达（断网 / 代理 / npm 源故障）。\n"
-                       "网络类报错多为临时性，稍后重试即可。" % " 与 ".join(tried))
+    return (False, "", T("npm 预检失败：%s 均不可达（断网 / 代理 / npm 源故障）。\n"
+                       "网络类报错多为临时性，稍后重试即可。") % T(" 与 ").join(tried))
 
 
 def _npm_install_slot(node_exe, slot_dir, version, progress=None):
@@ -1175,13 +1175,13 @@ def _npm_install_slot(node_exe, slot_dir, version, progress=None):
     p = progress or Progress()
     exe, cli = _npm_cli(node_exe)
     if not exe:
-        return (-1, "找不到可用的 node.exe（既没有本槽自带的，PATH 上也没有）")
+        return (-1, T("找不到可用的 node.exe（既没有本槽自带的，PATH 上也没有）"))
     if not cli:
-        return (-1, "在 %s 旁边找不到 node_modules/npm/bin/npm-cli.js —— "
-                    "这份 node 运行时不完整，请换一份自带 npm 的 node。"
+        return (-1, T("在 %s 旁边找不到 node_modules/npm/bin/npm-cli.js —— "
+                    "这份 node 运行时不完整，请换一份自带 npm 的 node。")
                 % os.path.dirname(exe))
     if not os.path.isdir(slot_dir):
-        return (-1, "槽目录不存在：%s" % slot_dir)
+        return (-1, T("槽目录不存在：%s") % slot_dir)
 
     spec = "@deepseek-ai/dsh@%s" % version
     p.on_step(T("预检 %s 是否存在（顺带探测可用 npm 源）…") % spec)
@@ -1197,7 +1197,7 @@ def _npm_install_slot(node_exe, slot_dir, version, progress=None):
         p.on_step(T("初始化槽目录（npm init -y）…"))
         rc, out = _run_npm(exe, cli, ["init", "-y"], cwd=slot_dir)
         if rc != 0:
-            return (rc, "npm init -y 失败（退出码 %d）：\n%s" % (rc, _tail(out)))
+            return (rc, T("npm init -y 失败（退出码 %d）：\n%s") % (rc, _tail(out)))
 
     p.on_step(T("下载并安装 %s（要几分钟，请勿关闭管理器）…") % spec)
     # npm 默认会为 ECONNRESET 自己重试很久（实测整段 5 分钟才报错）。这里把重试
@@ -1216,13 +1216,13 @@ def _npm_install_slot(node_exe, slot_dir, version, progress=None):
                            ["--registry", FALLBACK_REGISTRY],
                            cwd=slot_dir)
         if rc == 0:
-            out = (out or "") + "\n（本次安装改走了镜像 %s）" % FALLBACK_REGISTRY
+            out = (out or "") + T("\n（本次安装改走了镜像 %s）") % FALLBACK_REGISTRY
     return (rc, out)
 
 
 def _tail(text, n=8):
     lines = [l for l in (text or "").splitlines() if l.strip()]
-    return "\n".join(lines[-n:]) or "(无输出)"
+    return "\n".join(lines[-n:]) or T("(无输出)")
 
 
 def run_in_thread(fn, progress, done_callback):
@@ -1234,7 +1234,7 @@ def run_in_thread(fn, progress, done_callback):
             result = fn()
         except Exception as e:
             if progress:
-                progress.on_done(False, None, "意外错误：%s" % e)
+                progress.on_done(False, None, T("意外错误：%s") % e)
             if done_callback:
                 done_callback(False, None, str(e))
             return
