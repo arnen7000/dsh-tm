@@ -23,26 +23,53 @@ jobs:
       # 项目自己的发布门禁：Python 语法、编码策略、敏感文件、token、
       # Markdown 相对链接、15 套离线回归 + 卫生闸。
       #
-      # 失败时把每条 `x ...` **单独输出成 annotation**（网页顶部那几条红字）——
-      # 否则所有内容挤在一个 step 的长日志里，网页和 API 都很难定位到底哪项挂了
-      # （2026-11-14：CI 连红 20 次，就是卡在"看不到是哪个检查失败"）。
-      #
-      # 两个 PowerShell 陷阱（前两次改都踩了）：
+      # 失败信息要能被"远程看到"，这件事踩了很多次坑，记在这里：
       #   · `Write-Host` 的输出**不进管道**，`./script.ps1 | Tee-Object` 抓不到
       #   · 管道里的脚本 `exit N` **不影响调用方的 `$LASTEXITCODE`**
       #   · `Write-Host` 写的是 **Information stream（6）**，`2>&1` 只重定向
       #     Error stream，必须用 `*>&1` 才能一起收进来
-      # 所以：先 `$out = & ./script *>&1` 捕获全部流，再自己输出和判断。
+      #   · **annotation（::error::）只吃单行**：check-all 的失败行是
+      #     `x 离线回归未通过（…，退出码 1）：\n<tail>\n完整输出：…`，
+      #     整条发出去时网页上只剩到冒号为止 —— 真正的失败断言/堆栈全被吃掉
+      #     （2026-11-14：连红 24 次，最后就卡在这）。
+      # 所以：先按换行把捕获内容彻底拍平，再**逐行**发 annotation。
       - name: 发布前总检
         shell: pwsh
         run: |
+          $env:PYTHONIOENCODING = 'utf-8'
           $out = & ./scripts/check-all.ps1 *>&1
           $code = $LASTEXITCODE
-          $out | ForEach-Object { Write-Host "$_" }
-          $bad = @($out | ForEach-Object { "$_" } | Where-Object { $_ -match '^\s*x\s' })
-          foreach ($b in $bad) {
-            Write-Host "::error::$($b.Trim())"
+          $flat = @()
+          foreach ($l in @($out)) {
+            $flat += (("$l") -split "`r?`n")
           }
+          $flat | ForEach-Object { Write-Host $_ }
+          $flat -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+          $bad = @($flat | Where-Object { $_ -match '^\s*x\s' })
+          foreach ($b in $bad) { Write-Host "::error::$($b.Trim())" }
+
+          # 断言/堆栈也要单独成条，否则只有 check-all 那一行摘要可见
+          $detail = @($flat | Where-Object {
+            $_ -match '^\s*FAIL' -or $_ -match '^RESULT:\s*FAIL' -or
+            $_ -match 'Traceback' -or $_ -match '^FAILED ' -or
+            $_ -match '^\s+- .+' -or $_ -match '^\w*(Error|Exception)\b'
+          })
+          foreach ($d in ($detail | Select-Object -First 40)) {
+            Write-Host "::error::$($d.Trim())"
+          }
+
+          # 把失败的回归脚本名导出给诊断步骤（不再写死猜是哪一个）
+          $failed = @()
+          foreach ($b in $bad) {
+            foreach ($m in [regex]::Matches($b, '(?:scripts|tests)\\test-[\w-]+\.py')) {
+              if ($failed -notcontains $m.Value) { $failed += $m.Value }
+            }
+          }
+          if ($failed.Count -gt 0) {
+            "FAILED_TESTS=$($failed -join ',')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+
           if ($code -ne 0 -or $bad.Count -gt 0) {
             if ($bad.Count -eq 0) {
               Write-Host "::error::check-all 退出码 $code，但没捕获到 x 开头的失败行"
@@ -51,22 +78,35 @@ jobs:
           }
 
       # 总检挂了就补跑一次失败的回归，把**完整输出**摆出来。
-      # check-all 只打一行「x 离线回归未通过（某脚本，退出码 1）」，看不到具体是
-      # 哪条断言挂了 —— 而 CI 和本地唯一的差别是 Windows Server + Python 3.11，
-      # 没有完整输出根本无从判断（2026-11-14：为了这一行折腾了 5 次推送）。
+      # check-all 只打一行摘要，看不到具体是哪条断言挂了 —— 而 CI 和本地唯一的
+      # 差别是 Windows Server + Python 3.11 + 管理员权限，没有完整输出无从判断。
       - name: 失败诊断（仅失败时）
         if: failure()
         shell: pwsh
         run: |
-          foreach ($t in @('test-slot-ops.py', 'test-manager-logic.py')) {
-            $p = Join-Path 'scripts' $t
-            if (-not (Test-Path $p)) { continue }
-            Write-Host "=== 完整输出：$t ==="
+          $env:PYTHONIOENCODING = 'utf-8'
+          $paths = @()
+          if ($env:FAILED_TESTS) {
+            foreach ($n in ($env:FAILED_TESTS -split ',')) { $paths += $n.Trim() }
+          }
+          if ($paths.Count -eq 0) { $paths = @('scripts/test-slot-ops.py') }
+
+          foreach ($p in $paths) {
+            if (-not (Test-Path $p)) { Write-Host "跳过（不存在）：$p"; continue }
+            Write-Host "=== 完整输出：$p ==="
             $o = & python $p *>&1
-            $o | ForEach-Object { Write-Host "$_" }
-            Write-Host "=== $t 退出码：$LASTEXITCODE ==="
-            # 把失败的断言单独变成 annotation，这样在网页顶部一眼就能看到
-            foreach ($line in @($o | ForEach-Object { "$_" })) {
-              if ($line -match '^\s*FAIL') { Write-Host "::error::$($line.Trim())" }
+            $code = $LASTEXITCODE
+            $ol = @()
+            foreach ($l in @($o)) { $ol += (("$l") -split "`r?`n") }
+            $ol | ForEach-Object { Write-Host $_ }
+            Write-Host "=== $p 退出码：$code ==="
+            $fence = '```'
+            "### $p（退出码 $code）`n$fence`n$($ol -join "`n")`n$fence" |
+              Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            foreach ($l in $ol) {
+              if ($l -match '^\s*(FAIL|FAILED )' -or $l -match '^RESULT:\s*FAIL' -or
+                  $l -match 'Traceback' -or $l -match '^\w*(Error|Exception)\b') {
+                Write-Host "::error::$($l.Trim())"
+              }
             }
           }
