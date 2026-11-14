@@ -334,6 +334,21 @@ $docs = @()
 $docs += @(Get-ChildItem $Repo -File -Filter *.md -ErrorAction SilentlyContinue)
 $docs += @(Get-ChildItem "$Repo\docs" -File -Filter *.md -Recurse -ErrorAction SilentlyContinue |
            Where-Object { $_.FullName -notmatch '\\官方手册-' })
+
+# 只检查**会发布**的文档。2026-11-14 修：原来扫的是磁盘上所有 .md，
+# 而本地「不发布」的文档还在工作区（`git rm --cached` 只删 index、不删文件），
+# 于是 `工程经验总结.md` 引用已删除的 `架构与维护说明.md` 时
+# **本地一直通过、CI 一直红** —— 本地过、线上挂，是最难查的一类。
+$kept = @()
+foreach ($d in $docs) {
+    & git -C $Repo check-ignore -q -- "$($d.FullName)" 2>$null
+    if ($LASTEXITCODE -ne 0) { $kept += $d }
+}
+$skippedDocs = $docs.Count - $kept.Count
+$docs = $kept
+if ($skippedDocs -gt 0) {
+    Ok "跳过 $skippedDocs 个未入库的文档（它们不在仓库里，链接对读者就是断的）"
+}
 $links = 0
 foreach ($d in $docs) {
     $dir = Split-Path $d.FullName -Parent
