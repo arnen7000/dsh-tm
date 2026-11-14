@@ -37,6 +37,19 @@ Nothing is shared, so a broken test version cannot touch the one you use daily.
    locked. To change it later use **Settings → Directories → Move install root…**
    (it moves every version together with its data; no uninstall needed).
 
+### Desktop shortcut (optional, recommended)
+
+The manager does **not** create a desktop icon by itself — after unzipping you only have
+`start-manager.bat`, and going into the folder every time is tedious. Two ways:
+
+| Way | How | Notes |
+|---|---|---|
+| **Run the script** (recommended) | `python build_lnk.py` in the manager directory | Creates `dsh-manager.lnk` with the dsh icon. Standard library only. **Portable package users: `runtime\python\python.exe build_lnk.py`** |
+| **Manual shortcut** | Right-click `start-manager.bat` → Send to → Desktop (create shortcut) | No script needed, but the icon is the plain `.bat` icon |
+
+> The shortcut stores an **absolute path**. If you later move the folder, run
+> `build_lnk.py` again.
+
 ## 4. Interface
 
 ### 4.1 Cards

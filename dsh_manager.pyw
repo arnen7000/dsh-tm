@@ -4313,6 +4313,35 @@ def _make_autohide_scroll(canvas, sb):
     return _cb
 
 
+def _resolve_dsh_nm(pick):
+    r"""把用户随手选的目录解析成**含 @deepseek-ai/dsh 的 node_modules 层**。
+
+    用户选目录时不知道"该选哪一层"，可能选到：
+      · `...\node_modules`                  ← 正确
+      · `...\`（node_modules 的父目录）      ← 常见
+      · `...\node_modules\@deepseek-ai\dsh` ← 也可能
+      · `...\@deepseek-ai`                   ← 也可能
+    这里挨个试，认出来就返回那一层；认不出返回空串。
+    """
+    if not pick or not os.path.isdir(pick):
+        return ""
+    pick = os.path.abspath(pick)
+    cands = [
+        pick,
+        os.path.join(pick, "node_modules"),
+        os.path.join(pick, "@deepseek-ai"),
+        os.path.join(pick, "node_modules", "@deepseek-ai"),
+    ]
+    # 用户直接选了包目录（.../@deepseek-ai/dsh）→ 往上退到 node_modules
+    if os.path.basename(pick).lower() == "dsh" and os.path.isfile(
+            os.path.join(pick, "package.json")):
+        cands.insert(0, os.path.dirname(os.path.dirname(pick)))
+    for c in cands:
+        if os.path.isdir(os.path.join(c, "@deepseek-ai", "dsh")):
+            return c
+    return ""
+
+
 def _adopt_picker_dialog(found):
     """让用户勾选要纳入的 dsh 安装。
 
@@ -4485,9 +4514,18 @@ def scan_and_offer_adopt():
     try:
         _known = set(os.path.normcase(os.path.abspath(p))
                      for p in _managed_roots())
+        # 扫描范围写进日志：扫不到时用户最想知道的就是"你到底找了哪儿"
+        # （2026-11-14 用户反馈：新机器上有 dsh，点了扫描却什么都没有）
+        _npm_g = _probe_npm_global()
+        _vroot = _versions_root()
+        log(T("[检测] 扫描范围 —— 版本根：%s；npm 全局：%s")
+            % (_vroot, _npm_g or T("（未探测到：npm 不在 PATH 上，或没装过全局包）")))
+        if not _npm_g:
+            log(T("[检测] npm 全局没探测到 —— 如果你的 dsh 是用 npm -g 装的，"
+                  "说明 npm 不在 PATH 上；可以用下面的「手动指定目录…」直接指过去"))
         found = dsh_adopt.detect_existing_installs(
-            [_probe_npm_global()] if _probe_npm_global() else [],
-            _versions_root(),
+            [_npm_g] if _npm_g else [],
+            _vroot,
             _managed_roots())
 
         # 「移出过」的槽目录：只有当它 (a) 目录还在、(b) 有完整安装、
@@ -4541,12 +4579,45 @@ def scan_and_offer_adopt():
             # 用户要的是「重新搜索」，不是被告知「我替你忽略了什么」。
             log(T("[检测] 忽略 %d 条目录已不存在的移出记录（config 保留，"
                 "移动盘 / 网络盘接回后仍有效）。") % _stale_n)
-        messagebox.showinfo(
-            T("没有可纳入的 dsh"),
-            T("没扫到管理范围外的 dsh。\n\n"
-            "扫描每次都重新查磁盘：已经在槽位里的版本不会重复出现，"
-            "目录已被删掉的旧版本也不会。"))
-        return
+        # 没扫到就给一条出路：dsh 可能装在别处（自己解压到 D 盘、另一块盘、
+        # 或者 npm 不在 PATH 上导致全局目录没被探测到）。
+        # 2026-11-14 用户反馈：新机器上明明有 dsh，点了扫描什么都没有 —— 就是这种情况。
+        if not messagebox.askyesno(
+                T("没有可纳入的 dsh"),
+                T("没扫到管理范围外的 dsh。\n\n"
+                  "自动扫描只看两处：**版本根** 和 **npm 全局 node_modules**。\n"
+                  "如果你的 dsh 装在别的地方（自己解压的、在另一块盘、"
+                  "或者 npm 不在 PATH 上），可以手动指定。\n\n"
+                  "要手动指定一个 dsh 目录吗？")):
+            return
+        _pick = filedialog.askdirectory(
+            title=T("选择 dsh 的安装目录（选含 node_modules 的那层，或它的上一层）"))
+        if not _pick:
+            return
+        _nm = _resolve_dsh_nm(_pick)
+        if not _nm:
+            messagebox.showerror(
+                T("没找到 dsh"),
+                T("在 %s 里没找到 @deepseek-ai/dsh。\n\n"
+                  "请选**含 node_modules 的那一层**（或它的上一层）。\n"
+                  "典型的正确路径长这样：\n"
+                  "  ...\\node_modules\\@deepseek-ai\\dsh\\package.json") % _pick)
+            return
+        try:
+            _info = dsh_adopt.inspect_adopt_source(_nm)
+        except Exception as e:
+            messagebox.showerror(T("体检失败"), T("%s") % e)
+            return
+        if not _info.get("version"):
+            messagebox.showerror(
+                T("没找到 dsh"),
+                T("这个目录里没有可识别的 dsh 版本号，可能不是 dsh 的安装目录。"))
+            return
+        log(T("[检测] 手动指定：%s（版本 %s）") % (_nm, _info.get("version")))
+        found = [{"version": _info.get("version"),
+                  "locations": [{"kind": "versions-dir",
+                                 "path": os.path.join(_nm, "@deepseek-ai", "dsh"),
+                                 "node_modules": _nm}]}]
 
     log(T("[检测] 发现 %d 个管理范围外的版本：%s")
         % (len(found), ", ".join(b.get("version") or "?" for b in found)))
@@ -7701,6 +7772,10 @@ def settings_hub_dialog():
         try:
             _clear_cards()
             _build_cards()
+            # **零槽时 _build_cards() 会直接 return**（不画任何卡片），引导卡得由
+            # _build_fresh_guide() 画。漏了这一句，英文下切语言后首页就是一片空白
+            # （2026-11-14 用户实测）。_reload_config_after_change 里是三个一起调的。
+            _build_fresh_guide()
         except Exception as e:
             log(T("[界面] 重建卡片失败（不影响语言切换）：%s") % e)
         try:

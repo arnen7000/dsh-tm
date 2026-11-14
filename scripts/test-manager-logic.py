@@ -1430,6 +1430,8 @@ chk("C3z34a 切语言就地重译控件，不再要求重启",
     and "askyesno" not in _pl_code)
 chk("C3z34b 卡片状态行是 textvariable，靠重建卡片换语言",
     "_clear_cards()" in _pl_code and "_build_cards()" in _pl_code)
+chk("C3z34i 切语言时零槽引导卡也要重画（_build_cards 零槽会直接 return）",
+    "_build_fresh_guide()" in _pl_code)
 chk("C3z34c 窗口标题不是控件 text，单独设一次",
     'root, "DSH 版本管理器"' in _pl_code and 'win, "设置"' in _pl_code)
 chk("C3z34d 翻译层提供 retranslate / to_key（反查原始中文 key）",
