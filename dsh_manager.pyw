@@ -3404,7 +3404,9 @@ def _build_cards():
     底层 VC / procs / SIG / status_vars 一个都不动 —— status_vars 本来就是给
     **全部**槽建的，refresh() 对没显示的槽只更新 StringVar，不碰控件。
     """
-    if FRESH_START:
+    if not SLOT_KEYS:
+        # 用**实时**槽数而不是启动快照 FRESH_START：运行中把最后一个槽卸载/移出后
+        # FRESH_START 不一定同步到，界面会一片空白（2026-11-14 用户实测）。
         return          # 零槽交给末尾的 _build_fresh_guide()，这里不插手
 
     keys = _display_keys()
@@ -5894,7 +5896,9 @@ def _build_fresh_guide():
          下面两个真正的动作按钮（安装官方版 / 扫描并纳入）。
     不再画任何假槽位 —— 没装的槽不该在界面上占一个"空槽"的位置。
     """
-    if not FRESH_START:
+    if SLOT_KEYS:
+        # 实时判断，理由同 _build_cards：运行中卸载到 0 槽时 FRESH_START 可能还是旧值，
+        # 会导致「所有槽都卸了、界面却一片空白」。
         return
     try:
         _clear_cards()
@@ -8169,9 +8173,13 @@ def _log_fresh_env():
         tmp = os.path.join(BASE_DIR, "temp", "env-check.out")
         os.makedirs(os.path.dirname(tmp), exist_ok=True)
         with open(tmp, "wb") as out:
+            # 语言必须传过去：下面按 T("[注意]") / T("[缺失]") 过滤行，
+            # 子进程若仍输出中文而界面是英文，一条都匹配不上，日志就是空的。
+            _env = dict(os.environ)
+            _env["DSH_LANG"] = I18N.lang()
             rc = _sp.run([sys.executable,
                           os.path.join(BASE_DIR, "scripts", "check-env.py")],
-                         stdout=out, stderr=_sp.STDOUT,
+                         stdout=out, stderr=_sp.STDOUT, env=_env,
                          creationflags=CREATE_NO_WINDOW).returncode
         raw = open(tmp, "rb").read().decode("utf-8", "replace")
         for ln in raw.splitlines():
