@@ -11,6 +11,28 @@
 
 ---
 
+## [0.1.3] — 2026-11-14
+
+### 新增
+
+- **便携包**（本次最重要的变化）：`scripts/make-portable.py` 把源码 + 精简过的
+  runtime 打成 `dsh-tm-<版本>-portable.zip`（约 53 MB），作为 Release 附件发布。
+  **下载解压双击就能用，不需要装 Python 或 Node。**
+  精简掉 62 MB 的 `.pdb` 调试符号，以及 `include/` `libs/` `Lib/test` `Lib/idlelib`
+  这些运行时用不到的东西（233 MB → 156 MB 解压后，53 MB 压缩后）。
+- **CLI `--json`**：只读命令（`list` / `status` / `url` / `health`）输出固定 schema，
+  字段名与枚举值固定英文、不随界面语言漂移，供另一个 agent 驱动。
+- 便携包里带 `使用前先读我.txt`：解压后第一眼就能看到「三步走」。
+
+### 变更
+
+- README「2.1 两种获取方式」把**便携包提到首位**（原来和源码并列），
+  并说明它由 `make-portable.py` 生成
+- 「快速开始」第 1 步补上「从源码跑需要 Python ≥3.8 带 tkinter + Node ≥22.19」
+- `.gitignore` 加 `dist/`
+
+---
+
 ## [0.1.2] — 2026-11-14
 
 ### 新增

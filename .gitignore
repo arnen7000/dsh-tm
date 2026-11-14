@@ -5,6 +5,7 @@
 # 为什么 node 也放这里：新电脑第一次装 dsh 时没有既有槽可复制、系统也未必装过
 # node，包内带一份才能「解压即用」。详见 dsh_install_ops.bundled_node_exe()。
 runtime/
+dist/
 
 # 离线分发包里的版本槽（几 GB，含各自 node + node_modules）。
 # 槽名由用户自定（dshV1/dshV2…），一并排除，避免误提交。

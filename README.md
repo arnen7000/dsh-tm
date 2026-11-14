@@ -69,12 +69,16 @@
 
 ### 2.1 两种获取方式
 
-| 你怎么拿到本项目 | 需要先装什么 | 说明 |
-|---|---|---|
-| **`git clone` / 下 zip**（仓库源码） | **Python ≥ 3.8（带 tkinter）** + **Node.js ≥ 22.19** | 仓库**不含** `runtime/`（约 200 MB，被 `.gitignore` 排除），所以 node 和 python 需要你自己准备好 |
-| **便携包**（把装好的整个目录拷过来） | **什么都不用装** | 包内自带 `runtime\python`（3.10，含 tkinter）与 `runtime\node`（v24.21.0）。解压即用，不联网 |
+**推荐走便携包**：解压 → 双击 `start-manager.bat` → 直接用。什么都不用装。
 
-> 便携包不需要什么专门工具 —— 它就是「把一台已装好的机器上的整个目录复制一份」。做法见 [4.12 换机器与便携](#412-换机器与便携)。
+| 你怎么拿到本项目 | 需要先装什么 | 适合谁 |
+|---|---|---|
+| **便携包**（[Releases](https://github.com/arnen7000/dsh-tm/releases) 页面的 `dsh-tm-<版本>-portable.zip`，约 53 MB） | **什么都不用装** | **绝大多数人**。包内自带 `runtime\python`（3.10，含 tkinter）与 `runtime\node`（v24.21.0），解压即用，不联网 |
+| **源码**（`git clone` / 下 zip） | **Python ≥ 3.8（带 tkinter）** + **Node.js ≥ 22.19** | 想改代码、或自己打便携包的人。仓库**不含** `runtime/`（200+ MB，被 `.gitignore` 排除） |
+
+> 便携包是怎么来的：`python scripts/make-portable.py` 把源码 + 精简过的 runtime
+> （去掉 62 MB 的 `.pdb` 调试符号和编译期文件）打成一个 zip。
+> 换机器时也可以直接把整个目录拷过去，见 [4.12 换机器与便携](#412-换机器与便携)。
 
 ### 2.2 依赖清单
 
