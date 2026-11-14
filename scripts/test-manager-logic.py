@@ -939,7 +939,7 @@ chk("C3z11f2 原子写集中在 _write_config_data（os.replace + 临时文件 +
     and "os.replace(tmp, CONFIG_PATH)" in _fn_body("_write_config_data")
     and "os.remove(tmp)" in _fn_body("_write_config_data"))
 chk("C3z11g default 的按钮文案是「浏览器」不是「默认浏览器」（240px 卡片放不下六个字）",
-    'return "浏览器" if b == "default" else' in src)
+    'return T("浏览器") if b == "default" else' in src)
 
 # ── 标题行留白（2026-10-31 用户反馈「版本号那一行有点窄」）──────────────
 print("== C3z12 卡片标题行留白 ==")
@@ -1181,7 +1181,7 @@ chk("C3z17p 扫不到时不再指路已删除的「已移出管理」列表",
     and "没扫到管理范围外的 dsh" in _adopt_full)
 chk("C3z17q 失效记录只进日志，弹窗里一个字都不提",
     "_stale_n = len(_stale_detached_records())" in _adopt_full
-    and 'log("[检测] 忽略' in _adopt_full
+    and 'log(T("[检测] 忽略' in _adopt_full
     and "另外，磁盘上还有" not in _adopt_full
     and "已移出管理」列表" not in _adopt_full)
 chk("C3z17s 扫不到时只弹一个说明框，不再连环追问",
@@ -1225,7 +1225,7 @@ chk("C3z19c 补候选的三道闸：目录在 + 有 bin.js + 不在 versions 里
     and "for r in _live_detached_records():" in _adopt)
 chk("C3z19d 没扫到时失效记录只进日志（不弹名字）",
     "_stale_n = len(_stale_detached_records())" in _adopt
-    and 'log("[检测] 忽略' in _adopt
+    and 'log(T("[检测] 忽略' in _adopt
     and "_det = _live_detached_records()" not in _adopt)
 chk("C3z19d2 扫描弹窗彻底不显示失效记录的名字（二次反馈）",
     "另有 %d 条已移出记录" not in _adopt
@@ -1527,7 +1527,7 @@ chk("C3z22b 进度回调先写日志、再更新标签",
     < src.index('root.after(0, lambda: self.lbl.configure'))
 chk("C3z22c 探测数据未到时也显示端口（不再写「检测中…」）",
     'status_vars[key].set("检测中…"' not in src
-    and '已停止  :%d" % cfg["port"]' in _fn_body("_refresh_one"))
+    and 'T("已停止  :%d") % cfg["port"]' in _fn_body("_refresh_one"))
 chk("C3z22d 单槽刷新有异常隔离（一个槽坏了不影响其它槽显示端口）",
     # 2026-11-13：v4 没有端口号的真因 —— _scan_pos 缺它的键，_scan_slot 抛
     # KeyError，而 refresh 的循环没有隔离，v4 及之后的槽全部停在「—」。

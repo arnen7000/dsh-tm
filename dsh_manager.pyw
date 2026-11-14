@@ -604,8 +604,8 @@ def _relaunch_if_store_python():
         subprocess.Popen([STANDALONE_PYW, os.path.abspath(__file__)],
                          cwd=BASE_DIR, env=env,
                          creationflags=CREATE_NO_WINDOW)
-        log("检测到商店版 Python（任务栏图标会被劫持为 Python 图标），"
-            "已自动用独立解释器重启：%s" % STANDALONE_PYW)
+        log(T("检测到商店版 Python（任务栏图标会被劫持为 Python 图标），"
+            "已自动用独立解释器重启：%s") % STANDALONE_PYW)
         os._exit(0)                 # GUI 尚未创建，直接退出无副作用
     except Exception as e:
         log(T("自动切换独立解释器失败：%s") % e)
@@ -968,7 +968,7 @@ def gen_bats():
     if not msg:
         msg.append("没有可生成的版本。")
     body = "\n".join(msg)
-    log("=== 生成 bat 完成 ===\n" + body)
+    log(T("=== 生成 bat 完成 ===\n") + body)
     try:
         messagebox.showinfo(T("生成启动/kill/CLI bat"), body)
     except Exception:
@@ -1211,10 +1211,10 @@ def _report_port_after_kill(key, port, killed):
         try:
             messagebox.showwarning(
                 T("停止未完全成功 [%s]") % key,
-                "已发出停止指令，但端口 %d 仍被 dsh 进程占用：\n\n%s\n\n"
+                T("已发出停止指令，但端口 %d 仍被 dsh 进程占用：\n\n%s\n\n"
                 "通常是进程尚未退出，或存在子进程残留。\n"
                 "可再点一次「停止」；反复不行就点「全部停止」，"
-                "或用命令行：python dsh-tm.py kill-stray" % (port, text))
+                "或用命令行：python dsh-tm.py kill-stray") % (port, text))
         except Exception:
             pass
         return
@@ -1224,10 +1224,10 @@ def _report_port_after_kill(key, port, killed):
     try:
         messagebox.showwarning(
             T("端口被其它程序占用 [%s]") % key,
-            "dsh 已停止，但端口 %d 仍被其它程序占用——所以它不会随 dsh 一起消失。\n\n%s\n\n"
+            T("dsh 已停止，但端口 %d 仍被其它程序占用——所以它不会随 dsh 一起消失。\n\n%s\n\n"
             "管理器不会自动结束别人的程序（避免误杀）。\n"
             "请自行决定：关闭那个程序，或在 config.json 里把该槽的 port 改成别的"
-            "（记得同步 extra_args 里的 --port）。" % (port, text))
+            "（记得同步 extra_args 里的 --port）。") % (port, text))
     except Exception:
         pass
 
@@ -1260,8 +1260,8 @@ def stop_all_slots():
         return
     if not messagebox.askyesno(
             T("全部停止"),
-            "将停止以下 %d 个槽：\n\n%s\n\n"
-            "只停管理器管的这些槽（不碰其它 dsh 安装）。"
+            T("将停止以下 %d 个槽：\n\n%s\n\n"
+            "只停管理器管的这些槽（不碰其它 dsh 安装）。")
             % (len(running), "、".join(VC[k]["label"] for k in running))):
         return
     log(T("=== 全部停止：%s ===") % "、".join(running))
@@ -1302,11 +1302,11 @@ def stop_all_slots():
         still = ["%s（端口 %d 仍在监听）" % (k, VC[k]["port"])
                  for k, _n, s, err in results if s and not err]
         if failed:
-            messagebox.showwarning(T("全部停止"), "以下槽未能停止：\n\n" + "\n".join(failed))
+            messagebox.showwarning(T("全部停止"), T("以下槽未能停止：\n\n") + "\n".join(failed))
         if still:
             messagebox.showwarning(
                 T("全部停止"),
-                "已发出停止指令，但这些端口还在监听：\n\n  " + "\n  ".join(still) +
+                T("已发出停止指令，但这些端口还在监听：\n\n  ") + "\n  ".join(still) +
                 "\n\n可能是进程尚未退出，或端口被别的程序占着。"
                 "稍等再看状态；反复不行可用 CLI：python dsh-tm.py kill-stray")
         if not failed and not still:
@@ -1374,7 +1374,7 @@ def start_all_slots():
     if blocked:
         messagebox.showwarning(
             T("全部启动"),
-            "以下槽未能启动：\n\n  " + "\n  ".join(blocked) +
+            T("以下槽未能启动：\n\n  ") + "\n  ".join(blocked) +
             "\n\n非 dsh 程序占用的端口不会自动结束，请手动处理或改端口。")
     elif not started:
         messagebox.showinfo(T("全部启动"), T("所有槽都已经在运行了。"))
@@ -1471,10 +1471,10 @@ def _browser_label(browser):
     按钮列放不下会被切。"""
     b = (browser or "").strip().lower()
     if b in BROWSER_KNOWN:
-        return "浏览器" if b == "default" else BROWSER_KNOWN[b][0]
+        return T("浏览器") if b == "default" else BROWSER_KNOWN[b][0]
     if b:
         return os.path.basename(browser.strip())
-    return "浏览器"
+    return T("浏览器")
 
 
 def _browser_installed(browser):
@@ -1585,8 +1585,8 @@ def open_browser(key):
             log(T("[%s] 未运行，请先启动") % key); return
         # 在监听但不是本管理器拉起的：抓不到 URL，只能给裸地址
         url = "http://127.0.0.1:%d" % cfg["port"]
-        log("[%s] 未捕获到入口 URL（该实例不是本管理器启动的）；"
-            "若该版本有 token 保护，请从管理器重启它" % key)
+        log(T("[%s] 未捕获到入口 URL（该实例不是本管理器启动的）；"
+            "若该版本有 token 保护，请从管理器重启它") % key)
     kind, exe = _resolve_browser(cfg["browser"])
     if kind == "start":
         # 两种情形都落到这里：① 配置就是 default（默认值）；② 配了某个浏览器
@@ -1656,7 +1656,7 @@ def _slot_title(key):
     """
     cfg = VC[key]
     ver = INSTALLED.get(key)
-    vtxt = ver if ver else "未知"
+    vtxt = ver if ver else T("未知")
     label = cfg.get("label") or key
     # 防御：config 里若出现两条同 label 的记录（旧版纳入逻辑会造出「槽 v4
     # 顶着 dshV3 的名字」这种幽灵槽），标题带上槽键 —— 否则两张卡片同名，
@@ -2265,8 +2265,8 @@ def _force_taskbar_icon():
             user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, h_small)
             user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL2, h_small)
             user32.SetClassLongPtrW(hwnd, GCLP_HICONSM, h_small)
-        log("已用原始帧设置窗口图标（不缩放，避免发虚）"
-            "（ICON_BIG=%s ICON_SMALL=%s）" % (bool(h_big), bool(h_small)))
+        log(T("已用原始帧设置窗口图标（不缩放，避免发虚）"
+            "（ICON_BIG=%s ICON_SMALL=%s）") % (bool(h_big), bool(h_small)))
     except Exception as e:
         log(T("强制设置任务栏图标失败：%s") % e)
 
@@ -3170,10 +3170,10 @@ def _health_dialog():
     ttk.Label(win, text=T("体检结果"), font=("Microsoft YaHei UI", 11, "bold")
               ).pack(padx=16, pady=(14, 2), anchor="w")
     ttk.Label(win, foreground=_MUTED, justify="left", wraplength=680,
-              text="这里报告「现在的样子和登记的样子差在哪」，默认**不会修改任何文件**。"
+              text=T("这里报告「现在的样子和登记的样子差在哪」，默认**不会修改任何文件**。"
                    "\n缺 node 运行时或数据目录的槽，可以在下面选一个点「修复…」——"
                    "只补缺的东西，不删、不覆盖你已有的文件。"
-                   "确实装坏了就走「卸载 → 重装」（那条路有完整备份）。"
+                   "确实装坏了就走「卸载 → 重装」（那条路有完整备份）。")
               ).pack(padx=16, pady=(0, 8), anchor="w")
 
     frame = ttk.Frame(win)
@@ -3257,9 +3257,9 @@ def _health_dialog():
             root_ = _version_root(VC[key])
             if not messagebox.askyesno(
                     T("修复这个槽？"),
-                    "只会**补上缺的东西**（node 运行时、.dsh-home / .tmp 空目录），\n"
+                    T("只会**补上缺的东西**（node 运行时、.dsh-home / .tmp 空目录），\n"
                     "不会删除或覆盖你已有的文件。\n\n"
-                    "%s（%s）\n%s\n\n继续？"
+                    "%s（%s）\n%s\n\n继续？")
                     % (key, VC[key].get("label") or key, root_),
                     default="yes"):
                 return
@@ -3280,7 +3280,7 @@ def _health_dialog():
                 return
             messagebox.showinfo(
                 T("已修复"),
-                "已完成：\n  " + "\n  ".join(acts or ["（无需改动）"]) +
+                T("已完成：\n  ") + "\n  ".join(acts or ["（无需改动）"]) +
                 "\n\n重新体检一次看结果。")
             try:
                 win.destroy()
@@ -3412,9 +3412,9 @@ def _build_cards():
         # 「全隐藏」：有槽，但用户把显示全关了。空白界面会被当成程序坏了。
         _w = ttk.LabelFrame(cards_frame, text=T("没有显示任何版本槽"), padding=(20, 18))
         _w.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
-        ttk.Label(_w, text="当前设置把 %d 个版本槽全部隐藏了。\n"
+        ttk.Label(_w, text=T("当前设置把 %d 个版本槽全部隐藏了。\n"
                            "它们的进程、端口、数据目录都还在，只是不画卡片 —— "
-                           "想启动/停止可以直接打开设置把它们显示回来。"
+                           "想启动/停止可以直接打开设置把它们显示回来。")
                            % len(SLOT_KEYS),
                   style="Card.TLabel", justify="left"
                   ).pack(anchor="w", pady=(0, 12))
@@ -3683,19 +3683,19 @@ def _log_orphan_shells():
         if shells:
             log(T("[清理] 发现空壳目录（没有任何文件、也不在 config 里）：%s")
                 % "、".join(shells))
-            log("[清理] 它们只是占着槽名，不会影响使用；下次装同名槽会自动复用。"
-                "要清掉可手工删除：%s"
+            log(T("[清理] 它们只是占着槽名，不会影响使用；下次装同名槽会自动复用。"
+                "要清掉可手工删除：%s")
                 % "、".join(os.path.join(root, n) for n in shells))
         if partials:
-            log("[清理] 发现未完成的槽目录（不在 config 里、且缺 lib/bin.js，"
-                "多半是上次纳入 / 安装被中断）：%s" % "、".join(partials))
+            log(T("[清理] 发现未完成的槽目录（不在 config 里、且缺 lib/bin.js，"
+                "多半是上次纳入 / 安装被中断）：%s") % "、".join(partials))
             log(T("[清理] 它们不参与任何操作，可整个删除：%s")
                 % "、".join(os.path.join(root, n) for n in partials))
         if detached_dirs:
             log(T("[编号] 这些槽目录装着完整的 dsh、但不在管理里（多半是你移出的）：%s")
                 % "、".join(detached_dirs))
-            log("[编号] 它们占着自己的编号 —— 新装会跳过这些编号（不会再多出 "
-                "dshVx-2）。想接着用就点「扫描已装 dsh 并纳入」；不要了就把目录删掉。")
+            log(T("[编号] 它们占着自己的编号 —— 新装会跳过这些编号（不会再多出 "
+                "dshVx-2）。想接着用就点「扫描已装 dsh 并纳入」；不要了就把目录删掉。"))
     except Exception as e:
         log(T("[清理] 空壳目录检查失败（不影响使用）：%s") % e)
 
@@ -4210,8 +4210,8 @@ def _restart_or_tell(what="版本列表", new_keys=None):
     try:
         messagebox.showwarning(
             T("已更新，但界面没能刷新"),
-            "配置已改好，但管理器没能原地刷新（%s），重启也没成功（%s）。\n\n"
-            "请手动关闭本窗口并重新打开管理器，新的%s就会生效。"
+            T("配置已改好，但管理器没能原地刷新（%s），重启也没成功（%s）。\n\n"
+            "请手动关闭本窗口并重新打开管理器，新的%s就会生效。")
             % (why, why2, what))
     except Exception:
         pass
@@ -4335,8 +4335,8 @@ def _adopt_picker_dialog(found):
               font=("Microsoft YaHei UI", 10, "bold")).pack(padx=18, pady=(14, 2))
     ttk.Label(win, foreground=_MUTED, wraplength=510, justify="left",
               # 显式分行：交给 Tk 自动换行会从「几百MB」中间断开（实测很难看）。
-              text="勾选要纳入的版本。原地接回 = 只改配置（几秒）；\n"
-                   "复制一份 = 拷进版本根（几百 MB，较慢），原安装不动。"
+              text=T("勾选要纳入的版本。原地接回 = 只改配置（几秒）；\n"
+                   "复制一份 = 拷进版本根（几百 MB，较慢），原安装不动。")
               ).pack(padx=18, pady=(0, 8), anchor="w")
 
     outer = ttk.Frame(win)
@@ -4418,8 +4418,8 @@ def _adopt_picker_dialog(found):
             except Exception:
                 _can_fix = False
             if _can_fix:
-                ttk.Label(box, text="可到「设置 → 维护 → 槽体检」里点「修复…」"
-                                    "（只补缺的文件，不删不改）",
+                ttk.Label(box, text=T("可到「设置 → 维护 → 槽体检」里点「修复…」"
+                                    "（只补缺的文件，不删不改）"),
                           foreground=_MUTED, wraplength=440, justify="left"
                           ).pack(anchor="w", padx=(22, 0))
         vars_.append((v, r))
@@ -4528,13 +4528,13 @@ def scan_and_offer_adopt():
         if _stale_n:
             # 只在日志里留个数：界面上**一个字都不提**已删掉的旧版本，
             # 用户要的是「重新搜索」，不是被告知「我替你忽略了什么」。
-            log("[检测] 忽略 %d 条目录已不存在的移出记录（config 保留，"
-                "移动盘 / 网络盘接回后仍有效）。" % _stale_n)
+            log(T("[检测] 忽略 %d 条目录已不存在的移出记录（config 保留，"
+                "移动盘 / 网络盘接回后仍有效）。") % _stale_n)
         messagebox.showinfo(
             T("没有可纳入的 dsh"),
-            "没扫到管理范围外的 dsh。\n\n"
+            T("没扫到管理范围外的 dsh。\n\n"
             "扫描每次都重新查磁盘：已经在槽位里的版本不会重复出现，"
-            "目录已被删掉的旧版本也不会。")
+            "目录已被删掉的旧版本也不会。"))
         return
 
     log(T("[检测] 发现 %d 个管理范围外的版本：%s")
@@ -4642,8 +4642,8 @@ def _adopt_one(version, loc):
         if ok:
             log(T("[纳入] 成功：%s") % msg)
             messagebox.showinfo(T("纳入成功"),
-                                "%s\n\n槽：%s（%s）\n端口：%d\n数据目录：%s\n\n"
-                                "原安装未做任何改动。"
+                                T("%s\n\n槽：%s（%s）\n端口：%d\n数据目录：%s\n\n"
+                                "原安装未做任何改动。")
                                 % (msg, payload["slot_key"], payload["label"],
                                    payload["port"], payload["dsh_home"]))
             _restart_or_tell("槽列表", [payload.get("slot_key")])
@@ -4712,9 +4712,9 @@ def install_official_version():
                         "不要了就把对应目录删掉，编号会自动空出来。"
                         % "、".join("dsh%s" % k.upper() for k in _occ))
         messagebox.showwarning(T("槽位已满"),
-                               "管理器最多管理 %d 个版本，当前已有 %d 个：%s\n\n"
+                               T("管理器最多管理 %d 个版本，当前已有 %d 个：%s\n\n"
                                "要装新版本，请先用「设置 → 版本管理 → 卸载 / 移出管理」卸掉不用的槽。"
-                               "%s"
+                               "%s")
                                % (MAX_SLOTS, len(SLOT_KEYS), ", ".join(SLOT_KEYS),
                                   _occ_txt))
         return
@@ -4730,8 +4730,8 @@ def install_official_version():
     _apply_icon(win)      # 安装对话框也要有图标
     ttk.Label(win, text=T("安装官方版 dsh（一次最多 %d 个）") % free,
               font=("Microsoft YaHei UI", 10, "bold")).pack(padx=20, pady=(16, 4))
-    ttk.Label(win, text="从下面选版本：Ctrl 点选多个 / Shift 连选；"
-                        "也可以直接在下面手填。", foreground=_MUTED
+    ttk.Label(win, text=T("从下面选版本：Ctrl 点选多个 / Shift 连选；"
+                        "也可以直接在下面手填。"), foreground=_MUTED
               ).pack(padx=20, pady=(0, 6))
 
     ver_var = tk.StringVar(value="")
@@ -4744,8 +4744,8 @@ def install_official_version():
     ent.pack(padx=20, pady=(2, 6), anchor="w")
     ent.focus_set()
 
-    ttk.Label(win, text="将从官方 npm registry 下载安装；需要 Node.js ≥ 22.19。\n"
-                        "每个版本装进一个独立的空槽（自带数据目录与端口），不影响已有版本。",
+    ttk.Label(win, text=T("将从官方 npm registry 下载安装；需要 Node.js ≥ 22.19。\n"
+                        "每个版本装进一个独立的空槽（自带数据目录与端口），不影响已有版本。"),
               foreground=_MUTED, wraplength=440, justify="left"
               ).pack(padx=20, pady=(0, 12))
 
@@ -4777,8 +4777,8 @@ def install_official_version():
         if len(vers) > free:
             messagebox.showwarning(
                 T("槽位装不下"),
-                "本次填了 %d 个版本，但只剩 %d 个空槽（上限 %d）。\n\n"
-                "请减少几个，或先卸载不用的槽。" % (len(vers), free, MAX_SLOTS))
+                T("本次填了 %d 个版本，但只剩 %d 个空槽（上限 %d）。\n\n"
+                "请减少几个，或先卸载不用的槽。") % (len(vers), free, MAX_SLOTS))
             return
         try:
             win.destroy()
@@ -4811,8 +4811,8 @@ def _install_queue(versions):
     # 编号为什么跳号，当场说清楚（用户反馈「为什么会有 dshV3-2」的直接答案）
     _occ = _occupied_unmanaged_keys()
     if _occ:
-        log("[安装] 这些编号的目录还在磁盘上、但不在管理里：%s —— 本次会跳过它们"
-            "（不删你的目录；想接着用就点「扫描已装 dsh 并纳入」）"
+        log(T("[安装] 这些编号的目录还在磁盘上、但不在管理里：%s —— 本次会跳过它们"
+            "（不删你的目录；想接着用就点「扫描已装 dsh 并纳入」）")
             % "、".join("dsh%s" % k.upper() for k in _occ))
 
     def finish():
@@ -4950,7 +4950,7 @@ def _actions_enabled(enabled, keep_run=False):
 def _slot_brief(key):
     """一行摘要：v1（dshV1，端口 4080，实装 0.1.5-rc.2）· 运行中"""
     cfg = VC[key]
-    ver = INSTALLED.get(key) or "未知"
+    ver = INSTALLED.get(key) or T("未知")
     running = port_open(cfg["port"]) or proc_alive(procs.get(key))
     return "%s（%s，端口 %d，实装 %s）· %s" % (
         key, cfg["label"], cfg["port"], ver, "运行中" if running else "已停止")
@@ -4990,8 +4990,8 @@ def uninstall_versions_dialog():
     """
     if UNINST is None or OPS is None:
         messagebox.showerror(T("无法卸载"),
-                             "缺少 dsh_uninstall_ops.py / dsh_install_ops.py 模块，"
-                             "请确认管理器目录完整。")
+                             T("缺少 dsh_uninstall_ops.py / dsh_install_ops.py 模块，"
+                             "请确认管理器目录完整。"))
         return
     if not SLOT_KEYS:
         # 零槽时本窗口会直接返回，但「已移出管理」按钮画在窗口里 ——
@@ -5000,16 +5000,16 @@ def uninstall_versions_dialog():
         if _det_live:
             messagebox.showinfo(
                 T("没有可卸载的版本"),
-                "当前管理器没有管理任何 dsh 版本。\n\n"
+                T("当前管理器没有管理任何 dsh 版本。\n\n"
                 "不过磁盘上还有 %d 个移出过、仍可接回的版本 ——\n"
-                "点「扫描已装 dsh 并纳入」就能重新发现并原样接回（不复制）。"
+                "点「扫描已装 dsh 并纳入」就能重新发现并原样接回（不复制）。")
                 % len(_det_live))
         else:
             messagebox.showinfo(
                 T("没有可卸载的版本"),
-                "当前管理器没有管理任何 dsh 版本。\n\n"
+                T("当前管理器没有管理任何 dsh 版本。\n\n"
                 "先到「设置 → 版本管理 → 安装官方版 dsh」装一个版本，\n"
-                "或用「扫描已装 dsh 并纳入」把已有的接进来。")
+                "或用「扫描已装 dsh 并纳入」把已有的接进来。"))
         return
 
     win = tk.Toplevel(root)
@@ -5032,7 +5032,7 @@ def uninstall_versions_dialog():
 
     backup_root = os.path.join(INSTALL_BASE, "dsh备份")
     ttk.Label(win, justify="left", wraplength=470, foreground=_MUTED,
-              text=("【卸载】停进程 → 备份 → 删除整个槽目录 → 从 config 移除\n"
+              text=(T("【卸载】停进程 → 备份 → 删除整个槽目录 → 从 config 移除\n"
                     "  备份到 %s\\<槽>-userdata-<时间>\\：.dsh-home（会话/设置/凭据/\n"
                     "  插件配置）+ 插件清单 + 版本信息；不含 node_modules 与 node。\n"
                     "  ⚠ 你自己放进槽目录的东西（笔记、补丁、下载的文件）也会一起删掉且不进备份。\n"
@@ -5043,7 +5043,7 @@ def uninstall_versions_dialog():
                     "  · 之后点「扫描已装 dsh 并纳入」还能重新发现它，\n"
                     "    原样接回（端口沿用、不复制文件）\n"
                     "  · 正在运行的槽要先点卡片上的「停止」才允许移出\n"
-                    "  · 全部移出后安装根解锁，可以换到别的位置再装 / 纳入新的 dsh"
+                    "  · 全部移出后安装根解锁，可以换到别的位置再装 / 纳入新的 dsh")
                     % backup_root)).pack(padx=20, pady=(0, 10), anchor="w")
 
     def on_ok():
@@ -5069,13 +5069,13 @@ def uninstall_versions_dialog():
                       % (len(_foreign), _shown))
         if not messagebox.askyesno(
                 T("确认卸载"),
-                "即将卸载这个版本：\n\n%s\n\n"
+                T("即将卸载这个版本：\n\n%s\n\n"
                 "整个槽目录会被删除 —— 包括你自己放进这个槽目录里的任何文件。\n"
                 "有备份的只有：.dsh-home（会话/凭据/插件配置）、槽的 package.json 与"
                 "版本信息。\n%s\n"
                 "备份会放到：\n%s\n\n"
                 "只想让它脱离管理、文件都留着？请按「取消」，改用「移出管理」。\n\n"
-                "确定继续？" % (detail, _extra, backup_root), default="no", icon="warning"):
+                "确定继续？") % (detail, _extra, backup_root), default="no", icon="warning"):
             return
         try:
             win.destroy()
@@ -5091,14 +5091,14 @@ def uninstall_versions_dialog():
         cfgk = VC.get(key) or {}
         if not messagebox.askyesno(
                 T("确认移出管理"),
-                "即将把这个版本移出管理：\n\n  · %s\n\n"
+                T("即将把这个版本移出管理：\n\n  · %s\n\n"
                 "磁盘上的文件一个都不会动 —— 槽目录、node_modules、node、\n"
                 ".dsh-home（会话/凭据/插件配置）全都原样保留。\n\n"
                 "移出后：\n"
                 "  · 管理器不再显示它、也不再管它的进程；\n"
                 "  · 直接双击 %s\\dsh.bat 就能启动它；\n"
                 "  · 它会被记进「已移出」列表，随时可以重新纳入。\n\n"
-                "确定继续？" % (_slot_brief(key), cfgk.get("label") or key),
+                "确定继续？") % (_slot_brief(key), cfgk.get("label") or key),
                 default="no"):
             return
         try:
@@ -5473,9 +5473,9 @@ def _log_state_change(key, prev, state, cfg, listen, ext_pid, tracked_p):
         log(T("[%s] 状态变化: 启动中 pid=%s 端口=%d") % (key, pid, cfg["port"]))
     elif state == "external_conflict":
         who = _pids_on_port(cfg["port"])
-        log("[%s] 状态变化: 端口 %d 被非 dsh 进程占用 pid=%s"
-            "\n     点「停止」可看到占用者是谁；管理器不会自动结束别人的程序"
-            % (key, cfg["port"], ",".join(str(x) for x in who) or "未知"))
+        log(T("[%s] 状态变化: 端口 %d 被非 dsh 进程占用 pid=%s"
+            "\n     点「停止」可看到占用者是谁；管理器不会自动结束别人的程序")
+            % (key, cfg["port"], ",".join(str(x) for x in who) or T("未知")))
     elif state == "stopped":
         log(T("[%s] 状态变化: 已停止 端口=%d") % (key, cfg["port"]))
 
@@ -5503,26 +5503,26 @@ def _refresh_one(key):
         # 改成先按「已停止 :端口」显示 —— 端口至少是可见的，
         # 0.8 秒内探测线程会用真实结果覆盖。
         if alive:
-            status_vars[key].set("启动中  pid=%s  :%d  …" % (p.pid, cfg["port"])
+            status_vars[key].set(T("启动中  pid=%s  :%d  …") % (p.pid, cfg["port"])
                                  + _health_mark(key))
         else:
-            status_vars[key].set("已停止  :%d" % cfg["port"] + _health_mark(key))
+            status_vars[key].set(T("已停止  :%d") % cfg["port"] + _health_mark(key))
         try: status_lbls[key].configure(foreground=_MUTED)
         except Exception: pass
         return
     listen, ext_pid = d.get("listen"), d.get("ext")
     if alive and listen:
-        state, s = "running_tracked", "运行中  pid=%s  :%d  ✓" % (p.pid, cfg["port"])
+        state, s = "running_tracked", T("运行中  pid=%s  :%d  ✓") % (p.pid, cfg["port"])
     elif alive:
-        state, s = "starting", "启动中  pid=%s  :%d  …" % (p.pid, cfg["port"])
+        state, s = "starting", T("启动中  pid=%s  :%d  …") % (p.pid, cfg["port"])
     elif listen and ext_pid is not None:
         # 关键修正：外部（或上一会话）启动的同版本 dsh 仍在跑 —— 直接显示「运行中」，
         # 不再标「外部程序打开」。只有端口被非 dsh 进程占了才报冲突。
-        state, s = "running_external", "运行中  pid=%s  :%d  ✓" % (ext_pid, cfg["port"])
+        state, s = "running_external", T("运行中  pid=%s  :%d  ✓") % (ext_pid, cfg["port"])
     elif listen:
-        state, s = "external_conflict", "端口被非 dsh 程序占用 :%d（点「停止」看是谁）" % cfg["port"]
+        state, s = "external_conflict", T("端口被非 dsh 程序占用 :%d（点「停止」看是谁）") % cfg["port"]
     else:
-        state, s = "stopped", "已停止  :%d" % cfg["port"]
+        state, s = "stopped", T("已停止  :%d") % cfg["port"]
         if procs[key] is not None:
             try:
                 procs[key].wait(timeout=0)     # 回收句柄，避免 Popen 一直挂着
@@ -5672,7 +5672,7 @@ def _log_state_snapshot():
         elif listen:
             who = "端口被非 dsh 进程占用"
         else:
-            who = "未运行"
+            who = T("未运行")
         log(T("[%s] 端口=%d 监听=%s 判定=%s") % (key, cfg["port"], listen, who))
     log(T("=== 启动快照结束 ==="))
     _log_orphan_shells()
@@ -5752,7 +5752,7 @@ def _probe_kill_capability():
     except Exception:
         cand = []
     if not cand:
-        # 没有由本管理器拉起的 dsh 在跑 → 无从实测，返回"未知"而不是"不可用"。
+        # 没有由本管理器拉起的 dsh 在跑 → 无从实测，返回「未知」而不是「不可用」。
         # 关键点：**不回退到父进程**（见上面说明）。
         return None
     try:
@@ -5776,7 +5776,7 @@ def _probe_kill_capability():
     return False
 
 def _cap_txt(v):
-    return {True: "可用", False: "不可用"}.get(v, "未知")
+    return {True: T("可用"), False: T("不可用")}.get(v, T("未知"))
 
 def _start_capability_check():
     def _worker():
@@ -5810,11 +5810,11 @@ def _start_capability_check():
         # 所以：能力状态只进日志 + 状态栏，真遇到「停止没反应」时再在**那一刻**
         # 给出针对性提示（见 kill_one 的失败分支），不做启动期打扰。
         if _read_ok is False:
-            log("[权限] 读不到进程命令行 → 端口占用者可能显示不出程序名；"
-                "已降级为 Get-Process，不影响启停主流程")
+            log(T("[权限] 读不到进程命令行 → 端口占用者可能显示不出程序名；"
+                "已降级为 Get-Process，不影响启停主流程"))
         if _kill_ok is False:
-            log("[权限] 无法结束同用户进程（罕见：多半是安全软件拦截）→ "
-                "「停止」可能无效；此时会由停止动作本身报错，不再启动期打扰")
+            log(T("[权限] 无法结束同用户进程（罕见：多半是安全软件拦截）→ "
+                "「停止」可能无效；此时会由停止动作本身报错，不再启动期打扰"))
 
     root.after(300, _poll)
 
@@ -5902,9 +5902,9 @@ def _build_fresh_guide():
                   font=("Microsoft YaHei UI", 14, "bold"), style="Card.TLabel"
                   ).pack(anchor="w", pady=(0, 8))
         ttk.Label(_f,
-                  text=("点下面的「安装 dsh」选一个版本号就会自动下载并配好隔离环境；\n"
+                  text=(T("点下面的「安装 dsh」选一个版本号就会自动下载并配好隔离环境；\n"
                         "如果你机器上已经装过 dsh，点「扫描并纳入」把它接进来管理。\n"
-                        "每个版本各自独立的数据目录、端口与 node 运行时，互不影响。"),
+                        "每个版本各自独立的数据目录、端口与 node 运行时，互不影响。")),
                   style="Card.TLabel", justify="left", wraplength=560
                   ).pack(anchor="w", pady=(0, 16))
 
@@ -6103,8 +6103,8 @@ def _ask_install_root():
               font=("Microsoft YaHei UI", 10, "bold")
               ).pack(padx=20, pady=(16, 4), anchor="w")
     ttk.Label(win,
-              text="这是第一次安装/纳入 —— 位置一旦确定就不再改动。\n"
-                   "要换位置，得先把所有版本卸载干净（卸载会先备份用户数据）。",
+              text=T("这是第一次安装/纳入 —— 位置一旦确定就不再改动。\n"
+                   "要换位置，得先把所有版本卸载干净（卸载会先备份用户数据）。"),
               foreground=_MUTED, justify="left", wraplength=470
               ).pack(padx=20, pady=(0, 10), anchor="w")
 
@@ -6134,9 +6134,9 @@ def _ask_install_root():
         except Exception:
             pass
         # 2026-11-02：临时文件改为各槽自己的 .tmp，不再有集中目录
-        prev.config(text="版本装进：%s\n"
+        prev.config(text=T("版本装进：%s\n"
                          "卸载备份：%s\n"
-                         "临时文件：各槽目录下的 .tmp"
+                         "临时文件：各槽目录下的 .tmp")
                          % (os.path.join(b, "dsh-versions"),
                             os.path.join(b, "dsh备份")))
 
@@ -6235,8 +6235,8 @@ def _dir_group(parent, padx=20):
         # 2026-11-14 用户指出：这句话和上面的「移动安装根目录…」按钮自相矛盾 ——
         # 换位置**不需要**卸载任何版本，点那个按钮整体搬过去就行。
         _hint = ttk.Label(df,
-                          text="已确定。要换盘 / 换位置请用上方「移动安装根目录…」——"
-                               "会把所有版本连同数据一起搬过去，不用卸载。",
+                          text=T("已确定。要换盘 / 换位置请用上方「移动安装根目录…」——"
+                               "会把所有版本连同数据一起搬过去，不用卸载。"),
                           foreground=_MUTED, justify="left")
         _hint.pack(anchor="w", pady=(4, 0))
         _auto_wrap(_hint, pad=28)
@@ -6998,9 +6998,9 @@ def _open_user_guide():
         except Exception:
             pass
     messagebox.showinfo(T("详细使用说明"),
-                        "找不到文档文件：\n%s\n\n"
+                        T("找不到文档文件：\n%s\n\n"
                         "完整说明见程序目录下的 docs/ 文件夹，"
-                        "或项目主页的 README。" % p)
+                        "或项目主页的 README。") % p)
 
 
 def about_dialog():
@@ -7059,13 +7059,13 @@ def about_dialog():
               ).pack(padx=24, pady=(12, 4), anchor="w")
     ttk.Label(win,
               justify="left", wraplength=470, foreground=_INK,
-              text=("· 「安装官方版 dsh」→ 选版本号 → 自动下载并配好隔离环境\n"
+              text=(T("· 「安装官方版 dsh」→ 选版本号 → 自动下载并配好隔离环境\n"
                     "· 卡片上「启动 / 停止」管单个版本；「打开浏览器」带上登录 token\n"
                     "· 拖动卡片可调整左右顺序；「设置」里能隐藏不看的槽\n"
                     "· 「卸载 / 移出管理」：卸载会先备份用户数据再删；\n"
                     "  移出只改配置、磁盘一个字节不动（之后可在「已移出管理」接回）\n"
                     "· 「槽体检」只读检查，报告问题但不替你改\n"
-                    "· 命令行：python dsh-tm.py list | start --all | stop --all")
+                    "· 命令行：python dsh-tm.py list | start --all | stop --all"))
               ).pack(padx=24, anchor="w")
 
     btns = ttk.Frame(win)
@@ -7128,8 +7128,8 @@ def move_install_root_dialog():
         return
     if not SLOT_KEYS:
         messagebox.showinfo(T("没有可移动的版本"),
-                            "当前管理器没有管理任何 dsh 版本。\n\n"
-                            "装第一个版本时会让您选位置，那时选好即可。")
+                            T("当前管理器没有管理任何 dsh 版本。\n\n"
+                            "装第一个版本时会让您选位置，那时选好即可。"))
         return
 
     # 运行中的槽不能搬（2026-11-14）：文件被占用时复制会失败，而且搬完那个
@@ -7145,9 +7145,9 @@ def move_install_root_dialog():
     if _running:
         messagebox.showwarning(
             T("有版本正在运行"),
-            "这些版本还在运行：%s\n\n"
+            T("这些版本还在运行：%s\n\n"
             "请先点「全部停止」（或逐个停止）再移动 ——\n"
-            "运行中的程序占着文件，复制会失败；搬完它也还指着旧位置。"
+            "运行中的程序占着文件，复制会失败；搬完它也还指着旧位置。")
             % "、".join(_running))
         return
 
@@ -7161,10 +7161,10 @@ def move_install_root_dialog():
               font=("Microsoft YaHei UI", 10, "bold")
               ).pack(padx=20, pady=(16, 4), anchor="w")
     ttk.Label(win,
-              text=("把已装的所有版本整体搬到另一个位置。\n"
+              text=(T("把已装的所有版本整体搬到另一个位置。\n"
                     "过程：复制 → 校验（文件数 + 字节数）→ 改配置 → 删旧位置。\n"
                     "复制或校验失败会保留旧位置、不动配置；\n"
-                     "旧目录清理失败时会提示你手动清理。"),
+                     "旧目录清理失败时会提示你手动清理。")),
               foreground=_MUTED, justify="left", wraplength=470
               ).pack(padx=20, pady=(0, 10), anchor="w")
 
@@ -7191,9 +7191,9 @@ def move_install_root_dialog():
     ttk.Button(row, text=T("浏览…"), width=7, command=_pick).pack(side="left")
 
     ttk.Label(win,
-              text=("· 新位置下会创建 dsh-versions\\ 存放各版本槽\n"
+              text=(T("· 新位置下会创建 dsh-versions\\ 存放各版本槽\n"
                     "· 磁盘空间要够（每个版本约 0.7～1.3 GB）\n"
-                    "· 移动期间请勿启动或停止任何版本"),
+                    "· 移动期间请勿启动或停止任何版本")),
               foreground="#8A5A00", justify="left", wraplength=470
               ).pack(padx=20, pady=(10, 0), anchor="w")
 
@@ -7221,8 +7221,8 @@ def move_install_root_dialog():
                       % (_need / 1073741824.0, _free / 1073741824.0))
         if not messagebox.askyesno(
                 T("确认移动"),
-                "即将把 %d 个版本搬到：\n%s\n\n%s%s\n\n"
-                "旧位置在全部校验通过后才会被删除。\n\n继续吗？"
+                T("即将把 %d 个版本搬到：\n%s\n\n%s%s\n\n"
+                "旧位置在全部校验通过后才会被删除。\n\n继续吗？")
                 % (len(plan["slots"]), target, body, _space)):
             return
         try:
@@ -7313,8 +7313,8 @@ def _clear_logs_dialog(parent=None):
         return
     if not messagebox.askyesno(
             T("清空日志"),
-            "当前日志：%s（%d 行）\n位置：%s\n\n"
-            "清空后无法恢复，但不影响任何已安装版本、配置和进程。\n\n确定清空吗？"
+            T("当前日志：%s（%d 行）\n位置：%s\n\n"
+            "清空后无法恢复，但不影响任何已安装版本、配置和进程。\n\n确定清空吗？")
             % (_fmt_size(sz), lines, LOG_FILE), parent=parent):
         return
     err = ""
@@ -7500,9 +7500,9 @@ def _dir_group_single(parent):
             try:
                 messagebox.showinfo(
                     T("安装位置已更新"),
-                    "新的安装根目录：\n%s\n\n"
+                    T("新的安装根目录：\n%s\n\n"
                     "之后安装/纳入的版本会放这里。\n"
-                    "（已经装好的版本不受影响；如需整体搬家，用「移动安装根目录…」）"
+                    "（已经装好的版本不受影响；如需整体搬家，用「移动安装根目录…」）")
                     % os.path.normpath(INSTALL_BASE))
             except Exception:
                 pass
@@ -7511,13 +7511,13 @@ def _dir_group_single(parent):
         ttk.Button(df, text=T("移动安装根目录…"), command=move_install_root_dialog
                    ).pack(anchor="w", pady=(8, 0))
         _hint = ttk.Label(df,
-                          text="换盘/换位置不用卸载：点上面这个按钮，所有版本连同数据"
-                               "一起搬过去（复制 → 校验 → 改配置 → 删旧位置）。",
+                          text=T("换盘/换位置不用卸载：点上面这个按钮，所有版本连同数据"
+                               "一起搬过去（复制 → 校验 → 改配置 → 删旧位置）。"),
                           foreground=_MUTED, justify="left")
         _hint.pack(anchor="w", pady=(4, 0))
         _auto_wrap(_hint, pad=28)
-        _where = ttk.Label(df, text="版本装在：<安装根>\\dsh-versions\\<槽>；"
-                                    "临时文件在各槽的 .tmp 下",
+        _where = ttk.Label(df, text=T("版本装在：<安装根>\\dsh-versions\\<槽>；"
+                                    "临时文件在各槽的 .tmp 下"),
                            foreground=_MUTED, justify="left")
         _where.pack(anchor="w", pady=(6, 0))
         _auto_wrap(_where, pad=28)
@@ -7782,9 +7782,9 @@ def _settings_display_dialog():
     if not SLOT_KEYS:
         messagebox.showinfo(
             T("还没有可显示的槽"),
-            "当前没有任何版本槽，所以没有可勾选/排序的对象。\n\n"
+            T("当前没有任何版本槽，所以没有可勾选/排序的对象。\n\n"
             "先装一个版本（设置 → 版本管理 → 安装官方版 dsh），之后这里就能调整\n"
-            "显示哪几个槽、它们的左右顺序。")
+            "显示哪几个槽、它们的左右顺序。"))
         return
 
     order = _ui_order()                                   # 工作副本（含全部槽）
@@ -7815,7 +7815,7 @@ def _settings_display_dialog():
 
     def _row_text(k):
         cfg = VC[k]
-        ver = INSTALLED.get(k) or "未知"
+        ver = INSTALLED.get(k) or T("未知")
         mark = "[✓]" if k in shown else "[  ]"
         return "%s %-3s  %-8s :%-5d %s" % (mark, k, cfg["label"], cfg["port"], ver)
 
@@ -7902,8 +7902,8 @@ def _settings_display_dialog():
     tk.Spinbox(opt, from_=1, to=MAX_SLOTS, width=4, textvariable=mv,
                justify="center").pack(side="left", padx=6)
     ttk.Label(opt, text=T("个槽"), foreground=_MUTED).pack(side="left")
-    ttk.Label(win, text="上限 %d。勾选数超过它时只显示靠前的几个 —— "
-                        "想只看某几个，把不要的取消勾选即可。" % MAX_SLOTS,
+    ttk.Label(win, text=T("上限 %d。勾选数超过它时只显示靠前的几个 —— "
+                        "想只看某几个，把不要的取消勾选即可。") % MAX_SLOTS,
               foreground=_MUTED, wraplength=470, justify="left"
               ).pack(padx=20, pady=(0, 12), anchor="w")
 
@@ -7991,8 +7991,8 @@ def _settings_display_dialog():
 
     lb.bind("<<ListboxSelect>>", _b_sync, add="+")
     bcb.bind("<<ComboboxSelected>>", _b_pick, add="+")
-    ttk.Label(bf, text="「系统默认浏览器」= 你平时双击链接时用的那个。"
-                       "改完点「保存」生效；卡片上的按钮会变成「打开 Chrome」这种。",
+    ttk.Label(bf, text=T("「系统默认浏览器」= 你平时双击链接时用的那个。"
+                       "改完点「保存」生效；卡片上的按钮会变成「打开 Chrome」这种。"),
               foreground=_MUTED, wraplength=460, justify="left"
               ).pack(anchor="w", pady=(6, 0))
     _b_sync()
@@ -8049,8 +8049,8 @@ def _settings_display_dialog():
             log(T("[设置] 浏览器：%s") % "、".join(bchanged))
         if len(vis) > n:
             messagebox.showinfo(T("已保存"),
-                                "已保存。勾选了 %d 个，但「最多显示 %d 个」限制下"
-                                "只显示前 %d 个：\n\n%s"
+                                T("已保存。勾选了 %d 个，但「最多显示 %d 个」限制下"
+                                "只显示前 %d 个：\n\n%s")
                                 % (len(vis), n, n, "、".join(vis[:n])))
         # 目录改动的说明放最后弹：它往往要求用户「重启」或「手工删旧目录」，
         # 盖在别的提示上面容易被忽略。
@@ -8142,9 +8142,9 @@ def _log_fresh_env():
         raw = open(tmp, "rb").read().decode("utf-8", "replace")
         for ln in raw.splitlines():
             if ln.strip().startswith(("[OK]", "[注意]", "[缺失]")):
-                log("[环境] " + ln.strip())
-        log("[环境] 完整报告见 dsh-manager.log；要自己再跑一遍："
-            "python scripts\\check-env.py（换新机器 / 排查管理器起不来时用）")
+                log(T("[环境] ") + ln.strip())
+        log(T("[环境] 完整报告见 dsh-manager.log；要自己再跑一遍："
+            "python scripts\\check-env.py（换新机器 / 排查管理器起不来时用）"))
     except Exception as e:
         log(T("[环境] 自动体检失败：%s") % e)
 

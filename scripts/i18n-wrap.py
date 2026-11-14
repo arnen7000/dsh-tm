@@ -68,11 +68,17 @@ def _ui_nodes(tree):
         取 `%` 的左操作数、或 `.format()` 的接收者。直接对格式化后的成品查表是
         查不到的（每句都带不同的路径/版本号）。
         """
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
-            node = node.left
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
-                and node.func.attr == "format":
-            node = node.func.value
+        # 反复往左剥：`("已停止  :%d" % port) + 体检标记` 这种是两层 —— 顶层 `+`、
+        # 里层 `%`。只剥一层的话最里面的中文常量永远露不出来（2026-11-14 实测：
+        # 状态行「已停止 :4080」在英文模式下仍是中文）。
+        while True:
+            if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Mod, ast.Add)):
+                node = node.left
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                    and node.func.attr == "format":
+                node = node.func.value
+            else:
+                break
         if isinstance(node, ast.Constant) and isinstance(node.value, str) \
            and CJK.search(node.value):
             out[id(node)] = node
@@ -138,25 +144,36 @@ def _collect(src):
         if already_wrapped(node):
             skipped.append((node.lineno, "已包T", node.value[:36]))
             continue
-        if node.lineno != node.end_lineno:
-            skipped.append((node.lineno, "跨行", node.value[:36]))
-            continue
         seg = ast.get_source_segment(src, node)
         if seg is None:
             skipped.append((node.lineno, "取不到片段", node.value[:36]))
             continue
-        todo.append((node.lineno, node.col_offset, node.end_col_offset, seg))
+        todo.append((node.lineno, node.col_offset, node.end_lineno,
+                     node.end_col_offset, seg))
     return todo, skipped
 
 
 def _apply(src, todo):
-    """按字节偏移倒序替换（AST 的 col_offset 是 UTF-8 字节偏移，不是字符）。"""
-    lines = src.splitlines(keepends=True)
-    for lineno, col, end_col, seg in sorted(todo, key=lambda x: (x[0], x[1]), reverse=True):
-        b = lines[lineno - 1].encode("utf-8")
-        new = b[:col] + ("T(" + seg + ")").encode("utf-8") + b[end_col:]
-        lines[lineno - 1] = new.decode("utf-8")
-    return "".join(lines)
+    """按**绝对字节偏移**倒序替换。
+
+    为什么要算绝对偏移而不是逐行改：字符串字面量可以跨行
+    （`log("前半段"\n    "后半段" % x)` 在 AST 里是一个常量，但源码占两行）。
+    逐行替换只能处理单行，跨行的会被整个跳过 —— 表现为"这条日志怎么还是中文"。
+    """
+    # 每行起始的绝对字节偏移
+    starts, acc = [], 0
+    for line in src.splitlines(keepends=True):
+        starts.append(acc)
+        acc += len(line.encode("utf-8"))
+    raw = src.encode("utf-8")
+    edits = []
+    for lineno, col, end_lineno, end_col, seg in todo:
+        a = starts[lineno - 1] + col
+        b = starts[end_lineno - 1] + end_col
+        edits.append((a, b, seg))
+    for a, b, seg in sorted(edits, reverse=True):
+        raw = raw[:a] + ("T(" + seg + ")").encode("utf-8") + raw[b:]
+    return raw.decode("utf-8")
 
 
 def _ensure_import(src):

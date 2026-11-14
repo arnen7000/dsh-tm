@@ -556,8 +556,8 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
         # 首槽 / 既有槽都没自带 node 时才退回系统 node，并说清代价，
         # 别让用户以为拿到了完整隔离。
         node_exe = "node"
-        p.on_step("未找到可复用的 node 运行时，本槽将使用系统 node"
-                  "（换版本若报原生模块错误，请为本槽补一份 node）")
+        p.on_step(T("未找到可复用的 node 运行时，本槽将使用系统 node"
+                  "（换版本若报原生模块错误，请为本槽补一份 node）"))
 
     slot_cfg = adopt_mod.build_slot_config(
         slot_key=slot_key, label=dir_name, root=root, dsh_home=dsh_home,
