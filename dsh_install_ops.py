@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import threading
 import time
+from dsh_i18n import T
 
 
 class Progress(object):
@@ -134,7 +135,7 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
         base_for_backup = install_base or os.path.dirname(os.path.abspath(versions_root))
         backup_root = os.path.join(base_for_backup, "dsh备份")
 
-    p.on_step("备份配置…")
+    p.on_step(T("备份配置…"))
     try:
         backup_config(config_path)
     except IOError as e:
@@ -153,9 +154,9 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
         try:
             src_links = adopt_mod.collect_links(src_home)
         except Exception as e:
-            p.on_step("提示：读取原数据目录的链接失败（插件可能需要在管理器里重装）：%s" % e)
+            p.on_step(T("提示：读取原数据目录的链接失败（插件可能需要在管理器里重装）：%s") % e)
             src_links = []
-        p.on_step("备份原来的用户数据（%s，%s）…" % (src_home, info.get("source_home_why") or ""))
+        p.on_step(T("备份原来的用户数据（%s，%s）…") % (src_home, info.get("source_home_why") or ""))
         try:
             src_backup, berr = adopt_mod.backup_dsh_home(src_home, backup_root)
         except Exception as e:
@@ -165,18 +166,18 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
         if src_backup is None:
             return (False, "", "备份原来的用户数据失败，已中止（没有做任何改动）：\n%s"
                     % (berr or "原因未知"))
-        p.on_step("已备份到 %s" % src_backup)
+        p.on_step(T("已备份到 %s") % src_backup)
 
     # node 运行时：源可能是文件或目录；找不到就别硬来——没有独立 node 的槽
     # 与既有槽不同构，换版本时会有 ABI 风险，所以这里当硬性要求。
     if node_exe_source:
-        p.on_step("复制 node 运行时…")
+        p.on_step(T("复制 node 运行时…"))
         node_exe, err = adopt_mod.copy_node_exe(node_exe_source, root)
         if not node_exe:
             return (False, "", err)
     else:
         node_exe = ""
-        p.on_step("未找到可复用的 node 运行时，本槽将使用系统 node（换版本时留意 ABI）…")
+        p.on_step(T("未找到可复用的 node 运行时，本槽将使用系统 node（换版本时留意 ABI）…"))
 
     # ── 3) 先建数据目录、把备份的用户数据复制进来，再复制几百 MB 程序 ──────
     # 顺序是刻意的（2026-10-31 调整）：用户数据这一步最容易失败 —— 旧 dsh 没退
@@ -195,7 +196,7 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
     # 复制完当场核对 —— 不完整就中止，不能"新槽看着正常、只少了几个会话"。
     data_note = ""
     if src_backup:
-        p.on_step("把原来的会话/设置/凭据复制进新槽…")
+        p.on_step(T("把原来的会话/设置/凭据复制进新槽…"))
         copy_fails = []
         try:
             adopt_mod.copy_tree_nolinks(src_backup, dsh_home, copy_fails)
@@ -227,7 +228,7 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
         _st = adopt_mod.tree_stats(node_modules) or {}
     except Exception:
         _st = {}
-    p.on_step("复制 dsh 程序与依赖（%s 个文件 / %.0f MB，可能 1–5 分钟，请勿关闭）…"
+    p.on_step(T("复制 dsh 程序与依赖（%s 个文件 / %.0f MB，可能 1–5 分钟，请勿关闭）…")
               % (_st.get("files", "?"), (_st.get("bytes") or 0) / 1048576.0))
     try:
         shutil.copytree(node_modules, os.path.join(root, "node_modules"),
@@ -238,7 +239,7 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
 
     # 复制完再验一次：版本号必须与体检时读到的一致，入口文件必须在。
     # 复制几百 MB 时偶发"复制到一半中断/杀软锁文件"，不验就会登记一个坏槽。
-    p.on_step("校验复制结果…")
+    p.on_step(T("校验复制结果…"))
     new_dsh_dir = os.path.join(root, "node_modules", "@deepseek-ai", "dsh")
     new_ver = adopt_mod.read_package_version(new_dsh_dir)
     if not new_ver:
@@ -257,21 +258,21 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
     # 指向旧安装目录的改指新槽，指向槽外仓库的原样指回去。
     # 必须等 node_modules 复制完再建 —— 链接的目标就在里面。
     if src_backup and src_links:
-        p.on_step("重建插件链接（%d 个）…" % len(src_links))
+        p.on_step(T("重建插件链接（%d 个）…") % len(src_links))
         old_root = os.path.dirname(os.path.abspath(node_modules))
         try:
             made, lost = adopt_mod.relink_home(dsh_home, src_links,
                                                old_root=old_root, new_root=root)
         except Exception as e:
             made, lost = [], [(r, t) for r, t in src_links]
-            p.on_step("提示：重建插件链接失败：%s" % e)
+            p.on_step(T("提示：重建插件链接失败：%s") % e)
         if made:
             data_note += "，%d 个插件链接已重建" % len(made)
         if lost:
             data_note += ("，%d 个链接的目标已不存在（插件可能要在管理器里重装）"
                           % len(lost))
 
-    p.on_step("写入配置…")
+    p.on_step(T("写入配置…"))
     slot_cfg = adopt_mod.build_slot_config(
         slot_key=plan["slot_key"], label=plan["label"], root=root,
         dsh_home=dsh_home, temp_dir=plan["temp_dir"], port=plan["port"],
@@ -300,7 +301,7 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
     soft = [t for lv, t in shape if lv != "错误"]
     hard = [t for lv, t in shape if lv == "错误"]
     for t in soft:
-        p.on_step("提示：%s" % t)
+        p.on_step(T("提示：%s") % t)
 
     p.on_done(True, {
         "slot_key": plan["slot_key"],
@@ -530,9 +531,9 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
     temp_dir = adopt_mod.default_temp_dir(dir_name, root, temp_root=temp_root)
     bin_js = os.path.join(root, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js")
 
-    p.on_step("准备槽 %s（%s，端口 %d）…" % (slot_key, dir_name, port))
+    p.on_step(T("准备槽 %s（%s，端口 %d）…") % (slot_key, dir_name, port))
     if reuse_note:
-        p.on_step("提示：%s" % reuse_note)
+        p.on_step(T("提示：%s") % reuse_note)
     try:
         os.makedirs(dsh_home, exist_ok=True)
         os.makedirs(temp_dir, exist_ok=True)
@@ -547,7 +548,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
     node_exe = ""
     node_src = _pick_node_exe(existing, install_base, os.path.expanduser("~"))
     if node_src and os.path.isfile(node_src):
-        p.on_step("复制 node 运行时到本槽（每槽独立，ABI 稳定）…")
+        p.on_step(T("复制 node 运行时到本槽（每槽独立，ABI 稳定）…"))
         node_exe, nerr = adopt_mod.copy_node_exe(node_src, root)
         if not node_exe:
             return (False, "", "复制 node 运行时失败：%s" % nerr)
@@ -563,7 +564,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
         temp_dir=temp_dir, port=port, node_exe=node_exe, browser=browser,
         install_base=install_base)
 
-    p.on_step("备份配置…")
+    p.on_step(T("备份配置…"))
     try:
         backup_config(config_path)
     except IOError as e:
@@ -572,7 +573,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
 
     # 先登记：安装内核要按槽目录落 node_modules，而槽的端口/路径/
     # 数据目录都在 config 里 —— 先登记，装完就只差「校验」一步。
-    p.on_step("登记槽位…")
+    p.on_step(T("登记槽位…"))
     try:
         cfg = read_config(config_path)
         cfg.setdefault("versions", {})[slot_key] = slot_cfg
@@ -581,7 +582,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
         _drop_partial_install(root, dsh_home, versions_root)
         return (False, "", "写 config.json 失败：%s" % e)
 
-    p.on_step("从官方仓库安装 %s（走 npm registry，可能要几分钟）…" % ver)
+    p.on_step(T("从官方仓库安装 %s（走 npm registry，可能要几分钟）…") % ver)
     rc, out = _npm_install_slot(node_exe, root, ver, progress=p)
 
     if rc != 0:
@@ -604,7 +605,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
         return (False, "", "安装失败（退出码 %d）。最后几行输出：\n%s%s"
                 % (rc, _tail(out), hint))
 
-    p.on_step("校验安装结果…")
+    p.on_step(T("校验安装结果…"))
     if not os.path.isfile(bin_js):
         cleaned = _drop_partial_install(root, dsh_home, versions_root)
         if cleaned:
@@ -625,7 +626,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
         src = _pick_node_exe(read_config(config_path).get("versions") or {},
                              install_base, os.path.expanduser("~"))
         if src and src.strip().lower() != "node" and os.path.isfile(src):
-            p.on_step("补一份自带 node 运行时到本槽（每槽独立，ABI 稳定）…")
+            p.on_step(T("补一份自带 node 运行时到本槽（每槽独立，ABI 稳定）…"))
             fixed, nerr = adopt_mod.copy_node_exe(src, root)
             if fixed:
                 node_exe = fixed
@@ -657,7 +658,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
     try:
         real_ver = adopt_mod.read_package_version(dsh_package_dir(bin_js)) or ver
         if real_ver != ver:
-            p.on_step("注意：实际装到 %s（请求的是 %s）" % (real_ver, ver))
+            p.on_step(T("注意：实际装到 %s（请求的是 %s）") % (real_ver, ver))
             ver_note = "（实际装到 %s）" % real_ver
     except Exception:
         pass        # 只是显示名，失败不影响使用
@@ -688,7 +689,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
                 "安装结束，但槽结构和其它槽不一致（配置已保留，可重试）：\n  "
                 + "\n  ".join(hard))
     for t in soft:
-        p.on_step("提示：%s" % t)
+        p.on_step(T("提示：%s") % t)
 
     p.on_done(True, {"slot_key": slot_key, "label": dir_name, "root": root,
                      "port": port, "version": ver})
@@ -736,7 +737,10 @@ def _gen_slot_bats(adopt_mod, slot_cfg, root, slot_key, install_base=""):
         ns = {"os": os, "re": __import__("re"),
               "SLOT_KEYS": [slot_key],
               "VC": {slot_key: cfg},
-              "BASE_DIR": os.path.dirname(mgr)}
+              "BASE_DIR": os.path.dirname(mgr),
+              # `_bat_text_*` 里的文案包了 T()，exec 出来的命名空间不带 T 会
+              # NameError —— 表现为"装完没生成 bat"，很容易误判成生成逻辑坏了。
+              "T": T}
         exec(compile(__import__("ast").Module(body=keep, type_ignores=[]),
                      "<bats>", "exec"), ns)
         stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -1180,22 +1184,22 @@ def _npm_install_slot(node_exe, slot_dir, version, progress=None):
         return (-1, "槽目录不存在：%s" % slot_dir)
 
     spec = "@deepseek-ai/dsh@%s" % version
-    p.on_step("预检 %s 是否存在（顺带探测可用 npm 源）…" % spec)
+    p.on_step(T("预检 %s 是否存在（顺带探测可用 npm 源）…") % spec)
     ok, reg, why = _pick_registry(exe, cli, spec)
     if not ok:
         return (1, why)
     if reg:
-        p.on_step("默认源不可达，本次安装改用镜像 %s（仅本次生效，不改全局配置）" % reg)
+        p.on_step(T("默认源不可达，本次安装改用镜像 %s（仅本次生效，不改全局配置）") % reg)
 
     # 槽根没有 package.json 时先 npm init -y：否则 npm 会往上找父目录的
     # package.json，把依赖装到槽外去（多槽共用同一父目录时必然踩）。
     if not os.path.isfile(os.path.join(slot_dir, "package.json")):
-        p.on_step("初始化槽目录（npm init -y）…")
+        p.on_step(T("初始化槽目录（npm init -y）…"))
         rc, out = _run_npm(exe, cli, ["init", "-y"], cwd=slot_dir)
         if rc != 0:
             return (rc, "npm init -y 失败（退出码 %d）：\n%s" % (rc, _tail(out)))
 
-    p.on_step("下载并安装 %s（要几分钟，请勿关闭管理器）…" % spec)
+    p.on_step(T("下载并安装 %s（要几分钟，请勿关闭管理器）…") % spec)
     # npm 默认会为 ECONNRESET 自己重试很久（实测整段 5 分钟才报错）。这里把重试
     # 压到 1 次、退避上限 15 秒 —— 失败要快，好让下面的"换镜像重试"接上。
     fast_fail = ["--fetch-retries=1",
@@ -1206,7 +1210,7 @@ def _npm_install_slot(node_exe, slot_dir, version, progress=None):
     # 网络中断（ECONNRESET / ETIMEDOUT / EAI_AGAIN …）→ 换镜像重试一次。
     # 判据是**输出内容**，不是退出码：npm 这里返回的是 1，不是负数。
     if rc != 0 and not reg and _looks_like_network_error(out):
-        p.on_step("默认源网络中断，改用镜像 %s 重试一次（只影响本次安装）…"
+        p.on_step(T("默认源网络中断，改用镜像 %s 重试一次（只影响本次安装）…")
                   % FALLBACK_REGISTRY)
         rc, out = _run_npm(exe, cli, ["install", spec] + fast_fail +
                            ["--registry", FALLBACK_REGISTRY],
