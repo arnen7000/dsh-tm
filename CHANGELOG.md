@@ -16,17 +16,26 @@
 ### 新增
 
 - **中英双语界面**：设置 → 界面 → 「界面语言」可切 中文 / English，存 `config.json` 的 `ui.lang`，
-  缺省 `zh`（老配置无感）。切换后需重启管理器 —— 控件文案在创建时求值，无法原地刷新。
+  缺省 `zh`（老配置无感）。**切换就地生效，不需要重启** —— 见下面的 `retranslate`。
 - 翻译层 `dsh_i18n.py`：**中文原文就是 key**，英文查 `lang/en.json`，查不到原样返回中文。
   这样翻译可以分批补，任何时刻界面都不会出现空白、`None` 或 key 名。
-- **465 条运行时文案 100% 覆盖**：按钮、标签、对话框正文、状态行、日志、安装/卸载进度。
+- **583 条运行时文案 100% 覆盖**：按钮、标签、对话框正文、状态行、日志、错误消息、
+  安装/卸载进度、体检与关于窗。
+- `I18N.retranslate()`：遍历控件树，把当前 text **反查回中文 key** 再按新语言翻译，
+  zh→en、en→zh 双向就地切；卡片状态行是 `textvariable`，重建一次卡片让它跟上。
+- **英文版使用说明** `docs/user-guide.en.md`：英文模式下点「使用说明」打开它，
+  缺失时退回中文版。
 - 工具 `scripts/i18n-wrap.py`：AST 白名单，只包 `text=` / `title=` / `prompt=` / `log()` /
   `messagebox.*` / `xxx.set()` / `p.on_step()` 这些**确定只用于显示**的位置。
 
 ### 修复
 
-- 英文界面下卡片按钮被截断（`Copy entry URL` → `Copy URL`、`Program directory` → `Program dir`）。
-  240px 卡片里按钮只有约 105px，英文必须比中文短才放得下。
+- 英文界面下按钮被截断：卡片按钮（240px 里只有约 105px）改成 `Copy URL` / `Program dir` /
+  `Data dir`；设置窗的 `width=8/10/11` 是按中文字数写死的，直接去掉让 Tk 自己算。
+- 自定义按钮函数 `_obtn` / `_mbtn` 里的文案以**位置参数**传入，AST 白名单抓不到，
+  改为在函数内部 `T(text)`。
+- `i18n` 的 import 顺序：tkinter 缺失时的提示语本身要用 `T()`，原来排在普通 import 区
+  会 `NameError: name 'T' is not defined`（被 `test-tk-selfheal` 抓到）。
 - `_apply_palette` 现在同步重绑 `_APP_BG` / `_CARD_BG` / `_CARD_BD` —— 此前深色主题下
   进度窗会冒出一块浅色。
 

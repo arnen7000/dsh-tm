@@ -6994,14 +6994,24 @@ def _open_project_page():
 
 
 def _open_user_guide():
-    """打开详细使用说明（文档文件）。找不到时给出明确说明。"""
-    p = os.path.join(BASE_DIR, "docs", "dsh管理器使用说明.md")
-    if os.path.exists(p):
-        try:
-            os.startfile(p)
-            return
-        except Exception:
-            pass
+    """打开详细使用说明（文档文件）。找不到时给出明确说明。
+
+    英文模式下优先打开 `docs/user-guide.en.md` —— 中文文档对英文用户没有意义。
+    英文版缺失时退回中文版（总比打不开好）。
+    """
+    _cands = []
+    if I18N.lang() == "en":
+        _cands.append(os.path.join(BASE_DIR, "docs", "user-guide.en.md"))
+    _cands.append(os.path.join(BASE_DIR, "docs", "dsh管理器使用说明.md"))
+    p = _cands[-1]
+    for _p in _cands:
+        if os.path.exists(_p):
+            p = _p
+            try:
+                os.startfile(p)
+                return
+            except Exception:
+                pass
     messagebox.showinfo(T("详细使用说明"),
                         T("找不到文档文件：\n%s\n\n"
                         "完整说明见程序目录下的 docs/ 文件夹，"
