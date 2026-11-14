@@ -24,6 +24,7 @@ pause
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\uninstall.ps1"
 
+if errorlevel 1 goto :failed
 echo.
 echo ============================================================
 echo   卸载完成。详细信息请看上面的输出
@@ -32,3 +33,14 @@ echo   脚本不会删除你的聊天数据，也不会影响其它用 node 的软件。
 echo ============================================================
 echo.
 pause
+exit /b 0
+
+:failed
+echo.
+echo ============================================================
+echo   卸载没有完成（可能是取消了，或中途出错）。请看上面的输出。
+echo   已处理的槽，其用户数据备份在  安装目录\dsh备份\ 中。
+echo ============================================================
+echo.
+pause
+exit /b 1

@@ -76,21 +76,63 @@ def tree_stats(root):
 
 
 def _safe_rmtree(path):
-    """删除一棵树但**不穿过** junction。失败只返回错误，不抛。"""
+    """删除一棵树但**不穿过** junction。失败只返回错误，不抛。
+
+    2026-11-11 修：原来用 `shutil.rmtree(path, onerror=...)`，只在**顶层**
+    判了一次 reparse 位。子树里的 junction（`.dsh-home\\profiles\\node_modules\\*`
+    指向槽外的插件仓库）不在检查范围内，而 rmtree 是否跟随 junction 取决于
+    Python 版本实现 —— 依赖它是赌运气。改成自己逐层走：碰到链接只摘链接，
+    与 dsh_uninstall_ops._force_rmtree 保持同一套语义。
+    """
     if not os.path.exists(path):
         return ""
-    if is_link_like(path):
-        # 是链接就只删链接本身
+    errors = []
+
+    def _clear_ro(p):
         try:
-            os.rmdir(path) if os.path.isdir(path) else os.remove(path)
-            return ""
+            os.chmod(p, stat.S_IWRITE)
+        except OSError:
+            pass
+
+    def _walk(p):
+        if is_link_like(p):
+            # 只摘重解析点本身，绝不进去删目标内容
+            _clear_ro(p)
+            try:
+                os.rmdir(p)
+            except OSError:
+                try:
+                    os.unlink(p)
+                except OSError as ex:
+                    errors.append("%s（%s）" % (p, ex))
+            return
+        try:
+            entries = list(os.scandir(p))
         except OSError as e:
-            return str(e)
-    try:
-        shutil.rmtree(path, onerror=_on_rm_error)
-        return ""
-    except Exception as e:
-        return str(e)
+            errors.append("%s（%s）" % (p, e))
+            return
+        for e in entries:
+            child = e.path
+            if is_link_like(child) or e.is_dir(follow_symlinks=False):
+                _walk(child)
+                continue
+            _clear_ro(child)
+            try:
+                os.unlink(child)
+            except OSError as ex:
+                _on_rm_error(os.unlink, child, (type(ex), ex, None))
+                if os.path.exists(child):
+                    errors.append("%s（%s）" % (child, ex))
+        _clear_ro(p)
+        try:
+            os.rmdir(p)
+        except OSError as e:
+            errors.append("%s（%s）" % (p, e))
+
+    _walk(path)
+    if os.path.exists(path):
+        return "；".join(errors[:3]) or ("无法删除：%s" % path)
+    return ""
 
 
 def _on_rm_error(func, path, exc_info):
@@ -142,6 +184,24 @@ def _copy_tree_no_follow(src, dst):
             except Exception as e:
                 raise RuntimeError("复制 %s 失败：%s" % (full, e))
     return copied_links
+
+
+def _free_bytes(path):
+    """目标路径所在磁盘的剩余字节数。
+
+    目标目录可能还不存在（用户刚选的新位置），这时往上找最近的已存在父目录 ——
+    `shutil.disk_usage` 对不存在的路径会抛错，但它所在盘是同一个。
+    """
+    p = os.path.abspath(path)
+    while p and not os.path.exists(p):
+        parent = os.path.dirname(p)
+        if parent == p:
+            return None
+        p = parent
+    try:
+        return shutil.disk_usage(p).free
+    except Exception:
+        return None
 
 
 def plan_move(src_base, dst_base, slot_dirs, backup_dirname="dsh备份",
@@ -202,11 +262,32 @@ def plan_move(src_base, dst_base, slot_dirs, backup_dirname="dsh备份",
     if os.path.isdir(src_tmp):
         steps.append("复制临时目录 %s → %s" % (src_tmp, dst_tmp))
 
+    # 空间预检（2026-11-14）：跨盘搬迁最常见的失败就是「拷到一半盘满」。
+    # 与其拷到 70% 再报错（旧位置还占着、新位置一堆残件），不如事前算清楚。
+    need = sum(s["stats"]["bytes"] for s in slots)
+    for extra in (src_bak, src_tmp):
+        if os.path.isdir(extra):
+            try:
+                need += tree_stats(extra)["bytes"]
+            except Exception:
+                pass
+    free = _free_bytes(dst_base)
+    margin = int(need * 0.05) + 200 * 1048576      # 5% + 200MB 余量
+    if free is not None and need + margin > free:
+        return {"ok": False,
+                "error": ("目标磁盘空间不足，已中止（什么都没动）：\n"
+                          "需要约 %.2f GB（含 5%% 余量），该盘可用 %.2f GB。\n\n"
+                          "请清理空间，或换一个位置。"
+                          % ((need + margin) / 1073741824.0,
+                             free / 1073741824.0)),
+                "steps": [], "slots": []}
+
     return {"ok": True, "error": "", "steps": steps, "slots": slots,
             "src_base": src_base, "dst_base": dst_base,
             "src_versions": src_versions, "dst_versions": dst_versions,
             "src_bak": src_bak, "dst_bak": dst_bak,
-            "src_tmp": src_tmp, "dst_tmp": dst_tmp}
+            "src_tmp": src_tmp, "dst_tmp": dst_tmp,
+            "need_bytes": need, "free_bytes": free}
 
 
 def move_now(plan, config_path, progress=None):

@@ -118,7 +118,7 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
 
     existing = (read_config(config_path).get("versions") or {})
     if len(existing) >= max_slots:
-        return (False, "", "槽位已满（%d/%d），请先删除不再使用的槽"
+        return (False, "", "槽位已满（%d/%d），请先用「设置 → 版本管理 → 卸载 / 移出管理」卸掉不用的槽"
                 % (len(existing), max_slots))
 
     # 注意：不要把 backup_root 当 temp_root 传下去 —— 那是「用户数据备份目录」，
@@ -160,7 +160,9 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
             src_backup, berr = adopt_mod.backup_dsh_home(src_home, backup_root)
         except Exception as e:
             src_backup, berr = None, str(e)
-        if not src_backup:
+        # 空串 = 源数据目录为空、无需备份（不是失败）；None 才是真失败。
+        # 2026-11-12：以前用 `if not src_backup`，空目录会被当成失败中止纳入。
+        if src_backup is None:
             return (False, "", "备份原来的用户数据失败，已中止（没有做任何改动）：\n%s"
                     % (berr or "原因未知"))
         p.on_step("已备份到 %s" % src_backup)
@@ -186,7 +188,7 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
         os.makedirs(dsh_home, exist_ok=True)
         os.makedirs(plan["temp_dir"], exist_ok=True)
     except Exception as e:
-        _cleanup_partial(root)
+        _cleanup_partial(root, versions_root)
         return (False, "", "创建数据/临时目录失败（已清理未完成目录）：%s" % e)
 
     # 只复制（源目录与备份都不动）：新槽仍是独立的一份，用户打开还是原来的会话。
@@ -199,12 +201,12 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
             adopt_mod.copy_tree_nolinks(src_backup, dsh_home, copy_fails)
             missing, _changed, total = adopt_mod.verify_copy(src_backup, dsh_home)
         except Exception as e:
-            _cleanup_partial(root)
+            _cleanup_partial(root, versions_root)
             return (False, "",
                     "把原用户数据复制进新槽失败，已中止（原数据与备份都没动）：%s\n"
                     "备份仍在：%s" % (e, src_backup))
         if missing or copy_fails:
-            _cleanup_partial(root)
+            _cleanup_partial(root, versions_root)
             return (False, "",
                     "原用户数据复制不完整，已中止（原数据与备份都没动）：\n"
                     "  · 应复制 %d 个文件，缺 %d 个%s\n"
@@ -218,12 +220,20 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
                        src_backup))
         data_note = "，原用户数据已带过来（备份在 %s）" % src_backup
 
-    p.on_step("复制 dsh 程序与依赖（几百 MB，请稍候）…")
+    # 先把体积/文件数报出来：复制 700+ MB / 6 万文件时进度窗只有一行文字，
+    # 不给数字用户会以为卡死（2026-11-12 实测，等到强杀）。
+    _st = {}
+    try:
+        _st = adopt_mod.tree_stats(node_modules) or {}
+    except Exception:
+        _st = {}
+    p.on_step("复制 dsh 程序与依赖（%s 个文件 / %.0f MB，可能 1–5 分钟，请勿关闭）…"
+              % (_st.get("files", "?"), (_st.get("bytes") or 0) / 1048576.0))
     try:
         shutil.copytree(node_modules, os.path.join(root, "node_modules"),
                         dirs_exist_ok=True)
     except Exception as e:
-        _cleanup_partial(root)
+        _cleanup_partial(root, versions_root)
         return (False, "", "复制程序目录失败（已清理未完成目录）：%s" % e)
 
     # 复制完再验一次：版本号必须与体检时读到的一致，入口文件必须在。
@@ -232,15 +242,15 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
     new_dsh_dir = os.path.join(root, "node_modules", "@deepseek-ai", "dsh")
     new_ver = adopt_mod.read_package_version(new_dsh_dir)
     if not new_ver:
-        _cleanup_partial(root)
+        _cleanup_partial(root, versions_root)
         return (False, "", "复制后读不到版本号（复制可能被中断，已清理未完成目录）。"
                            "请重试，或改用「安装官方版 dsh」。")
     if ver and new_ver != ver:
-        _cleanup_partial(root)
+        _cleanup_partial(root, versions_root)
         return (False, "", "复制后版本号不一致（体检时 %s，复制后 %s），已清理未完成目录。"
                 % (ver, new_ver))
     if not os.path.isfile(os.path.join(new_dsh_dir, "lib", "bin.js")):
-        _cleanup_partial(root)
+        _cleanup_partial(root, versions_root)
         return (False, "", "复制后缺 lib/bin.js（复制不完整，已清理未完成目录）。")
 
     # 把被跳过的 junction 重建回来（插件就挂在这些链接上）。
@@ -271,7 +281,7 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
         cfg.setdefault("versions", {})[plan["slot_key"]] = slot_cfg
         write_config_atomic(config_path, cfg)
     except Exception as e:
-        _cleanup_partial(root)
+        _cleanup_partial(root, versions_root)
         return (False, "", "写 config.json 失败（已清理未完成目录，原文件保持不变）：%s" % e)
 
     # ── 4) 与既有槽对齐：三件 bat + 形状校验 ──────────────────────────
@@ -310,12 +320,34 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
             % (plan["slot_key"], plan["label"], plan["port"], tail))
 
 
-def _cleanup_partial(root):
-    """删掉建到一半的槽目录。
-    只删**本次新建**的目录名（带 -N 后缀的那些尤其要小心），所以额外确认
-    它不在任何已登记的安装根里 —— 宁可删不掉留个残件，也不能误删用户数据。"""
+def _root_under_versions_root(root, versions_root):
+    """root 是否严格位于 versions_root 之下（不同盘符、空值一律 False）。
+
+    这是所有「自动删目录」动作的最后一道闸：install_base 一旦被误填成用户
+    目录或盘符根，宁可留下半装残件，也不能把整棵目录删掉。
+    """
+    if not versions_root:
+        return False
+    try:
+        r = os.path.normcase(os.path.abspath(root))
+        base = os.path.normcase(os.path.abspath(versions_root))
+        return r != base and os.path.commonpath([r, base]) == base
+    except (ValueError, OSError):
+        return False
+
+
+def _cleanup_partial(root, versions_root=""):
+    """删掉建到一半的槽目录（**只在 versions_root 之下才动手**）。
+
+    2026-11-11 修：旧注释声称「额外确认它不在任何已登记的安装根里」，
+    但代码里只有一句 `rmtree(root)`，没有任何校验 —— install_base 误配成
+    用户目录时这里会整棵删除。现在要求调用方给出 versions_root 并做包含
+    校验；不给就一律不动手（宁可留残件，启动时日志会报出来）。
+    """
     try:
         if not os.path.isdir(root):
+            return
+        if not _root_under_versions_root(root, versions_root):
             return
         marker = os.path.join(root, "node_modules")
         if not os.path.isdir(marker):
@@ -378,7 +410,7 @@ def _reuse_empty_shell(versions_root, dir_name):
     return "%s 是上次卸载残留的空目录（没有任何文件），已清掉并复用这个槽名" % dir_name
 
 
-def _drop_partial_install(root, dsh_home):
+def _drop_partial_install(root, dsh_home, versions_root=""):
     """装失败后把「本次新建的槽目录」整个收回，别留下占名字的残件。
 
     为什么需要（2026-10-30 再次反馈「为什么又产生了 dshV1-2」）：
@@ -388,12 +420,17 @@ def _drop_partial_install(root, dsh_home):
     用户一点「重试」就让位成 dshV1-2；再失败一次就是 dshV1-3。
     也就是说**失败后的重试才是 -2 的主要产地**，光靠安装前清理空壳堵不住。
 
-    两条安全前提，缺一条就不动手：
+    三条安全前提，缺一条就不动手：
       1. 确实没装成（`node_modules/@deepseek-ai/dsh/lib/bin.js` 不存在）；
-      2. `.dsh-home` 里一个文件都没有（`_dir_is_empty_shell`）。
+      2. `.dsh-home` 里一个文件都没有（`_dir_is_empty_shell`）；
+      3. 传了 versions_root 时，目录必须严格落在它下面（防误删用户目录）。
     有用户数据、或程序已经装好，一律不删。返回 True 表示确实删干净了。
+    离线单跑（test-install-ops.py）不传 versions_root 时沿用前两条判据；
+    生产调用点一律传，见 run_official_install。
     """
     if not root or not os.path.isdir(root):
+        return False
+    if versions_root and not _root_under_versions_root(root, versions_root):
         return False
     bin_js = os.path.join(root, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js")
     if os.path.isfile(bin_js):
@@ -458,7 +495,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
     existing = (read_config(config_path).get("versions") or {})
     if len(existing) >= max_slots:
         return (False, "", "槽位已满（%d/%d）。管理器最多管理 %d 个版本，"
-                          "请先在 config.json 里删掉不再使用的槽。"
+                          "请先用「设置 → 版本管理 → 卸载 / 移出管理」卸掉不用的槽。"
                 % (len(existing), max_slots, max_slots))
 
     versions_root = versions_root or os.path.join(install_base, "dsh-versions")
@@ -530,7 +567,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
     try:
         backup_config(config_path)
     except IOError as e:
-        _drop_partial_install(root, dsh_home)
+        _drop_partial_install(root, dsh_home, versions_root)
         return (False, "", str(e))
 
     # 先登记：安装内核要按槽目录落 node_modules，而槽的端口/路径/
@@ -541,7 +578,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
         cfg.setdefault("versions", {})[slot_key] = slot_cfg
         write_config_atomic(config_path, cfg)
     except Exception as e:
-        _drop_partial_install(root, dsh_home)
+        _drop_partial_install(root, dsh_home, versions_root)
         return (False, "", "写 config.json 失败：%s" % e)
 
     p.on_step("从官方仓库安装 %s（走 npm registry，可能要几分钟）…" % ver)
@@ -549,12 +586,17 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
 
     if rc != 0:
         hint = ""
-        if rc < 0:
+        if _looks_like_network_error(out):
+            hint = ("\n\n这是**网络中断**（ECONNRESET / 超时之类），"
+                    "官方源和镜像 %s 都没成功。\n"
+                    "常见原因：代理 / VPN 干扰、公司网络限制、或 npm 源临时故障。"
+                    "稍后重试通常可恢复。" % FALLBACK_REGISTRY)
+        elif rc < 0:
             hint = ("\n\n负数退出码多为网络类错误（-4077=ECONNRESET 连接被重置、"
                     "-4078=ECONNREFUSED 等），稍后重试通常可恢复。")
         # 失败当场收回残件：否则 package.json（npm init -y 的产物）会让这个目录
         # 不再算"空壳"，下次重试就变成 dshV1-2。详见 _drop_partial_install。
-        cleaned = _drop_partial_install(root, dsh_home)
+        cleaned = _drop_partial_install(root, dsh_home, versions_root)
         if cleaned:
             _unregister_slot(config_path, slot_key)
             hint += ("\n\n本次未完成的目录已清理（槽名 %s 已还回来），"
@@ -564,7 +606,7 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
 
     p.on_step("校验安装结果…")
     if not os.path.isfile(bin_js):
-        cleaned = _drop_partial_install(root, dsh_home)
+        cleaned = _drop_partial_install(root, dsh_home, versions_root)
         if cleaned:
             _unregister_slot(config_path, slot_key)
         return (False, slot_key, "安装结束但没找到 %s。请看日志里的 npm 输出，"
@@ -896,6 +938,10 @@ def _pick_node_exe(existing_slots, base="", home=""):
     `base`/`home` 用来展开占位符；不传也能工作（只认绝对路径的老配置），
     但那样占位符配置会被漏掉 —— 调用方应当传。
     """
+    if isinstance(existing_slots, (list, tuple)):
+        # 兼容传 list 的旧调用方：以前这里直接 .items()，会抛
+        # 'list' object has no attribute 'items'，node 来源静默退回兜底。
+        existing_slots = {str(_i): _v for _i, _v in enumerate(existing_slots)}
     for _k, v in (existing_slots or {}).items():
         p = _expand_slot_path((v or {}).get("node_exe"), base, home)
         if p and os.path.isfile(p):
@@ -1049,29 +1095,71 @@ def _run_npm(node_exe, npm_cli, args, cwd=None):
     return (rc, raw.decode("utf-8", "replace"))
 
 
-def _pick_registry(node_exe, npm_cli, spec):
+# npm 的网络类报错特征（2026-11-13）。
+# 为什么要认字符串而不是只看退出码：npm 遇到 ECONNRESET 时**退出码是 1**，
+# 不是负数 —— 旧代码只在 `rc < 0` 时换镜像，于是下载中断（实测 5 分钟白等）
+# 之后直接报失败，镜像一次都没试过。
+_NET_SIGNATURES = (
+    "econnreset", "econnrefused", "etimedout", "eai_again", "enotfound",
+    "network aborted", "network request to", "network connectivity",
+    "socket hang up", "epipe", "err_socket_closed", "fetch failed",
+)
+
+
+def _looks_like_network_error(text):
+    """输出里是否含网络类报错（大小写不敏感）。"""
+    t = (text or "").lower()
+    return any(sig in t for sig in _NET_SIGNATURES)
+
+
+def _pick_registry(node_exe, npm_cli, spec, slow_secs=4.0):
     """npm view 预检：确认 <spec> 存在，并挑出可用的 registry。
 
     返回 (ok, registry, 说明)。registry 为空串表示用 npm 默认源。
+
     为什么先预检而不是直接 install：默认源 ECONNRESET 时 npm 会自己重试很久
     （实测 3.5 小时），预检几秒就能发现并改走镜像；版本号打错也能当场报出来，
-    而不是等下载完才失败。"""
+    而不是等下载完才失败。
+
+    2026-11-13 追加「慢就比一比」：预检成功不代表下载能成 —— 实测 `npm view`
+    5 秒通过、随后的 tarball 下载 5 分钟后 ECONNRESET。所以默认源如果**明显慢**
+    （超过 slow_secs，默认 4 秒），顺手测一下镜像，谁快用谁。默认源很快时不做这次额外探测。实测 npmjs 元数据 2–3 秒属正常，阈值定太小会每次安装都白测一次镜像。
+    """
     tried = []
-    for reg in ("", FALLBACK_REGISTRY):
+
+    def _probe(reg):
+        t0 = time.monotonic()
         rc, out = _run_npm(node_exe, npm_cli,
                            ["view", spec, "version"] +
                            (["--registry", reg] if reg else []))
-        name = reg or "npm 默认源"
-        tried.append(name)
-        if rc == 0:
-            return (True, reg, "")
-        if rc < 0:
-            continue        # 网络类故障 → 换下一个源
-        # rc > 0：版本不存在（E404/ETARGET）。换源也没用，直接报。
-        return (False, "", "npm 上找不到 %s（%s 返回 %d）。\n%s\n"
+        return rc, out, (time.monotonic() - t0)
+
+    rc, out, dt = _probe("")
+    tried.append("npm 默认源")
+    if rc == 0:
+        if dt <= slow_secs:
+            return (True, "", "")
+        rc2, _out2, dt2 = _probe(FALLBACK_REGISTRY)
+        tried.append(FALLBACK_REGISTRY)
+        if rc2 == 0 and dt2 < dt:
+            return (True, FALLBACK_REGISTRY, "")
+        return (True, "", "")
+    if not (rc < 0 or _looks_like_network_error(out)):
+        # 到这里才是真的「版本不存在」（E404/ETARGET）。换源也没用，直接报。
+        return (False, "", "npm 上找不到 %s（npm 默认源 返回 %d）。\n%s\n"
                            "请确认版本号是否写对（可用 npm view @deepseek-ai/dsh "
                            "versions 查全部版本）。"
-                % (spec, name, rc, _tail(out, 5)))
+                % (spec, rc, _tail(out, 5)))
+
+    rc2, out2, _dt2 = _probe(FALLBACK_REGISTRY)
+    tried.append(FALLBACK_REGISTRY)
+    if rc2 == 0:
+        return (True, FALLBACK_REGISTRY, "")
+    if not (rc2 < 0 or _looks_like_network_error(out2)):
+        return (False, "", "npm 上找不到 %s（镜像 返回 %d）。\n%s\n"
+                           "请确认版本号是否写对（可用 npm view @deepseek-ai/dsh "
+                           "versions 查全部版本）。"
+                % (spec, rc2, _tail(out2, 5)))
     return (False, "", "npm 预检失败：%s 均不可达（断网 / 代理 / npm 源故障）。\n"
                        "网络类报错多为临时性，稍后重试即可。" % " 与 ".join(tried))
 
@@ -1108,15 +1196,23 @@ def _npm_install_slot(node_exe, slot_dir, version, progress=None):
             return (rc, "npm init -y 失败（退出码 %d）：\n%s" % (rc, _tail(out)))
 
     p.on_step("下载并安装 %s（要几分钟，请勿关闭管理器）…" % spec)
-    args = ["install", spec] + (["--registry", reg] if reg else [])
+    # npm 默认会为 ECONNRESET 自己重试很久（实测整段 5 分钟才报错）。这里把重试
+    # 压到 1 次、退避上限 15 秒 —— 失败要快，好让下面的"换镜像重试"接上。
+    fast_fail = ["--fetch-retries=1",
+                 "--fetch-retry-mintimeout=3000",
+                 "--fetch-retry-maxtimeout=15000"]
+    args = ["install", spec] + fast_fail + (["--registry", reg] if reg else [])
     rc, out = _run_npm(exe, cli, args, cwd=slot_dir)
-    if rc < 0 and not reg:
-        # 网络类失败（负数退出码）→ 换镜像重试一次，仅本次命令生效。
-        p.on_step("默认源网络故障（退出码 %d），改用镜像 %s 重试一次…"
-                  % (rc, FALLBACK_REGISTRY))
-        rc, out = _run_npm(exe, cli, ["install", spec,
-                                      "--registry", FALLBACK_REGISTRY],
+    # 网络中断（ECONNRESET / ETIMEDOUT / EAI_AGAIN …）→ 换镜像重试一次。
+    # 判据是**输出内容**，不是退出码：npm 这里返回的是 1，不是负数。
+    if rc != 0 and not reg and _looks_like_network_error(out):
+        p.on_step("默认源网络中断，改用镜像 %s 重试一次（只影响本次安装）…"
+                  % FALLBACK_REGISTRY)
+        rc, out = _run_npm(exe, cli, ["install", spec] + fast_fail +
+                           ["--registry", FALLBACK_REGISTRY],
                            cwd=slot_dir)
+        if rc == 0:
+            out = (out or "") + "\n（本次安装改走了镜像 %s）" % FALLBACK_REGISTRY
     return (rc, out)
 
 

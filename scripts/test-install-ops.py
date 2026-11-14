@@ -622,8 +622,14 @@ try:
             O._pick_node_exe({"v1": {"node_exe": ""}}, base=tmp2) == "node")
     finally:
         O.bundled_node_exe = _real_bundled
-    chk("包内 node 实际存在（发布包里必须带上 runtime/node）",
-        bool(O.bundled_node_exe()), O.bundled_node_exe() or "(缺 runtime/node)")
+    # runtime/（约 200MB）被 .gitignore 排除，只有「便携包」才带。
+    # git clone 出来的源码仓库本来就没有它，README 要求用户自备 Node.js；
+    # 把「必须存在」写成无条件断言会让每个新 clone 的门禁都红。
+    if os.path.isdir(os.path.join(ROOT, "runtime")):
+        chk("便携包内 node 实际存在（runtime/node/node.exe）",
+            bool(O.bundled_node_exe()), O.bundled_node_exe() or "(缺 runtime/node)")
+    else:
+        print("SKIP  源码 clone 无 runtime/：跳过包内 node 检查（README 要求自备 Node.js）")
 finally:
     shutil.rmtree(tmp2, ignore_errors=True)
 
@@ -734,6 +740,41 @@ try:
     chk("重试时带上 --registry",
         any("--registry" in c and c[:2][0] == "install" for c in calls), str(calls))
 
+    # ⑦b 真实故障形态：npm 的网络错退出码是 **1**，不是负数（2026-11-13 实测）。
+    #     旧代码只认负数 → 下载中断 5 分钟后直接失败，镜像一次都没试过。
+    calls[:] = []
+    def _inst_fail_rc1(node_exe, npm_cli, args, cwd=None):
+        calls.append(list(args))
+        if args[:2] == ["view", "@deepseek-ai/dsh@1.0.0"]:
+            return (0, "1.0.0")
+        if "--registry" in args:
+            return (0, "ok")
+        return (1, "npm error code ECONNRESET\nnpm error network aborted")
+    O._run_npm = _inst_fail_rc1
+    rc, out = O._npm_install_slot(os.path.join(nd, "node.exe"), slot, "1.0.0")
+    chk("install 报 ECONNRESET 但退出码=1 时也会换镜像重试",
+        rc == 0 and any("--registry" in c and c[0] == "install" for c in calls),
+        "rc=%s calls=%s" % (rc, calls))
+
+    # ⑦c 预检里 npm 用 rc=1 报网络错 → 不能误判成「版本不存在」
+    def _view_net_rc1(node_exe, npm_cli, args, cwd=None):
+        calls.append(list(args))
+        if "--registry" in args:
+            return (0, "1.0.0")
+        return (1, "npm error code ECONNRESET")
+    O._run_npm = _view_net_rc1
+    ok, reg, why = O._pick_registry("node", "cli", "@deepseek-ai/dsh@1.0.0")
+    chk("预检遇到 rc=1 的 ECONNRESET 也换镜像，不误报版本不存在",
+        ok is True and reg == O.FALLBACK_REGISTRY, "%s %s" % (reg, why))
+
+    # ⑦d 网络错误识别本身
+    chk("_looks_like_network_error 认得 npm 的真实报错，也不误伤 E404/ETARGET",
+        O._looks_like_network_error("npm error code ECONNRESET")
+        and O._looks_like_network_error("npm error network aborted")
+        and O._looks_like_network_error("EAI_AGAIN registry.npmjs.org")
+        and not O._looks_like_network_error("E404 notarget")
+        and not O._looks_like_network_error("ETARGET No matching version found"))
+
     # ⑧ node 旁边没有 npm-cli.js → 明确报"运行时不完整"，不静默退回 PATH 的 npm
     bare = os.path.join(tmp3, "bare-node")
     make_node(bare)
@@ -790,7 +831,24 @@ try:
     chk("用户数据还在",
         os.path.isfile(os.path.join(s4, ".dsh-home", "settings.yaml")))
 
-    # ⑤ _unregister_slot：登记过就撤掉，没登记过返回 False 且不炸
+    # ⑤ 2026-11-11 护栏：install_base / versions_root 误配时绝不删到版本根外面
+    vroot = os.path.join(tmp4, "dsh-versions")
+    os.makedirs(vroot)
+    s5 = os.path.join(tmp4, "outside", "dshV9")
+    os.makedirs(os.path.join(s5, ".dsh-home"))
+    chk("版本根之外的残件不被收回",
+        O._drop_partial_install(s5, os.path.join(s5, ".dsh-home"), vroot) is False)
+    chk("版本根之外的目录还在", os.path.isdir(s5))
+    chk("没给 versions_root 时 helper 一律拒绝",
+        O._root_under_versions_root(s5, "") is False)
+    O._cleanup_partial(s5, vroot)
+    chk("_cleanup_partial 也不碰版本根之外的目录", os.path.isdir(s5))
+    s6 = os.path.join(vroot, "dshV8")
+    os.makedirs(os.path.join(s6, ".dsh-home"))
+    chk("版本根之内的空壳仍能正常收回",
+        O._drop_partial_install(s6, os.path.join(s6, ".dsh-home"), vroot) is True)
+
+    # ⑥ _unregister_slot：登记过就撤掉，没登记过返回 False 且不炸
     cfgp4 = os.path.join(tmp4, "config.json")
     base_config(cfgp4, 1)
     O.write_config_atomic(cfgp4, dict(O.read_config(cfgp4),

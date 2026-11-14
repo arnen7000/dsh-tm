@@ -94,7 +94,11 @@ print("== 端口分配 ==")
 # 注意：不能断言"v1 一定是 4080" —— 4080/7080 在部分 Windows 上落在
 # Hyper-V/WSL 的排除端口段里（Get-NetTCPConnection 查不到，但 bind 会失败）。
 # 所以这里断言**关系**与**避让行为**，而不是具体数值。
-p1, p2, p3, p4 = (A.suggest_port(i, []) for i in (1, 2, 3, 4))
+# 2026-11-14 修：这里原来用**默认的真实 bind 探测**，于是断言的是"这台机器此刻
+# 4080/5080 空不空"，而不是"规则对不对" —— 用户开着桌面版 dsh（占 4080）时
+# 这条会红，看起来像代码坏了。规则类断言必须显式注入 probe。
+_free = lambda _p: False        # 假装系统端口全空
+p1, p2, p3, p4 = (A.suggest_port(i, [], probe=_free) for i in (1, 2, 3, 4))
 chk("四个槽都拿到端口", all(p for p in (p1, p2, p3, p4)), str([p1, p2, p3, p4]))
 chk("槽序递增", p1 < p2 < p3 < p4, str([p1, p2, p3, p4]))
 # 2026-11-01（用户明确要求）：**不特意避开 6080 / 8080**，只要是空的就能用。
@@ -269,6 +273,14 @@ try:
 
     dst2, err2 = A.backup_dsh_home(os.path.join(tmp, "不存在"), os.path.join(tmp, "b2"))
     chk("源不存在时如实报告而非崩溃", dst2 is None and err2, str(err2))
+
+    # 2026-11-12：源数据目录为空（刚装好、没启动过）时不该留下空备份目录
+    _eh = os.path.join(tmp, "empty-home")
+    os.makedirs(_eh)
+    _eb = os.path.join(tmp, "b-empty")
+    _edst, _eerr = A.backup_dsh_home(_eh, _eb)
+    chk("空数据目录不建空备份目录（返回空串而非失败）",
+        _edst == "" and not os.path.isdir(_eb), "%r %s" % (_edst, _eerr))
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 
@@ -584,6 +596,14 @@ try:
         chk("F4 能读到版本号", _info.get("version") == "0.2.9", str(_info.get("version")))
 finally:
     shutil.rmtree(_d, ignore_errors=True)
+
+# ── G. cmd /c mklink 的路径校验（2026-11-11 防命令注入）──────────────
+chk("G1 路径含 & 分隔符时拒绝建 junction",
+    not A._cmd_safe_path("C:\\a&calc&b"))
+chk("G2 路径含 %VAR% 时拒绝建 junction",
+    not A._cmd_safe_path("D:\\%APPDATA%\\x"))
+chk("G3 普通中文 / 空格 / 反斜杠路径放行",
+    A._cmd_safe_path("D:\\我的 插件\\dshV1"))
 
 print()
 if FAILS:

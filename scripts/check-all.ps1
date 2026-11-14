@@ -107,8 +107,21 @@ function Get-OwnFiles($pattern) {
     # runtime（第三方运行时）、temp（一次性探针）、.workbuddy-ai（AI 助手的工作记忆，
     # 已被 .gitignore 排除、不随仓库发布；里面难免出现"引用某个坏字符"的笔记，
     # 让它把 U+FFFD 门禁顶红没有意义）。
-    Get-ChildItem $Repo -Recurse -File -Include $pattern -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -notmatch '\\docs\\官方手册-|\\node_modules\\|\\__pycache__\\|\\\.git\\|\\runtime\\|\\temp\\|\\\.workbuddy-ai\\' }
+    #
+    # 2026-11-11：-Include 在 PS 5.1 上对不带通配符的 -Path 时灵时不灵
+    # （干净 clone 副本里 1/6 直接返回 0 个文件，语法检查被静默跳过）。
+    # 改成先枚举再按扩展名过滤，行为与 PowerShell 版本无关。
+    $exts = @($pattern | ForEach-Object { [IO.Path]::GetExtension($_).ToLowerInvariant() })
+    Get-ChildItem $Repo -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object {
+            if (-not ($exts -contains $_.Extension.ToLowerInvariant())) { return $false }
+            # 只按**仓库内相对路径**排除目录，不能用绝对路径全文匹配：
+            # 仓库若恰好放在 C:\Temp\... 下，祖先路径里的 Temp 会把所有文件
+            # 一起排掉，1/6 语法检查被静默跳过（2026-11-11 干净 clone 实测）。
+            $rel = $_.FullName.Substring($Repo.Length).TrimStart('\', '/')
+            return ($rel -notmatch '(^|\\)(node_modules|__pycache__|\.git|runtime|temp|\.workbuddy-ai)(\\|$)' -and
+                    $rel -notmatch '^docs\\官方手册-')
+        }
 }
 
 Write-Host "仓库：$Repo" -ForegroundColor DarkGray
@@ -213,7 +226,7 @@ if (-not $PyExe) {
     # 槽目录从 config.json 反推；本机没有槽（如刚 clone 的空仓库）时只提示不算失败。
     $out2 = (& $PyExe $fixer --slots --check 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
-        if ($out2 -match '没有推求出任何槽目录|目录里没有 bat') {
+        if ($out2 -match '没有推求出任何槽目录|没从 config.json 推求出|目录里没有 bat|零槽') {
             Warn "槽目录 .bat 检查：本机没有可扫的版本槽（config.json 为空或未安装）"
         } else {
             Bad "槽目录 .bat 编码检查未通过：$out2"
@@ -324,9 +337,13 @@ $docs += @(Get-ChildItem "$Repo\docs" -File -Filter *.md -Recurse -ErrorAction S
 $links = 0
 foreach ($d in $docs) {
     $dir = Split-Path $d.FullName -Parent
-    $ms = Select-String -Path $d.FullName -Pattern '\]\(([^)]+)\)' -AllMatches -ErrorAction SilentlyContinue
-    foreach ($m in @($ms)) {
-        foreach ($g in $m.Matches) {
+    # 围栏代码块里的 ](...) 不是 Markdown 链接。2026-11-11 修：发布流程文档
+    # 的 grep 样例 `Users[\\/](...)` 曾被误判成断链，让总检长期假红。
+    $inFence = $false
+    foreach ($line in @(Get-Content -LiteralPath $d.FullName -Encoding UTF8 -ErrorAction SilentlyContinue)) {
+        if ($line -match '^\s*(```|~~~)') { $inFence = -not $inFence; continue }
+        if ($inFence) { continue }
+        foreach ($g in [regex]::Matches($line, '\]\(([^)]+)\)')) {
             $t = $g.Groups[1].Value.Trim()
             if ($t -match '^https?://' -or $t -match '^mailto:' -or $t -match '^#') { continue }
             $t = ($t -split '#')[0]
@@ -394,9 +411,18 @@ if ($Fast) {
         foreach ($t in $cand) {
             Write-Host "  运行：$($t.Substring($Repo.Length + 1))" -ForegroundColor DarkGray
             $out = (& $PyExe $t 2>&1 | Out-String)
-            $tail = (($out -split "`n") | Where-Object { $_ -match '^(PASS|FAIL|RESULT|\s*x\s)' } |
-                     Select-Object -Last 4) -join "`n"
-            if ($LASTEXITCODE -ne 0) { Bad "离线回归未通过（$($t.Substring($Repo.Length + 1))）：`n$tail" }
+            $code = $LASTEXITCODE
+            # 失败时只列 FAIL / RESULT：原来连 PASS 一起取最后 4 行，
+            # 真正的失败断言会被末尾几条 PASS 挡住，排查时看不到原因。
+            $tail = (($out -split "`n") | Where-Object { $_ -match '^(FAIL|RESULT|\s*x\s)' } |
+                     Select-Object -Last 12) -join "`n"
+            if (-not $tail) { $tail = (($out -split "`n") | Select-Object -Last 8) -join "`n" }
+            if ($code -ne 0) {
+                # 失败时把完整输出留一份（控制台只显示摘要，排查时要看全貌）。
+                $dump = Join-Path $env:TEMP ("dsh-check-all-fail-" + [IO.Path]::GetFileNameWithoutExtension($t) + ".txt")
+                try { [IO.File]::WriteAllText($dump, $out, (New-Object System.Text.UTF8Encoding($false))) } catch {}
+                Bad "离线回归未通过（$($t.Substring($Repo.Length + 1))，退出码 $code）：`n$tail`n完整输出：$dump"
+            }
             else { Ok "$(($out -split "`n" | Where-Object { $_ -match '^RESULT' }))" }
         }
 

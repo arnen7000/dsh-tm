@@ -264,17 +264,22 @@ def check_slot(key, cfg, base="", home="", self_dir="", deep=False, node_version
                             "dsh.bat 里的 TEMP 与配置不符（bat: %s / 配置: %s）—— "
                             "点「生成启动/kill/CLI bat」重建" % (got, temp_dir)))
 
-        # 4c) 槽内 .tmp：2026-10-31 之前的老规则产物（临时目录曾放在槽里）
+        # 4c) 槽内 .tmp：只有**确实不是当前 TEMP、且里面还有东西**才叫历史遗留。
+        # 2026-11-11 修：11-02 起新规则就是把临时文件放各槽 `.tmp`，
+        # config.temp_dir 往往正好指向它。旧代码无条件报「历史遗留、可整个
+        # 删除」，于是每个正常槽启动都顶一个 ⚠1，还会误导用户删掉正在用的
+        # TEMP（截图里 dsh.bat 的 TEMP 与 config 一致，已证明它是当前目录）。
         legacy = os.path.join(root, ".tmp")
-        if os.path.isdir(legacy):
+        if os.path.isdir(legacy) and _norm(legacy) != _norm(temp_dir or ""):
             n = 0
             try:
                 n = len(os.listdir(legacy))
             except Exception:
                 pass
-            out.append((LEVEL_WARN, "临时目录",
-                        "槽内还有历史遗留的 .tmp（%d 项，旧规则留下的，"
-                        "现在的 TEMP 已不指向它，可整个删除）" % n))
+            if n:
+                out.append((LEVEL_WARN, "临时目录",
+                            "槽内还有历史遗留的 .tmp（%d 项，旧规则留下的，"
+                            "现在的 TEMP 已不指向它，可整个删除）" % n))
 
     # 4d) 临时目录里堆了多少残留（强杀时 dsh 来不及清理自己建的临时目录）
     if temp_dir and os.path.isdir(temp_dir):
@@ -342,8 +347,10 @@ def check_slot(key, cfg, base="", home="", self_dir="", deep=False, node_version
 def check_all(versions, base="", home="", self_dir="", deep=False, node_version=""):
     """体检全部槽。返回 {槽键: [(级别, 项目, 说明)]}，另加一个 "_global" 键放跨槽问题。
 
-    跨槽问题目前只有一条：两个槽配了同一个端口（后启动的那个必然失败，
-    而界面只会显示"端口被非 dsh 程序占用"，极难自查）。
+    跨槽问题两条：
+      1. 两个槽配了同一个端口（后启动的那个必然失败，而界面只会显示
+         "端口被非 dsh 程序占用"，极难自查）；
+      2. 两个槽指向同一个槽目录（2026-11-13：旧版「重新纳入」造出的幽灵槽）。
     """
     result = {}
     seen = {}
@@ -359,6 +366,23 @@ def check_all(versions, base="", home="", self_dir="", deep=False, node_version=
         if len(keys) > 1:
             glob.append((LEVEL_ERROR, "端口冲突",
                          "%s 都配了端口 %d —— 后启动的必然失败" % ("、".join(keys), port)))
+
+    # 两个槽指向同一个槽目录（2026-11-13 新增）。
+    # 旧版「重新纳入」会把旧记录的 label / port / 路径整套复制到新槽键上，
+    # 于是 config 里出现「槽 v4 顶着 dshV3 的名字、和 v3 抢 6080、三个路径都
+    # 指向 dshV3」的幽灵槽。这类记录必须报出来 —— 它会让界面出现两张同名
+    # 卡片，而用户以为"我装了 v4"。
+    dirs = {}
+    for key, cfg in (versions or {}).items():
+        bj = _expand((cfg or {}).get("bin_js") or "", base, home, self_dir)
+        r = slot_root_from_bin_js(bj)
+        if r:
+            dirs.setdefault(_norm(r), []).append(key)
+    for _d, keys in sorted(dirs.items()):
+        if len(keys) > 1:
+            glob.append((LEVEL_ERROR, "重复槽",
+                         "%s 指向同一个槽目录（%s）—— 其实是同一个版本，"
+                         "删掉多余的那条记录即可" % ("、".join(keys), _d)))
     result["_global"] = glob
     return result
 

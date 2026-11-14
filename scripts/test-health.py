@@ -176,6 +176,23 @@ try:
         any(it[0] == H.LEVEL_ERROR and "4080" in it[2] for it in res["_global"]))
     chk("D2 每个槽都有自己的结果", "v1" in res and "v2" in res)
 
+    # 两个槽指向同一个槽目录（2026-11-13：旧版「重新纳入」造出的幽灵槽 v4）
+    cfg15, _root15 = make_slot(os.path.join(tmp, "o"))
+    cfg16 = dict(cfg15)
+    cfg16["port"] = 5080                      # 端口不同，只让目录重复
+    res2 = H.check_all({"v1": cfg15, "v4": cfg16})
+    chk("D3 两个槽指向同一目录 → 全局错误「重复槽」",
+        any(it[0] == H.LEVEL_ERROR and it[1] == "重复槽" and "v1" in it[2] and "v4" in it[2]
+            for it in res2["_global"]),
+        str(res2["_global"]))
+    # 占位符与绝对路径指向同一处时，也必须认出来是同一个目录
+    cfg17 = dict(cfg15)
+    cfg17["port"] = 6080
+    cfg17["bin_js"] = "<base>/dshV1/node_modules/@deepseek-ai/dsh/lib/bin.js"
+    res3 = H.check_all({"v1": cfg15, "v4": cfg17}, base=os.path.join(tmp, "o"))
+    chk("D4 <base> 占位符与绝对路径指向同一目录时也算重复",
+        any(it[1] == "重复槽" for it in res3["_global"]), str(res3["_global"]))
+
     print()
     print("== E. 汇总工具 ==")
     chk("E1 worst_level 取最严重", H.worst_level(
@@ -221,6 +238,22 @@ try:
     chk("G3 槽内还有旧规则留下的 .tmp → 警告并给项数",
         has(it3, H.LEVEL_WARN, "历史遗留的 .tmp"),
         str([i for i in it3 if i[0] == H.LEVEL_WARN]))
+
+    # 2026-11-11：新规则下 temp_dir 本来就指向槽内 .tmp，不能当成历史遗留
+    cfgG["temp_dir"] = os.path.join(rootG, ".tmp")
+    it3b = H.check_slot("vG", cfgG, deep=False)
+    chk("G3b 当前 TEMP 就是槽内 .tmp 时不再误报历史遗留",
+        not has(it3b, H.LEVEL_WARN, "历史遗留的 .tmp"),
+        str([i for i in it3b if i[0] == H.LEVEL_WARN]))
+    # 空目录也没有提示价值（截图里就是 0 项的空 .tmp）
+    shutil.rmtree(os.path.join(rootG, ".tmp"), ignore_errors=True)
+    os.makedirs(os.path.join(rootG, ".tmp"), exist_ok=True)
+    it3c = H.check_slot("vG", cfgG, deep=False)
+    chk("G3c 空的 .tmp 不刷警告",
+        not has(it3c, H.LEVEL_WARN, "历史遗留的 .tmp"),
+        str([i for i in it3c if i[0] == H.LEVEL_WARN]))
+    cfgG["temp_dir"] = tempG
+    os.makedirs(os.path.join(rootG, ".tmp", "dsh-acl-skill-abc"), exist_ok=True)
 
     # 临时目录堆积（强杀残留）
     for i in range(25):

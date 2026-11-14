@@ -285,6 +285,158 @@ chk("提示里有备份路径", "dsh备份" in msg, msg)
 chk("提示里说明备份含插件清单与版本信息",
     "插件清单" in msg and "版本信息" in msg, msg[-200:])
 
+# ── 空 .dsh-home（从没对话过）→ 不建备份目录 ─────────────────────────────
+# 2026-11-14 用户反馈：「我都没在 v1 上对话过，怎么多出一个 v1-userdata-…」
+# 那个目录里 0 个用户文件，只有 _meta.json + package-lock（440 KB）。
+make_slot("v9")
+_home9 = os.path.join(VER, "dshV9", ".dsh-home")
+shutil.rmtree(_home9, ignore_errors=True)
+os.makedirs(_home9)                       # 存在但一个条目都没有
+cfgp9 = os.path.join(FAKE, "config9.json")
+with open(cfgp9, "w", encoding="utf-8") as _f:
+    json.dump({"install_base": "<self>",
+               "versions": {"v9": slot_cfg("v9", 9080)}}, _f, ensure_ascii=False)
+ok12, _p12, msg12 = U.uninstall_slots(["v9"], cfgp9, HOME, REPO, FAKE,
+                                      versions_root=VER)
+_bk9 = os.path.join(FAKE, "dsh备份")
+_names9 = os.listdir(_bk9) if os.path.isdir(_bk9) else []
+chk("I34 空 .dsh-home → 卸载成功，但不为它建备份目录",
+    ok12 is True and not any(n.startswith("v9-userdata") for n in _names9),
+    str(_names9))
+chk("I35 提示里如实说「未生成备份」",
+    "未生成备份" in msg12, msg12[-200:])
+
+# ── 槽目录被手工增删文件时，三个动作仍要能跑（2026-11-14 用户提问）──────
+_F1 = os.path.join(VER, "dshV10")
+make_slot("v10")
+open(os.path.join(_F1, "我的笔记.txt"), "w").write("hi")
+os.makedirs(os.path.join(_F1, "my-plugins"))
+open(os.path.join(_F1, "my-plugins", "a.js"), "w").write("//")
+open(os.path.join(_F1, "kill-10080.bat"), "w").write("@echo off")
+_f1 = U.slot_foreign_entries(_F1)
+chk("I36 认出用户自己放的条目，忽略标准条目与 kill-<端口>.bat",
+    _f1 == ["my-plugins", "我的笔记.txt"], str(_f1))
+
+cfgp10 = os.path.join(FAKE, "config10.json")
+with open(cfgp10, "w", encoding="utf-8") as _f:
+    json.dump({"install_base": "<self>",
+               "versions": {"v10": slot_cfg("v10", 10080)}}, _f, ensure_ascii=False)
+ok13, _p13, msg13 = U.uninstall_slots(["v10"], cfgp10, HOME, REPO, FAKE,
+                                      versions_root=VER)
+chk("I37 卸载会连用户文件一起删，但提示里点名了是哪些",
+    ok13 is True and not os.path.exists(_F1) and "非 dsh 条目" in msg13,
+    msg13[-220:])
+
+# 缺 bin.js：纳入要拒绝，并告诉用户下一步（别只说"不能接回"）
+make_slot("v11")
+_R11 = os.path.join(VER, "dshV11")
+os.remove(os.path.join(_R11, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js"))
+cfgp11 = os.path.join(FAKE, "config11.json")
+with open(cfgp11, "w", encoding="utf-8") as _f:
+    json.dump({"install_base": "<self>", "versions": {}}, _f, ensure_ascii=False)
+ok14, _p14, msg14 = U.readd_slots([_R11], cfgp11, HOME, REPO, FAKE,
+                                  versions_root=VER)
+chk("I38 缺 bin.js 时纳入被拒，且给出下一步（删掉 / 装到别的编号）",
+    ok14 is False and "不完整" in msg14 and "别的编号" in msg14, msg14[:220])
+
+# 缺 node 运行时 → **不代劳**（用户可能故意删的），如实拒绝并说明怎么办
+make_slot("v12")
+_R12 = os.path.join(VER, "dshV12")
+shutil.rmtree(os.path.join(_R12, "node"), ignore_errors=True)
+cfgp12 = os.path.join(FAKE, "config12.json")
+with open(cfgp12, "w", encoding="utf-8") as _f:
+    json.dump({"install_base": "<self>", "versions": {}}, _f, ensure_ascii=False)
+ok15, _p15, msg15 = U.readd_slots([_R12], cfgp12, HOME, REPO, FAKE,
+                                  versions_root=VER)
+chk("I39 缺 node → 拒绝接回，不替用户补（可能是他自己删的）",
+    ok15 is False and "不能接回" in msg15 and "node" in msg15, msg15[:220])
+chk("I40 被拒后没有偷偷改用户的目录（node/ 仍然不存在）",
+    not os.path.isdir(os.path.join(_R12, "node")))
+
+# 缺 .dsh-home：仍然能接回（dsh 启动会自己建），但必须如实提醒
+make_slot("v14")
+_R14 = os.path.join(VER, "dshV14")
+shutil.rmtree(os.path.join(_R14, ".dsh-home"), ignore_errors=True)
+cfgp14 = os.path.join(FAKE, "config14.json")
+with open(cfgp14, "w", encoding="utf-8") as _f:
+    json.dump({"install_base": "<self>", "versions": {}}, _f, ensure_ascii=False)
+ok17, _p17, msg17 = U.readd_slots([_R14], cfgp14, HOME, REPO, FAKE,
+                                  versions_root=VER)
+chk("I40b 缺 .dsh-home 仍可接回，但提示「没找到原来的用户数据目录」",
+    ok17 is True and "用户数据" in msg17, msg17[-240:])
+
+# ── 显式修复（用户点「修复…」才发生）：只补不删、不覆盖已有文件 ──────────
+make_slot("v15")
+_R15 = os.path.join(VER, "dshV15")
+shutil.rmtree(os.path.join(_R15, "node"), ignore_errors=True)
+shutil.rmtree(os.path.join(_R15, ".tmp"), ignore_errors=True)
+_home15 = os.path.join(_R15, ".dsh-home")
+with open(os.path.join(_home15, "settings.yaml"), "w", encoding="utf-8") as _f:
+    _f.write("keep: 1")
+_src15 = os.path.join(FAKE, "repair-node.exe")
+open(_src15, "wb").write(b"MZ" + b"y" * 64)
+ok18, acts18, err18 = U.repair_slot(_R15, node_src=_src15)
+chk("I42 repair_slot 补上 node（固定叫 node.exe）并补建 .tmp",
+    ok18 is True
+    and os.path.isfile(os.path.join(_R15, "node", "node.exe"))
+    and os.path.isdir(os.path.join(_R15, ".tmp")), str(err18))
+chk("I43 修复不覆盖已有文件（.dsh-home/settings.yaml 原样）",
+    open(os.path.join(_home15, "settings.yaml"), encoding="utf-8").read() == "keep: 1")
+chk("I44 修复动作有清单可展示给用户",
+    any("node" in a for a in acts18), str(acts18))
+
+# 缺 bin.js：补不了（等于重装），而且**一个文件都不动**
+make_slot("v16")
+_R16 = os.path.join(VER, "dshV16")
+os.remove(os.path.join(_R16, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js"))
+_before16 = sorted(os.listdir(_R16))
+ok19, acts19, err19 = U.repair_slot(_R16, node_src=_src15)
+chk("I45 缺 bin.js 时拒绝修复，并说明等于重装",
+    ok19 is False and "bin.js" in err19, str(err19)[:160])
+chk("I46 被拒时目录内容一点没变（只补不删的底线）",
+    sorted(os.listdir(_R16)) == _before16, str(sorted(os.listdir(_R16))))
+
+# 缺依赖：补不了（等于重装）—— 必须如实说，不能回"已完成（无需改动）"
+make_slot("v17")
+_R17 = os.path.join(VER, "dshV17")
+_pj17 = os.path.join(_R17, "node_modules", "@deepseek-ai", "dsh", "package.json")
+with open(_pj17, "w", encoding="utf-8") as _f:
+    json.dump({"name": "@deepseek-ai/dsh", "version": "0.2.2-rc.2",
+               "dependencies": {"left-pad": "^1.0.0"}}, _f)
+ok20, acts20, err20 = U.repair_slot(_R17, node_src=_src15)
+chk("I47 缺依赖时修复如实返回失败（不能报「已完成」）",
+    ok20 is False and "补不了" in err20, str(err20)[:220])
+chk("I48 修复不会凭空装依赖（node_modules 里没多出 left-pad）",
+    not os.path.isdir(os.path.join(_R17, "node_modules", "left-pad")))
+
+# 缺依赖：补不了（等于重装）—— 必须如实说，不能回"已完成（无需改动）"
+make_slot("v17")
+_R17 = os.path.join(VER, "dshV17")
+_pj17 = os.path.join(_R17, "node_modules", "@deepseek-ai", "dsh", "package.json")
+with open(_pj17, "w", encoding="utf-8") as _f:
+    json.dump({"name": "@deepseek-ai/dsh", "version": "0.2.2-rc.2",
+               "dependencies": {"left-pad": "^1.0.0"}}, _f)
+ok20, acts20, err20 = U.repair_slot(_R17, node_src=_src15)
+chk("I47 缺依赖时修复如实返回失败（不能报「已完成」）",
+    ok20 is False and "补不了" in err20, str(err20)[:220])
+chk("I48 修复不会凭空装依赖（node_modules 里没多出 left-pad）",
+    not os.path.isdir(os.path.join(_R17, "node_modules", "left-pad")))
+
+# 缺依赖（package.json 声明了但没装）→ 体检拒绝，别让"看着正常、一启动就炸"
+make_slot("v13")
+_R13 = os.path.join(VER, "dshV13")
+_pj13 = os.path.join(_R13, "node_modules", "@deepseek-ai", "dsh", "package.json")
+with open(_pj13, "w", encoding="utf-8") as _f:
+    json.dump({"name": "@deepseek-ai/dsh", "version": "0.2.2-rc.2",
+               "dependencies": {"left-pad": "^1.0.0"}}, _f)
+cfgp13 = os.path.join(FAKE, "config13.json")
+with open(cfgp13, "w", encoding="utf-8") as _f:
+    json.dump({"install_base": "<self>", "versions": {}}, _f, ensure_ascii=False)
+ok16, _p16, msg16 = U.readd_slots([_R13], cfgp13, HOME, REPO, FAKE,
+                                  versions_root=VER)
+chk("I41 依赖没装全 → 接回被拒（和复制纳入同一套体检）",
+    ok16 is False and "依赖" in msg16, msg16[:220])
+
 # ── 进度回调必须真的被调用 ────────────────────────────────────────────────
 # 2026-10-29 实测踩到：GUI 建了进度窗却没把 progress 传进来，删 node_modules 的
 # 那 40 秒里窗口一直停在「准备中…」，用户以为卸载失败（其实已经卸干净了）。
@@ -715,7 +867,13 @@ def _mk_slot(ver_dir, name, port, version="0.1.5-rc.2"):
     open(os.path.join(d, "node", "node.exe"), "wb").write(b"x" * 512)
     os.makedirs(os.path.join(d, ".dsh-home"), exist_ok=True)
     open(os.path.join(d, ".dsh-home", "settings.yaml"), "w").write("a: 1")
-    open(os.path.join(d, "dsh.bat"), "w").write("@echo off")
+    # 真实槽的 dsh.bat 里有 `--port N` —— 接回时端口就是从这里读的，
+    # 夹具必须同构，否则测不到解析逻辑（2026-11-13 加）。
+    open(os.path.join(d, "dsh.bat"), "w").write(
+        "@echo off\r\n"
+        '"%s" "%s" web --host 127.0.0.1 --port %d --no-open\r\n'
+        % (os.path.join(d, "node", "node.exe"),
+           os.path.join(pkg, "lib", "bin.js"), port))
     return {
         "label": name,
         "node_exe": "<base>/dsh-versions/%s/node/node.exe" % name,
@@ -784,13 +942,12 @@ chk("I4 三件 bat / .dsh-home / node / node_modules 全都还在",
     all(os.path.exists(os.path.join(VERI1, "dshV1", x)) for x in
         ("dsh.bat", ".dsh-home", "node", "node_modules")))
 _recs = _cfg1.get("detached") or []
-chk("I5 detached 里留了档（槽名/路径/端口/版本/原配置）",
-    len(_recs) == 1 and _recs[0].get("root") and _recs[0].get("port") == 4080
-    and _recs[0].get("version") == "0.1.5-rc.2"
-    and isinstance(_recs[0].get("config"), dict), str(_recs)[:200])
+chk("I5 detached 只记绝对路径（不再存 label / port / 配置快照）",
+    len(_recs) == 1 and _recs[0].get("root")
+    and not (set(_recs[0]) & {"label", "port", "config", "key", "version"}),
+    str(_recs)[:200])
 chk("I6 记录里存的是绝对路径（不是 <base> 占位符）",
-    "<base>" not in json.dumps(_recs[0].get("config"), ensure_ascii=False),
-    str(_recs[0].get("config"))[:160])
+    "<base>" not in (_recs[0].get("root") or ""), _recs[0].get("root"))
 chk("I7 记录里的路径指向真实存在的目录",
     os.path.isdir(_recs[0]["root"]), _recs[0]["root"])
 chk("I8 其它顶层字段没被抹掉（install_base / temp_root 都在）",
@@ -810,8 +967,9 @@ chk("I12 端口原样保留（bat 里写死了，不能悄悄改）",
 chk("I13 重新纳入也没动磁盘", _tree(VERI1) == _before)
 chk("I14 detached 里那条已清掉", not (_cfg2.get("detached") or []),
     str(_cfg2.get("detached")))
-chk("I15 重新纳入后 dsh_home/temp_dir 仍指向原来那个槽（不是新根）",
-    _cfg2["versions"]["v1"]["dsh_home"].lower().startswith(VERI1.lower()),
+chk("I15 路径按磁盘现状写回占位符（与安装一致），解析后仍指向原槽",
+    _cfg2["versions"]["v1"]["dsh_home"].startswith("<base>/dsh-versions/dshV1/")
+    and os.path.isdir(os.path.join(VERI1, "dshV1", ".dsh-home")),
     _cfg2["versions"]["v1"]["dsh_home"])
 
 # ── S2：正在运行的槽拒绝移出 ───────────────────────────────────────────
@@ -833,17 +991,24 @@ chk("I19 目录不在了 → 重新纳入被拒", ok4 is False and "不在" in m
 chk("I20 被拒时 detached 记录还在（用户还能修好路径再试）",
     len(_load(CFG3).get("detached") or []) == 1)
 
-# ── S4：重新纳入时端口和别的槽撞车 → 要警告（不能悄悄改端口）──────────
+# ── S4：重新纳入时端口和别的槽撞车 → 自动换空闲端口（不能写撞车的端口）──
 CFG4, VER4 = _mk_cfg(FAKEI, "s4", [("dshV4", 4080), ("dshV5", 4080)])
 U.detach_slots(["v2"], CFG4, HOME, REPO, FAKEI, versions_root=VER4)
 _rec4 = (_load(CFG4).get("detached") or [{}])[0]
 ok5, _p5, msg5 = U.readd_slots([_rec4["root"]], CFG4, HOME, REPO, FAKEI,
                                versions_root=VER4)
-chk("I21 端口撞车仍然纳入成功（不因警告而拒绝）", ok5 is True, msg5[:200])
-chk("I22 但明确警告端口冲突", "端口" in msg5 and "占用" in msg5, msg5[-220:])
+chk("I21 端口撞车仍然接回成功（不因冲突而拒绝）", ok5 is True, msg5[:200])
+_added4 = (_p5 or {}).get("added") or []
+_cfg4 = _load(CFG4)
+chk("I22 槽键从目录名推导（dshV5 → v5，不沿用旧键 v2）",
+    _added4 == ["v5"] and "v5" in (_cfg4.get("versions") or {}), str(_added4))
+chk("I22b 端口被占时自动换空闲端口，并在说明里点出来",
+    "端口" in msg5 and "占用" in msg5
+    and _cfg4["versions"]["v5"].get("port") != 4080,
+    "%s | port=%s" % (msg5[-200:], _cfg4["versions"].get("v5", {}).get("port")))
 
 # ── S5：移出 → 纳入 → 再移出，detached 不该堆出两条 ────────────────────
-CFG5, VER5 = _mk_cfg(FAKEI, "s5", [("dshV6", 6080)])
+CFG5, VER5 = _mk_cfg(FAKEI, "s5", [("dshV1", 6080)])
 U.detach_slots(["v1"], CFG5, HOME, REPO, FAKEI, versions_root=VER5)
 _r5 = (_load(CFG5).get("detached") or [{}])[0]
 U.readd_slots([_r5["root"]], CFG5, HOME, REPO, FAKEI, versions_root=VER5)
@@ -869,6 +1034,39 @@ with open(CFG7, "w", encoding="utf-8") as f:
 ok9, _p9, msg9 = U.detach_slots(["v1"], CFG7, HOME, REPO, FAKEI, versions_root=VER7)
 chk("I27 detached 字段是脏数据时照常工作（当空处理，不崩）",
     ok9 is True and isinstance(_load(CFG7).get("detached"), list), msg9[:160])
+
+# ── S8：磁盘是唯一事实来源（2026-11-13 修「幽灵槽 v4」）──────────────────
+chk("I28 槽键从目录名推导（dshV3 → v3 / dshV3-2 → v3-2 / 认不出 → 空）",
+    U.slot_key_from_dir("dshV3") == "v3"
+    and U.slot_key_from_dir(r"D:\x\dshV3-2") == "v3-2"
+    and U.slot_key_from_dir("whatever") == "")
+
+CFG8, VER8 = _mk_cfg(FAKEI, "s8", [("dshV3", 7080)])
+_s8 = os.path.join(VER8, "dshV3")
+chk("I29 port_from_bats 从 bat 里读出真实端口", U.port_from_bats(_s8) == 7080,
+    str(U.port_from_bats(_s8)))
+
+# 已在管理里的目录：绝不能重复登记一次（旧版就是这么造出「槽 v4 顶着 dshV3」的）
+ok10, _p10, msg10 = U.readd_slots([_s8], CFG8, HOME, REPO, FAKEI, versions_root=VER8)
+_cfg8 = _load(CFG8)
+chk("I30 目录已在 versions 里 → 拒绝重复纳入",
+    ok10 is False and "已经在管理里" in msg10, msg10[:200])
+chk("I31 拒绝后 versions 没多出槽（幽灵槽的根本防线）",
+    list((_cfg8.get("versions") or {}).keys()) == ["v1"],
+    str(list((_cfg8.get("versions") or {}).keys())))
+
+# 移出 → 又重装（旧记录仍指着现役目录）：再点扫描/接回也不能造出第二个槽
+U.detach_slots(["v1"], CFG8, HOME, REPO, FAKEI, versions_root=VER8)
+_cfg8 = _load(CFG8)
+_cfg8["versions"] = {"v1": _mk_slot(VER8, "dshV3", 7080)}
+with open(CFG8, "w", encoding="utf-8") as f:
+    json.dump(_cfg8, f, ensure_ascii=False, indent=2)
+ok11, _p11, msg11 = U.readd_slots([_s8], CFG8, HOME, REPO, FAKEI, versions_root=VER8)
+_cfg8b = _load(CFG8)
+chk("I32 移出后重装（记录指向现役目录）→ 仍拒绝，不造幽灵槽",
+    ok11 is False and len(_cfg8b.get("versions") or {}) == 1, msg11[:200])
+chk("I33 被拒时陈旧记录不丢（盘没接上时用户还能再试）",
+    len(_cfg8b.get("detached") or []) == 1, str(_cfg8b.get("detached"))[:160])
 
 shutil.rmtree(FAKEI, ignore_errors=True)
 

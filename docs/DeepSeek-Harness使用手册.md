@@ -79,7 +79,6 @@ dsh web
 |---|---|
 | **这个管理器**怎么用（按钮、配置、安装卸载） | [`dsh管理器使用说明.md`](dsh管理器使用说明.md)、[`dsh管理器功能说明书.md`](dsh管理器功能说明书.md) |
 | 管理器的**内部机制**与改代码须知 | [`架构与维护说明.md`](架构与维护说明.md) |
-| 隔离安装的**完整步骤** | [`isolated-install-runbook.md`](isolated-install-runbook.md) |
 | 历次**提问与答复** | [`常见问题.md`](常见问题.md) |
 | dsh 本体**精简用法** | [`DeepSeek-Harness简明手册.md`](DeepSeek-Harness简明手册.md) |
 

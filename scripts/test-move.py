@@ -99,6 +99,22 @@ try:
     chk("A6 计划里带文件数统计", p["slots"][0]["stats"]["files"] > 0,
         str(p["slots"][0]["stats"]))
 
+    # A7：目标盘空间不够时**事前**拒绝（2026-11-14）—— 不能拷到一半才失败
+    _real_free = M._free_bytes
+    try:
+        M._free_bytes = lambda _p: 1024          # 只有 1 KB
+        p = M.plan_move(src, dst, ["dshV1"])
+        chk("A7 目标盘空间不足 → 事前拒绝并说明需要多少",
+            not p["ok"] and "空间不足" in p["error"] and "需要" in p["error"],
+            p.get("error"))
+        M._free_bytes = lambda _p: None          # 探测不到 → 不阻断（宁可放行）
+        p = M.plan_move(src, dst, ["dshV1"])
+        chk("A8 探测不到剩余空间时不阻断（只跳过这项检查）", p["ok"], p.get("error"))
+    finally:
+        M._free_bytes = _real_free
+    chk("A9 计划里带 need_bytes / free_bytes 供确认框显示",
+        isinstance(M.plan_move(src, dst, ["dshV1"]).get("need_bytes"), int))
+
     print()
     print("== B. 实际搬迁 ==")
     before_cfg = json.load(io.open(cfgp, encoding="utf-8"))

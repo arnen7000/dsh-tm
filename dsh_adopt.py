@@ -370,9 +370,10 @@ def free_port(start, taken, probe=None, span=200, skip=None):
     taken：配置里已用端口（避免两槽撞车）。
     probe(port)->bool：端口是否被占用；默认用 socket 试bind。
     span：往后最多试多少个（默认 200）。
-    skip：**额外要跳过**的端口集合（2026-11-01 新增，用于避开 6080/8080 这类
-          常被别的软件占的端口）。它和 taken 的区别是语义：taken 是"我们自己在用"，
-          skip 是"我们不想用"，但两者都会让循环直接跳过去。
+    skip：兼容保留的**额外跳过**端口集合。2026-11-01 起代码不再传它
+          （`_PORT_TAKEN_RISK = ()`）：「哪个端口看起来危险」的硬编码表
+          挡不住真正占用的软件，唯一判据是「这个端口此刻有没有被占」。
+          它和 taken 的区别是语义：taken 是"我们自己在用"，skip 是"我们不想用"。
     找不到返回 None（由调用方报错，不静默取一个撞车的端口）。"""
     if probe is None:
         import socket
@@ -456,20 +457,20 @@ def portable_path(path, base=""):
     return s
 
 
-# 临时目录根的兜底候选（2026-10-31 之前的规则）。
-# 历史：v1–v3 手工部署时把 TEMP 放在 D 盘（本机 C 盘长期紧张），于是新槽也
-# 跟着写 <临时目录根>\<槽名>。但这条规则**把临时目录和安装位置解绑了** ——
-# 槽装在 C 盘、临时文件在 D 盘，换盘/换 install_base 要改两处，而且用户
-# 在界面上完全看不出这层关系（`dshV4\.tmp` 就是这么来的）。
-# 现在改为 temp_root 优先（默认 <槽根>/dsh-temp），这里只作兼容兜底。
-TEMP_ROOT_CANDIDATES = ("D:\\dsh-temp",)
+# 老规则的兜底候选盘（2026-10-31 之前：本机 C 盘紧张，把 TEMP 放 D 盘）。
+# 那条规则把临时目录和安装位置解绑了 —— 槽在 C 盘、临时文件在 D 盘，
+# 换盘要改两处，界面上还看不出来，所以 2026-11-02 起固定用各槽 `.tmp`。
+# 2026-11-11：默认留空。**不再在别人机器的 D 盘上凭空建 `dsh-temp`**，
+# 也和 README 的「temp_root 已废弃」一致。回归要验老规则时用显式
+# `candidates=` 注入，不依赖本机有没有 D 盘。
+TEMP_ROOT_CANDIDATES = ()
 
 # 临时目录根下面按槽名分文件夹，与备份目录（<base>\dsh备份\<槽>-userdata-…）同构。
 DEFAULT_TEMP_DIRNAME = "dsh-temp"
 
 
 def _temp_candidates():
-    r"""真实盘符候选（下面 `default_temp_dir` 的第 2 步用）。
+    r"""老规则候选盘（2026-11-11 起默认空、基本不可达；下面是历史记录）。
 
     **离线回归必须关掉它。** 理由不是洁癖：`run_official_install` 和
     `adopt_existing` 都会 `makedirs(temp_dir)`，而回归里这两个函数是拿真模块
@@ -491,6 +492,10 @@ def _temp_candidates():
 
 def default_temp_dir(dir_name, root, temp_root="", candidates=None):
     """算出新槽的临时目录。
+
+    **现行规则（2026-11-02 起，2026-11-11 复核）**：只有显式给了 `temp_root`
+    才用它，其余一律返回 `<槽>/.tmp`；下面的「优先级」列表是 2026-10-31 的
+    历史记录，仅作兼容参考（候选盘常量现在为空）。
 
     优先级（2026-10-31 起）：
       1. `temp_root` 显式给定 → `<temp_root>\\<槽目录名>`
@@ -741,6 +746,16 @@ def verify_copy(src, dst):
     return _U.verify_backup(src, dst)
 
 
+# cmd.exe 会对 `/c` 之后的整串做二次解析，这些字符会被当成命令分隔符、
+# 变量引用或引号闭合。路径里出现它们时宁可**放弃建链接**（relink_home 会把
+# 它记进 missing 并提示用户），也不能让一个目录名变成可执行命令。
+_CMD_META = frozenset('&|^<>()%!"')
+
+
+def _cmd_safe_path(p):
+    return not any(ch in _CMD_META for ch in (p or ""))
+
+
 def _make_junction(link, target):
     """建一个目录 junction（Windows 上不需要管理员权限）。
 
@@ -751,6 +766,11 @@ def _make_junction(link, target):
         return False
     link = os.path.normpath(link)
     target = os.path.normpath(target)
+    # 2026-11-11：原来直接 subprocess.run(["cmd","/c","mklink",...])，
+    # list2cmdline 只给含空格的参数加引号，含 `& calc &` 的目录名会被 cmd
+    # 当命令分隔符执行。这里显式拒绝，比事后转义更不容易漏。
+    if not _cmd_safe_path(link) or not _cmd_safe_path(target):
+        return False
     try:
         os.makedirs(os.path.dirname(link), exist_ok=True)
     except OSError:
@@ -828,6 +848,15 @@ def backup_dsh_home(dsh_home, backup_root, stamp=None):
     "备份失败" 就算完，而"半份备份"名字正常，用户会以为数据已经安全了。"""
     if not dsh_home or not os.path.isdir(dsh_home):
         return (None, "数据目录不存在，跳过备份：%s" % dsh_home)
+    # 2026-11-12：源目录是空的（刚装好、从没启动过的槽）就别建备份目录 ——
+    # 否则 `dsh备份/` 里会多出一个空文件夹，用户不知道那是什么。
+    # 返回空串（而不是 None）：调用方据此区分「无需备份」与「备份失败」。
+    try:
+        _n_files = sum(len(_fs) for _r, _d, _fs in os.walk(dsh_home))
+    except Exception:
+        _n_files = -1
+    if _n_files == 0:
+        return ("", "源数据目录为空，无需备份")
     stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
     fails = []
     try:

@@ -27,6 +27,7 @@
 """
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -496,14 +497,34 @@ def _backup_slot(plan, key, backup_root, stamp):
 
     布局刻意与旧版兼容：内容仍然直接落在 `<key>-userdata-<stamp>/` 下，
     老备份里的 settings.yaml 之类还在原位，只是多了几个下划线开头的说明文件。
+
+    **`.dsh-home` 为空（从没启动/对话过）时返回 ("", …)，一个目录都不建**
+    —— 2026-11-14 用户反馈「我都没在 v1 上对话过，怎么多出一个备份目录」。
     """
+    home = plan.get("dsh_home") or ""
+
+    # 2026-11-14 用户反馈：「我都没在 v1 上对话过，怎么多出一个
+    # v1-userdata-20261114-095110？」—— 那个目录里 0 个用户文件，只有
+    # _meta.json + package-lock（440 KB）。**没有用户数据就没有要救的东西**，
+    # 建一个空备份目录只会让「dsh备份」越堆越乱。现在先探一次：.dsh-home
+    # 一个条目都没有就完全不建，只在日志里留一行（含实装版本）。
+    _has_user = False
+    if home and os.path.isdir(home):
+        try:
+            with os.scandir(home) as _it:
+                _has_user = any(True for _ in _it)
+        except OSError:
+            _has_user = True        # 判不了就当有，宁可多备份
+    if not _has_user:
+        return ("", {"checked": 0, "missing": 0, "size_changed": 0,
+                     "copy_failed": 0, "skipped_empty": True})
+
     os.makedirs(backup_root, exist_ok=True)
     dst = os.path.join(backup_root, "%s-userdata-%s" % (key, stamp))
     if os.path.exists(dst):
         dst = "%s-%d" % (dst, int(time.time() % 1000))
     os.makedirs(dst, exist_ok=True)
 
-    home = plan.get("dsh_home") or ""
     links = []
     fails = []
     verify = {"checked": 0, "missing": 0, "size_changed": 0, "copy_failed": 0}
@@ -586,6 +607,33 @@ def _backup_slot(plan, key, backup_root, stamp):
 # 规划（纯计算，不写盘 —— 界面先用它把「会删什么」摆给用户看）
 # ══════════════════════════════════════════════════════════════════
 
+# 一个「标准槽」应该有的条目。其余一律算「用户自己放进去的」——
+# 卸载会删整个槽目录，这些也会一起没，所以必须点名（2026-11-14）。
+_SLOT_KNOWN = {"node_modules", "node", ".dsh-home", ".tmp",
+               "dsh.bat", "dsh-cli.bat", "package.json", "package-lock.json"}
+
+
+def slot_foreign_entries(root):
+    """槽目录里**不是 dsh 装出来的**条目名（用户自己放的笔记/插件/备份等）。
+
+    只读一次 listdir，不统计体积 —— 确认框里要用，不能卡。
+    """
+    if not root or not os.path.isdir(root):
+        return []
+    out = []
+    try:
+        for name in sorted(os.listdir(root)):
+            low = name.lower()
+            if low in _SLOT_KNOWN:
+                continue
+            if re.match(r"^kill-\d+\.bat$", low):     # 端口变了会换文件名
+                continue
+            out.append(name)
+    except OSError:
+        return []
+    return out
+
+
 def plan_slot(key, cfg, base, home, repo, self_dir, versions_root=""):
     """算出一个槽的卸载计划。
 
@@ -665,6 +713,7 @@ def plan_slot(key, cfg, base, home, repo, self_dir, versions_root=""):
     # 所有子项都删完后，槽根应当空掉 → 连目录本身一起收掉（rmdir 只删空目录，
     # 万一还有 keep 的项就自然失败，不会误删）。
     plan["purge_root"] = True
+    plan["foreign"] = slot_foreign_entries(root)
     return plan
 
 
@@ -690,16 +739,23 @@ def plan_many(cfg, keys, home, repo, self_dir, versions_root=""):
 # 不读注册表 —— 这正是 `scripts/test-standalone.py` 守着的那条性质。移出之后
 # 那个槽就是「一个普通的、能自己双击运行的 dsh 安装」，管理器从没装过它也一样。
 #
-# 为什么要留档（config 顶层 `detached`）：换过安装根之后，旧位置的槽**不在**
-# `dsh_adopt.detect_existing_installs` 的扫描范围里（它只扫当前 versions_root
-# 和 npm 全局），没有这条记录就再也自动发现不了，用户只能手工浏览目录。
+# 留档（config 顶层 `detached`）只记**绝对路径**，别的什么都不记。
 #
-# 记录里存**绝对路径**（不是 `<base>` 占位符）：占位符会跟着新安装根解析，
-# 换根之后反而指错地方。同理，记录里那份槽配置也要先把 `<base>` 烘成绝对路径
-# （见 `_bake_base`）—— 否则重新纳入时 dsh_home/temp_dir 会指到新根下面去。
+# 为什么要留：换过安装根之后，旧位置的槽**不在** `dsh_adopt.detect_existing_installs`
+# 的扫描范围里（它只扫当前 versions_root 和 npm 全局），没有这条路径就再也
+# 自动发现不了，用户只能手工浏览目录。
+#
+# 为什么**只记路径**（2026-11-13 重写）：旧版还把 label / port / 整份槽配置
+# 一起存进去，重新纳入时原样放回。结果只要槽键变了（比如 v3 被重装占用），
+# 就会出现「槽 v4 顶着 dshV3 的名字、和 v3 抢 6080 端口、三个路径还都指向
+# dshV3」的幽灵槽 —— 因为那些字段描述的是**当时**那个槽，不是现在这个键。
+# 现在一切以磁盘为准：键从目录名推、端口从 bat 里读、路径按实际位置算。
 # ══════════════════════════════════════════════════════════════════
 
 DETACHED_FIELD = "detached"
+
+# 槽目录名 <-> 槽键 的一一对应：dshV3 <-> v3，dshV3-2 <-> v3-2。
+_SLOT_NAME_RE = re.compile(r"^dshV(\d+)(?:-(\d+))?$", re.IGNORECASE)
 
 
 def detached_records(cfg):
@@ -710,22 +766,48 @@ def detached_records(cfg):
     return [r for r in raw if isinstance(r, dict) and (r.get("root") or r.get("config"))]
 
 
-def _bake_base(slot_cfg, base):
-    """把槽配置里的 `<base>` 占位符换成**当时**的绝对路径。
+def slot_key_from_dir(name):
+    """目录名 -> 槽键：`dshV3` -> `v3`，`dshV3-2` -> `v3-2`；认不出返回 ''。
 
-    移出管理之后，这条记录描述的是「那个槽此刻在磁盘上的位置」，是历史事实，
-    不该再跟着 `<base>` 漂移 —— 用户把安装根从 C 盘换到 D 盘之后，
-    `<base>/dsh-versions/dshV1` 会解析到 D 盘一个根本不存在的目录。
-    `<home>` 不动：它不随安装根变化。"""
-    out = {}
-    for k, v in (slot_cfg or {}).items():
-        if isinstance(v, str) and base and "<base>" in v:
-            # normpath：`<base>/dsh-versions/x` 烘完是 `<base 的绝对路径>/dsh-versions/x`，
-            # 正反斜杠混写虽然 Windows 认，但配置里看着像坏的，统一成反斜杠。
-            out[k] = os.path.normpath(v.replace("<base>", base))
-        else:
-            out[k] = v
-    return out
+    槽键与目录名必须是**一一对应**的：卡片标题显示的是目录名，配置里记的是
+    槽键，两者一旦能各自漂移，就会出现「槽 v4 显示成 dshV3」这种自相矛盾的界面。
+    """
+    m = _SLOT_NAME_RE.match(os.path.basename(str(name or "").rstrip("\\/")))
+    if not m:
+        return ""
+    return "v" + m.group(1) + (("-" + m.group(2)) if m.group(2) else "")
+
+
+def port_from_bats(root):
+    """从槽里已有的三件 bat 解析 `--port N`。解析不到返回 0。
+
+    为什么读 bat 而不是读记录：移出之后 config 里已经没有这个槽了，bat 是
+    **磁盘上唯一还记着端口**的东西（而且它就是实际启动时用的那个值）。
+    """
+    for fn in ("dsh.bat", "start.bat", "kill.bat"):
+        p = os.path.join(root, fn)
+        try:
+            with open(p, "rb") as f:
+                raw = f.read()
+        except (IOError, OSError):
+            continue
+        for enc in ("gbk", "utf-8", "latin-1"):
+            try:
+                txt = raw.decode(enc)
+            except Exception:
+                continue
+            m = re.search(r"--port\s+(\d{2,5})", txt)
+            if m:
+                return int(m.group(1))
+    # 兜底：kill-<port>.bat 的文件名里带端口
+    try:
+        for name in os.listdir(root):
+            m = re.match(r"^kill-(\d{2,5})\.bat$", name, re.IGNORECASE)
+            if m:
+                return int(m.group(1))
+    except OSError:
+        pass
+    return 0
 
 
 def detach_slots(keys, config_path, home, repo, self_dir, versions_root="",
@@ -787,15 +869,12 @@ def detach_slots(keys, config_path, home, repo, self_dir, versions_root="",
         # 其余部分写的是 `/`，拼出来就是 `<home>/dsh-versions/dshV1` 这种混写。
         # Windows 认，但记录里看着像坏的。
         rec_root = os.path.normpath(root) if root else ""
+        # 只记路径（2026-11-13）：label / port / 配置快照一律不存 ——
+        # 它们描述的是"当时那个槽"，重新纳入时槽键可能已经变了，照抄就会造出
+        # 与现役槽同名、同端口的幽灵槽。接回时全部从磁盘重新读。
         rec = {
-            "key": key,
-            "label": plan["label"],
             "root": rec_root,                   # 绝对路径：这是「它现在在哪」的事实
-            "port": plan["port"],
-            "version": d["version"],
             "at": stamp,
-            # 原槽配置（<base> 已烘成绝对）—— 重新纳入时原样放回去，不猜
-            "config": _bake_base(scfg, base),
         }
         # 同一目录只留一条（移出→重新纳入→再移出不该堆出两条）
         if root:
@@ -844,17 +923,95 @@ def detach_slots(keys, config_path, home, repo, self_dir, versions_root="",
     return (True, payload, "\n".join(parts))
 
 
+def repair_slot(root, node_src=""):
+    """**用户点了「修复」之后**才调用：给一个不完整的槽补上缺的东西。
+
+    铁律：**只补、不删、不改已有文件**。用户可能是故意删的，所以这件事
+    必须由他显式点一下才发生（2026-11-14 用户要求）。
+
+    只做两件低风险的事：
+      · 缺 `node/node.exe` → 从 `node_src` 复制一份（固定叫 node.exe）
+      · 缺 `.dsh-home` / `.tmp` → 建空目录
+
+    缺 `lib/bin.js` / 缺依赖 / 缺包 package.json **不修** —— 那等于重装，
+    要联网、会改版本树，应该走「安装官方版 dsh」。
+
+    三件 bat 也不在这里生成：那要读 config，由管理器 `_rebuild_bats()` 负责。
+
+    返回 (ok, actions, error)；actions 是给人看的动作清单。
+    """
+    root = os.path.normpath(os.path.abspath(root or ""))
+    actions = []
+    if not root or not os.path.isdir(root):
+        return (False, actions, "目录不存在：%s" % (root or "(空)"))
+
+    bin_js = os.path.join(root, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js")
+    if not os.path.isfile(bin_js):
+        return (False, actions,
+                "缺 lib/bin.js —— 这是程序本体，补不了（等于重装）。\n"
+                "请删掉这个目录后用「安装官方版 dsh」重装一份。")
+
+    node_dir = os.path.join(root, "node")
+    has_node = (os.path.isfile(os.path.join(node_dir, "node.exe"))
+                or os.path.isfile(os.path.join(node_dir, "node")))
+    if not has_node:
+        if not (node_src and os.path.isfile(node_src)):
+            return (False, actions,
+                    "缺 node 运行时，而且没有可复制的来源（先装/保留一个别的槽）。")
+        try:
+            os.makedirs(node_dir, exist_ok=True)
+            _nm = "node.exe" if node_src.lower().endswith(".exe") else "node"
+            shutil.copy2(node_src, os.path.join(node_dir, _nm))
+            actions.append("补上 node 运行时（从 %s 复制）" % node_src)
+        except Exception as e:
+            return (False, actions, "复制 node 失败：%s" % e)
+
+    for sub in (".dsh-home", ".tmp"):
+        p = os.path.join(root, sub)
+        if not os.path.isdir(p):
+            try:
+                os.makedirs(p, exist_ok=True)
+                actions.append("补建 %s 目录" % sub)
+            except Exception as e:
+                return (False, actions, "创建 %s 失败：%s" % (sub, e))
+
+    # 补完再体检一次：缺依赖 / 缺包 package.json 这类**补不了**的，不能回
+    # "已完成（无需改动）" —— 那会让用户以为好了，下次启动照样炸（2026-11-14）。
+    try:
+        import dsh_adopt as _A
+        _info = _A.inspect_adopt_source(
+            os.path.join(root, "node_modules")) or {}
+    except Exception as _e:
+        return (True, actions, "")          # 体检本身不可用就别误报失败
+    if not _info.get("ok"):
+        _why = (_info.get("problems") or ["安装仍不完整"])[0]
+        _head = ("已补上：%s\n\n" % "、".join(actions)) if actions else ""
+        return (False, actions,
+                _head + "但仍有问题补不了：%s\n\n"
+                        "这一类（程序本体 / 依赖 / 包清单缺失）等于重装 —— "
+                        "请删掉这个目录后用「安装官方版 dsh」重装一份。" % _why)
+
+    return (True, actions, "")
+
+
 def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
-                progress=None):
+                progress=None, taken_ports=None, probe=None, max_slots=6):
     """把「已移出」的槽重新纳入管理。只改 config.json，磁盘一个字节都不动。
 
-    端口**原样保留**：槽里的 bat 已经把端口写死在 `--port` 里，改端口就得重写
-    三件 bat，那不是"重新纳入"该干的事。端口若已被别的槽占了，如实报冲突。
+    **一切以磁盘为准**（2026-11-13 重写）：
+      · 槽键从目录名推导（`dshV3` -> `v3`），不沿用记录里的键 ——
+        记录里的键可能已经被别的槽占了，硬套就会造出「槽 v4 显示 dshV3」。
+      · 端口从槽里已有的 bat 读（`--port N`），那是实际启动用的值。
+      · 路径按它现在的位置算，不抄记录里的旧配置。
+      · 同一个目录已经在管理里 → 直接拒绝，绝不重复登记。
 
-    返回 (ok, payload, 说明)；payload 含 added / kept / details。
+    端口若已被别的槽占用，**自动换一个空闲端口**并在 payload 里标出来
+    （调用方据此重写三件 bat）；绝不写一个注定撞车的端口进配置。
+
+    返回 (ok, payload, 说明)；payload 含 added / details / port_changed。
     """
     p = progress or OPS.Progress()
-    roots = [r for r in (roots or []) if r]
+    roots = [os.path.normpath(os.path.abspath(r)) for r in (roots or []) if r]
     if not roots:
         return (False, None, "没有选择要重新纳入的槽")
 
@@ -865,60 +1022,167 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
     recs = detached_records(cfg)
     versions = cfg.get("versions") or {}
     base = install_base_of(cfg, home, self_dir)
+    vr = versions_root or os.path.join(base, "dsh-versions")
 
-    added, kept, details, drop = [], [], [], []
-    taken_ports = set()
+    # 已登记的目录 -> 槽键：同一目录只能对应一个槽
+    managed = {}
+    for k, v in versions.items():
+        r = slot_root(v or {}, base, home, self_dir)
+        if r:
+            managed[norm(r)] = k
+
+    taken = set()
     for k, v in versions.items():
         try:
-            taken_ports.add(int((v or {}).get("port") or 0))
+            taken.add(int((v or {}).get("port") or 0))
         except Exception:
             pass
+    for x in (taken_ports or []):
+        try:
+            taken.add(int(x))
+        except Exception:
+            pass
+    taken.discard(0)
+
+    adopt_mod = None
+    try:
+        import dsh_adopt as adopt_mod          # 端口分配与安装/纳入共用一套
+    except Exception:
+        adopt_mod = None
+
+    added, details, drop, port_changed = [], [], [], {}
+
+    def _free(start):
+        if adopt_mod is None:
+            return None
+        return adopt_mod.free_port(start, taken, probe=probe)
 
     for root in roots:
-        rec = None
-        for r in recs:
-            if norm(r.get("root") or "") == norm(root):
-                rec = r
-                break
-        if rec is None:
-            kept.append(root)
-            details.append({"root": root, "errors": ["记录里没有这个槽（可能已经被纳入过）"]})
-            continue
-
-        d = {"root": root, "label": rec.get("label") or os.path.basename(root),
-             "errors": [], "warnings": [], "key": ""}
+        d = {"root": root, "label": os.path.basename(root), "key": "",
+             "errors": [], "warnings": []}
         details.append(d)
 
         if not os.path.isdir(root):
             d["errors"].append("目录已经不在了：%s" % root)
-            kept.append(root)
             continue
-        scfg = dict(rec.get("config") or {})
-        if not scfg.get("bin_js"):
-            d["errors"].append("记录里缺槽配置（bin_js），没法重建 —— 请用「纳入管理」手工收进来")
-            kept.append(root)
+        # 2026-11-14：接回也走**同一套体检**（复制纳入早就这么做）。
+        # 只查 bin.js 不够 —— 缺 package.json、缺依赖的目录接回后一启动就炸，
+        # 比当场拒绝更难排查。缺什么就说什么，并给出下一步。
+        try:
+            import dsh_adopt as _A
+            _info = _A.inspect_adopt_source(
+                os.path.join(root, "node_modules")) or {}
+        except Exception as _e:
+            _info = {"ok": False, "problems": ["体检失败：%s" % _e]}
+        for _w in (_info.get("warnings") or []):
+            # 只是提醒，不阻断：比如「没找到原来的用户数据目录（.dsh-home）」
+            # —— 用户可能自己删了，接回来就是一个干净的新槽，必须让他知道。
+            d["warnings"].append(_w)
+        if not _info.get("ok"):
+            _why = (_info.get("problems") or ["安装不完整"])[0]
+            d["errors"].append(
+                "这个安装不完整，不能接回：%s\n"
+                "可以手动删掉这个目录；或用「安装官方版 dsh」装到别的编号"
+                "（它占着自己的编号，不会被自动复用）。" % _why)
             continue
-        port = int(rec.get("port") or scfg.get("port") or 0)
-        if port and port in taken_ports:
-            d["warnings"].append(
-                "端口 %d 已被另一个槽占用 —— 槽里的 bat 写死了这个端口，"
-                "两个槽同时启动会撞车。建议只留一个在跑，或手工改端口后重建 bat。" % port)
-        # 槽键：原来的还空着就沿用，否则顺延（键只是界面上的位置，不影响磁盘）
-        key = str(rec.get("key") or "")
+        # 缺 node 运行时 → **不代劳**。用户可能是故意删的（省空间 / 换自己那份），
+        # 自动从别的槽复制会悄悄推翻他的意图，还可能带进不同 ABI 的 node
+        # （node-pty 这类原生模块会崩）。如实说明，让他自己决定（2026-11-14）。
+        node_exe = os.path.join(root, "node", "node.exe")
+        if not os.path.isfile(node_exe):
+            alt = os.path.join(root, "node", "node")
+            if os.path.isfile(alt):
+                node_exe = alt
+            else:
+                d["errors"].append(
+                    "槽里没有自带的 node 运行时（缺 node/node.exe），不能接回。\n"
+                    "如果你是自己删掉的，把 node 放回 node\\ 下即可；\n"
+                    "也可以删掉这个目录，或用「安装官方版 dsh」装到别的编号。")
+                continue
+        if norm(root) in managed:
+            d["errors"].append("这个目录已经在管理里（槽 %s），不需要重复纳入"
+                               % managed[norm(root)])
+            continue
+
+        # ── 槽键：目录名说了算 ────────────────────────────────
+        key0 = slot_key_from_dir(root)
+        key = key0
         if not key or key in versions:
-            n = 1
-            while ("v%d" % n) in versions:
-                n += 1
-            key = "v%d" % n
-        d["key"] = key
-        versions[key] = scfg
-        taken_ports.add(port)
+            key = ""
+            for i in range(1, int(max_slots) + 1):
+                if ("v%d" % i) not in versions:
+                    key = "v%d" % i
+                    break
+            if not key:
+                d["errors"].append("槽位已满，没法再纳入")
+                continue
+            if key0:
+                d["warnings"].append("槽键 %s 已被别的目录占用，改用 %s" % (key0, key))
+        label = d["label"] or ("dsh" + key.upper())
+        # 标签必须唯一（它是卡片标题）：目录名已被别的槽占用时，改用槽键派生的名字。
+        # 这正是「槽 v4 显示成 dshV3」那个 bug 的另一半 —— 光修槽键不够，
+        # label 抄自旧记录一样会让两张卡片同名。
+        _used = set(str((v or {}).get("label") or "").lower()
+                    for v in versions.values())
+        if label.lower() in _used:
+            _alt = "dsh" + key.upper()
+            label = _alt if _alt.lower() not in _used else "%s-%s" % (label, key)
+            d["warnings"].append("显示名 %s 已被别的槽占用，改用 %s"
+                                 % (d["label"], label))
+
+        # ── 端口：bat 里写的是事实 ────────────────────────────
+        port = port_from_bats(root)
+        if port and port in taken:
+            newp = _free(port + 1) or _free(4080)
+            if not newp:
+                d["errors"].append("原端口 %d 已被别的槽占用，也找不到空闲端口" % port)
+                continue
+            d["warnings"].append("原端口 %d 已被别的槽占用，改用 %d"
+                                 "（三件 bat 会同步重写）" % (port, newp))
+            port_changed[key] = (port, newp)
+            port = newp
+        elif not port:
+            idx = len(versions) + 1
+            newp = (adopt_mod.suggest_port(idx, taken, probe=probe)
+                    if adopt_mod is not None else None)
+            if not newp:
+                d["errors"].append("分配不到空闲端口")
+                continue
+            d["warnings"].append("槽里的 bat 没有端口信息，新分配 %d"
+                                 "（三件 bat 会同步重写）" % newp)
+            port_changed[key] = (0, newp)
+            port = newp
+
+        # ── 路径：按它现在的位置写（在版本根下就用占位符）────────
+        rel = ""
+        try:
+            _rel = os.path.relpath(root, vr)
+            if not _rel.startswith(".."):
+                rel = _rel.replace("\\", "/")
+        except Exception:
+            rel = ""
+        pre = ("<base>/dsh-versions/" + rel) if rel else root.replace("\\", "/")
+
+        versions[key] = {
+            "label": label,
+            "node_exe": pre + "/node/node.exe",
+            "bin_js": pre + "/node_modules/@deepseek-ai/dsh/lib/bin.js",
+            "dsh_home": pre + "/.dsh-home",
+            "temp_dir": pre + "/.tmp",
+            "port": int(port),
+            "browser": "default",
+            "extra_args": ["web", "--host", "127.0.0.1",
+                           "--port", str(port), "--no-open"],
+        }
+        taken.add(int(port))
         added.append(key)
         drop.append(root)
-        p.on_step("[%s] 重新纳入：%s" % (key, root))
+        d["key"] = key
+        p.on_step("[%s] 接回：%s（端口 %d）" % (key, root, port))
 
     if not added:
-        msgs = ["%s：%s" % (d["root"], "；".join(d["errors"])) for d in details if d["errors"]]
+        msgs = ["%s：%s" % (d["root"], "；".join(d["errors"]))
+                for d in details if d["errors"]]
         return (False, {"added": [], "details": details},
                 "没有槽被重新纳入。\n\n" + "\n".join(msgs or ["（原因未知）"]))
 
@@ -930,7 +1194,14 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
                 "备份 config.json 失败，已中止（什么都没改）：%s" % e)
     try:
         cfg["versions"] = versions
-        left = [r for r in recs if norm(r.get("root") or "") not in {norm(x) for x in drop}]
+        drop_n = {norm(x) for x in drop}
+        # 接回的记录删掉；顺带清掉「指向已在管目录」的陈旧记录（重装后会留下这种）
+        left = []
+        for r in recs:
+            rn = norm(r.get("root") or "")
+            if rn in drop_n or rn in managed:
+                continue
+            left.append(r)
         if left:
             cfg[DETACHED_FIELD] = left
         else:
@@ -945,7 +1216,8 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
     for d in details:
         for w in d["warnings"]:
             parts.append("  · %s：%s" % (d["key"] or d["root"], w))
-    return (True, {"added": added, "details": details}, "\n".join(parts))
+    return (True, {"added": added, "details": details,
+                   "port_changed": port_changed}, "\n".join(parts))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1022,6 +1294,7 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
         #    钉的是哪个版本全在里面）和 _meta.json（槽名/实装版本/端口/时间）。
         p.on_step("[%s] 备份用户数据与插件清单…" % key)
         try:
+            d["foreign"] = plan.get("foreign") or []
             dst, vfy = _backup_slot(plan, key, backup_root, stamp)
             d["backup"] = dst
             d["verify"] = vfy
@@ -1031,6 +1304,11 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
             kept.append(key)
             p.on_step("[%s] 中止：备份失败 %s" % (key, e))
             continue
+        if not d["backup"]:
+            # 没有用户数据 → 不建备份目录（见 _backup_slot 开头）。日志里留版本号，
+            # 以后想装回同一个版本照着抄即可。
+            p.on_step("[%s] 没有用户数据（.dsh-home 为空），未生成备份（实装 %s）"
+                      % (key, d.get("version") or "未知"))
         if d["backup"]:
             p.on_step("[%s] 已备份并核对通过：%d 个文件 → %s"
                       % (key, vfy.get("checked", 0), d["backup"]))
@@ -1126,12 +1404,24 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
         return (False, payload, "没有槽被卸载。\n\n" + "\n".join(msgs or ["（原因未知）"]))
 
     parts = ["已卸载：%s（释放 %s）" % (", ".join(removed), human_size(total_bytes))]
+    for d in details:
+        _f = d.get("foreign") or []
+        if _f and not d.get("errors"):
+            parts.append("  · %s 里另有 %d 个非 dsh 条目被一并删除：%s"
+                         % (d["key"], len(_f), "、".join(_f[:6])
+                            + ("…" if len(_f) > 6 else "")))
     if kept:
         parts.append("保留在配置里（未完全清理，可重试）：%s" % ", ".join(kept))
-    parts.append("备份（用户数据 + 插件清单 + 版本信息）在：%s" % backup_root)
-    for d in details:
-        if d.get("backup"):
+    _with_bak = [d for d in details if d.get("backup")]
+    _no_bak = [d for d in details if not d.get("backup") and not d.get("errors")]
+    if _with_bak:
+        parts.append("备份（用户数据 + 插件清单 + 版本信息）在：%s" % backup_root)
+        for d in _with_bak:
             parts.append("  · %s → %s" % (d["key"], d["backup"]))
+    if _no_bak:
+        # 没有用户数据就不建备份目录（2026-11-14）—— 别让用户去一个空目录里找东西
+        parts.append("未生成备份（这些槽没有用户数据）：%s"
+                     % ", ".join(d["key"] for d in _no_bak))
     # 槽目录现在整个删掉了（含 .dsh-home/.tmp），所以下次装同一槽不会再变成
     # `dshV4-2`。万一某个槽根没删成（被占用等），如实说出来 —— 那才会导致 -2 后缀。
     leftover = [d["root"] for d in details

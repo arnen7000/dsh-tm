@@ -1,10 +1,13 @@
 """日志分级规则测试：验证 _log_tag 的判定符合"错误>操作>警告>细节>普通"。"""
 import io
+import os
 import re
 import sys
 
-REPO = r"D:\DSH-TM"
-src = io.open(REPO + r"\dsh_manager.pyw", encoding="utf-8").read()
+# 不能写死本机路径：clone 到别的盘符/目录后，总检会直接 FileNotFoundError。
+# 一律从脚本自身位置反推仓库根。
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+src = io.open(os.path.join(REPO, "dsh_manager.pyw"), encoding="utf-8").read()
 
 # 抽出需要的常量与函数
 seg_start = src.find("_ERR_WORDS = (")
@@ -12,7 +15,9 @@ seg_end = src.find("def _gui_sink_impl(")
 assert seg_start > 0 and seg_end > seg_start
 seg = src[seg_start:seg_end]
 
-ns = {}
+# 抽出来的代码段里现在有 `_MAIN_TID = threading.get_ident()`（GUI sink 的
+# 主线程判定），exec 时需要把 threading 也注进去。
+ns = {"threading": __import__("threading")}
 exec(compile(seg, "<logseg>", "exec"), ns)
 tag = ns["_log_tag"]
 

@@ -230,11 +230,11 @@ chk("C3f 导入 dsh_install_ops（带降级）", "import dsh_install_ops" in src
 chk("C3g 按钮「安装官方版 dsh」已挂",
     "安装官方版 dsh" in src and "command=install_official_version" in src)
 chk("C3h 按钮「扫描已装 dsh 并纳入」已挂（手动=全量重扫）",
-    "扫描已装 dsh 并纳入" in src and "scan_and_offer_adopt(manual=True)" in src)
+    "扫描已装 dsh 并纳入" in src and "scan_and_offer_adopt()" in src)
 
 # ── 2026-10-29：卸载槽 + 安装时列出全部版本 ────────────────────────────
 for fn in ("uninstall_versions_dialog", "_do_uninstall", "_stop_for_uninstall",
-           "_slot_brief", "_set_busy", "_build_version_picker"):
+           "_slot_brief", "_actions_enabled", "_build_version_picker"):
     chk("C3q 函数 %s 已定义" % fn,
         any(isinstance(n, ast.FunctionDef) and n.name == fn for n in tree.body))
 chk("C3r 导入 dsh_registry（带降级）", "import dsh_registry as REG" in src)
@@ -258,8 +258,9 @@ chk("C3w 卸载前走 dsh_kill 门控（不裸 taskkill）",
     "dsh_kill.kill_version(key, SIG[key], port, tracked_pid=tracked)" in src)
 chk("C3x 卸载确认默认「否」",
     re.search(r'确认卸载.*?default="no"', src, re.S) is not None)
-chk("C3y 卸载期间冻结按钮（走通用的 _set_busy）",
-    "def _set_busy" in src and "_set_busy(False)" in src and "_set_busy(True)" in src)
+chk("C3y 长操作期间冻结按钮（走通用的 _actions_enabled）",
+    "def _actions_enabled" in src
+    and "_actions_enabled(False)" in src and "_actions_enabled(True)" in src)
 # 2026-10-29 实测踩到：进度窗建了却没把 prog 传给 ops → 0 次 on_step，
 # 删 node_modules 的几十秒窗口停在「准备中…」，被用户当成卸载失败（其实已卸干净）。
 def _fn_body(name):
@@ -301,7 +302,7 @@ def line_of(needle, start=0):
     return src.count("\n", 0, i) + 1 if i >= 0 else -1
 
 for fn, btn in (("def install_official_version", "command=install_official_version"),
-                ("def scan_and_offer_adopt", "scan_and_offer_adopt(manual=True)"),
+                ("def scan_and_offer_adopt", "scan_and_offer_adopt()"),
                 ("def _show_env_report", "command=_show_env_report")):
     d = line_of(fn)
     u = line_of(btn)
@@ -364,7 +365,9 @@ LOCAL_OK = {"win", "root", "self", "dlg", "e", "evt", "on_ok",
             # 2026-11-02：设置页的按钮工厂 _mbtn/_act_btn 用形参 cmd 传回调
             "cmd",
             # 设置页「选择安装位置…」的嵌套回调
-            "_choose"}
+            "_choose",
+            # 槽体检窗口里的「修复…」（2026-11-14），同类
+            "_do_fix"}
 for m in re.finditer(r"command\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)", src):
     name = m.group(1)
     if name in LOCAL_OK:
@@ -407,8 +410,11 @@ chk("C5c 标题仍保留实装版本（右边那串就是真值，不再加「�
     bool(m) and "vtxt" in _ret and "实装" not in _ret, _ret[:80])
 chk("C5d 浏览器名仍出现在按钮上（信息没丢）",
     re.search(r'text="打开 %s" % _browser_label', src) is not None)
-chk("C3i 启动后自动触发扫描",
-    re.search(r"root\.after\(\s*1500\s*,\s*scan_and_offer_adopt\s*\)", src) is not None)
+chk("C3i 启动时**不**自动扫描（只在用户点按钮时扫）",
+    # 2026-11-13 用户要求：「点击扫描已装 dsh 并纳入时就进行扫描，其他不需要提示」。
+    # 自动扫描 + 「以后不再提示」名单是一整套，去掉扫描就没有名单存在的理由。
+    re.search(r"root\.after\(\s*1500\s*,\s*scan_and_offer_adopt", src) is None
+    and "def scan_and_offer_adopt():" in src)
 # tkinter 不是线程安全的：后台进度必须 root.after 切回主线程
 chk("C3j 后台进度用 root.after 切主线程",
     "root.after(0, lambda: self.lbl.configure" in src)
@@ -417,17 +423,18 @@ chk("C3k 长任务走线程而非 UI 线程", "run_in_thread" in src)
 m = re.search(r"askyesno\(\s*\"发现已安装的 dsh\"", src)
 # 2026-10-30 起纳入改成「勾选列表」：完好的默认勾上，坏的禁用；
 # 不点「纳入勾选的」就不会动任何东西（副作用动作必须显式确认）。
-chk("C3l 纳入走勾选列表且需显式确认",
+chk("C3l 纳入走勾选列表且需显式确认（只有「纳入勾选的 / 取消」两个出口）",
     "def _adopt_picker_dialog" in src and "纳入勾选的" in src
-    and "全部跳过，以后不再提示" in src)
+    and 'text="取消", command=on_cancel' in src)
 chk("C3l2 体检不通过的安装禁止勾选",
     # 2026-11-01：勾选态从原生 Checkbutton 改成可点击 Label（✅/空），
     # 禁用逻辑同步改成「点不动 + 变灰」。
     'if not _ok:' in src and '_ok=r["ok"]' in src)
-chk("C3l3 未勾选的写入 adopt_ignored（以后不再提示）",
-    "def _set_adopt_ignored" in src and '"adopt_ignored"' in src)
-chk("C3l4 手动扫描会重扫被跳过的（manual 分支不过滤）",
-    "def scan_and_offer_adopt(manual=False)" in src and "if not manual:" in src)
+chk("C3l3 不再有「以后不再提示」名单（勾选 = 纳入，不勾 = 什么都不记）",
+    "adopt_ignored" not in src and "_set_adopt_ignored" not in src
+    and "全部跳过" not in src)
+chk("C3l4 扫描没有 manual 分支（只有一种入口，每次全量查磁盘）",
+    "manual" not in _fn_body("scan_and_offer_adopt"))
 # 2026-10-30 修：detect_existing_installs 给的 path 是 @deepseek-ai/dsh 包目录，
 # 不是 node_modules。以前直接把它当 node_modules 传给 adopt_existing，
 # 体检必然报「这里没有 @deepseek-ai/dsh」→ 纳入功能实际是坏的。
@@ -437,13 +444,11 @@ chk("C3l5 纳入用的是 node_modules（不是 dsh 包目录）",
 # 2026-10-30 修：原来还有个「关闭」按钮走裸 win.destroy —— 关窗口（X/Esc）记忽略名单、
 # 点「关闭」不记，同一件事两种后果，下次是否被再问一次取决于点了哪个。
 # 现在统一：关窗口 = 全部跳过。不留"什么都不记就走"的出口。
-chk("C3l6 关闭对话框等同全部跳过（不留不记录的出口）",
-    # 2026-11-01：判定范围收窄到「纳入选择窗」本身。
-    # 新增的「已移出管理」窗里有一个普通「关闭」按钮（它不记录任何"跳过"名单，
-    # 语义与纳入窗的"全部跳过"完全不同），不能用全局搜索一刀切。
-    'text="关闭", command=win.destroy' not in _fn_body("_adopt_picker_dialog")
-    and 'win.protocol("WM_DELETE_WINDOW", _on_close)' in src
-    and "on_skip_all()" in src)
+_pk = _fn_body("_adopt_picker_dialog")
+chk("C3l6 关窗口 / Esc / 取消 三个出口完全等价（都是这次不纳入）",
+    'win.protocol("WM_DELETE_WINDOW", on_cancel)' in _pk
+    and 'bind("<Escape>", lambda e: on_cancel())' in _pk
+    and "on_skip_all" not in _pk)
 # grid 行号：日志区从 row3 挪到 row4（新增按钮行），权重必须同步
 chk("C3m 日志区行权重与当前布局一致",
     # 2026-11-01 第三轮：底部按钮条整体移到标题栏 → 日志区上提到 row2
@@ -629,7 +634,7 @@ chk("C8d 零槽时画空槽卡片而非空白页",
 chk("C8e 零槽引导提供安装与纳入两个入口",
     # 2026-11-01 定稿：不再画假槽卡，改为一段说明 + 两个真按钮
     "install_official_version" in _fn_body("_build_fresh_guide")
-    and "scan_and_offer_adopt(manual=True)" in _fn_body("_build_fresh_guide"))
+    and "scan_and_offer_adopt()" in _fn_body("_build_fresh_guide"))
 chk("C8e2 零槽时不再有「快速开始」大卡片（与底部按钮重复）",
     'text="快速开始"' not in src)
 chk("C8f 示例配置是零槽",
@@ -654,7 +659,9 @@ chk("C3y1 有安装队列（一次装多个）", bool(_iq) and "def step(" in _i
 chk("C3y2 队列里每个装完再走下一个（回调驱动，不阻塞主线程）",
     "on_done=_next" in _iq and "step(i + 1)" in _iq, _iq[:120])
 chk("C3y3 中途失败不中断后面的",
-    "槽位已满" in _iq and "step(i + 1)" in _iq)
+    # 2026-11-13：「没空槽」不再笼统说「槽位已满」，改用 _slot_full_reason()
+    # 说清是 config 满了还是磁盘目录占着编号。
+    "_slot_full_reason()" in _iq and "step(i + 1)" in _iq)
 # 2026-11-01：改成带参数调用（要传本次新增的槽键给白名单同步），
 # 断言的本意是"整个队列只重启一次"，所以按调用名计数，不限定括号里有没有参数。
 chk("C3y4 队列结束才重启一次",
@@ -662,7 +669,10 @@ chk("C3y4 队列结束才重启一次",
     (_iq.count("_restart_or_tell(") + _iq.count("_reload_config_after_change(")) == 1)
 _iov = _fn_body("install_official_version")
 chk("C3y5 安装对话框是多选列表", "multi=True" in _iov)
-chk("C3y6 安装对话框按剩余槽数限流", "free = MAX_SLOTS - len(SLOT_KEYS)" in _iov)
+chk("C3y6 安装对话框按「真正可用的编号」限流",
+    # 2026-11-13：可分配编号 = 没登记 且 磁盘上没有同名目录占着（_free_slot_keys）。
+    # 旧写法 MAX_SLOTS - len(SLOT_KEYS) 会把被 dshV3 占着的编号也当成空槽。
+    "free = len(_free_keys)" in _iov and "_free_slot_keys()" in _iov)
 chk("C3y7 版本号支持逗号/空格分隔的一串", "_split_versions(raw)" in _iov)
 _in2 = _fn_body("_do_install")
 chk("C3y8 单装路径仍然保留（on_done 为空时弹框+重启）",
@@ -697,10 +707,11 @@ chk("C3z5d 卡片按显示偏好画，不是按 SLOT_KEYS 全量",
     "keys = _display_keys()" in _fn_body("_build_cards"))
 chk("C3z5e 重画前先清场（否则新旧卡片叠在一起）",
     "_clear_cards()" in _fn_body("_build_cards"))
-chk("C3z5f 清场时把旧卡片按钮从冻结清单摘掉（否则 _set_busy 碰已销毁控件）",
+chk("C3z5f 清场时把旧卡片按钮从冻结清单摘掉（否则 _actions_enabled 碰已销毁控件）",
     'BUSY["card"]' in _fn_body("_clear_cards"))
-chk("C3z5g _set_busy 同时管常驻按钮与卡片按钮",
-    'BUSY["btns"]' in _fn_body("_set_busy") and 'BUSY["card"]' in _fn_body("_set_busy"))
+chk("C3z5g _actions_enabled 同时管常驻按钮与卡片按钮",
+    'BUSY["btns"]' in _fn_body("_actions_enabled")
+    and 'BUSY["card"]' in _fn_body("_actions_enabled"))
 chk("C3z5h 保存走原子写（临时文件 + os.replace）",
     "os.replace(" in _fn_body("_save_ui_prefs"))
 chk("C3z5i 保存是读-改-写，不整份覆盖（否则抹掉 versions）",
@@ -855,14 +866,16 @@ chk("C3z8c 启动时自动跑一次浅体检（槽被删过不该等点启动才
     "root.after(1200, lambda: _run_health(deep=False))" in src)
 chk("C3z8d 体检在后台线程跑（stat 几万个文件不能卡界面）",
     "threading.Thread(target=work, daemon=True).start()" in _fn_body("_run_health"))
-chk("C3z8e 状态行末尾拼体检标记", "+ _health_mark(key)" in _fn_body("refresh"))
+chk("C3z8e 状态行末尾拼体检标记", "+ _health_mark(key)" in _fn_body("_refresh_one"))
 chk("C3z8f refresh 支持 once=True（体检后只刷一次，不另起定时链）",
     "if not once:" in _fn_body("refresh") and "def refresh(once=False):" in src)
 chk("C3z8g 「槽体检」按钮在 _run_health 定义之后创建（提前创建就是 NameError）",
     src.index('text="槽体检"') > src.index("def _run_health("))
-chk("C3z8h 体检窗口只有「复制 / 关闭」，没有修复按钮（设计要求只读）",
-    'text="修复' not in _fn_body("_health_dialog")
-    and "复制到剪贴板" in _fn_body("_health_dialog"))
+chk("C3z8h 体检窗口默认只报告；修复是**显式按钮**（2026-11-14 用户要求）",
+    "复制到剪贴板" in _fn_body("_health_dialog")
+    and 'text="修复…"' in _fn_body("_health_dialog")
+    and "repair_slot" in _fn_body("_health_dialog")
+    and "askyesno" in _fn_body("_health_dialog"))
 chk("C3z8i 卸载提示写明「自己放进槽目录的文件也会一起删」",
     "也会一起删掉且不进备份" in _fn_body("uninstall_versions_dialog"))
 chk("C3z8j 卸载二次确认带 warning 图标（默认按钮仍是「否」）",
@@ -1075,9 +1088,15 @@ chk("C3z16g 纳入在循环之前问一次（放进循环会每个安装各问�
     < src.index("for r in picked:", src.index("def scan_and_offer_adopt")))
 chk("C3z16h 第二道闸：有槽时 _apply_dir_settings 直接拒绝改安装根",
     "if SLOT_KEYS:" in _fn_body("_apply_dir_settings")
-    and "安装根目录已确定，不能再改" in _fn_body("_apply_dir_settings"))
-chk("C3z16i 拒绝时给出可行的出路（先卸载干净，卸载会先备份）",
-    "先把所有版本卸载干净" in _fn_body("_apply_dir_settings"))
+    and "安装根目录不能直接改" in _fn_body("_apply_dir_settings"))
+_ad = _fn_body("_apply_dir_settings")
+chk("C3z16i 拒绝时指出可行出路是「移动」而不是「先卸载」",
+    # 2026-11-14 用户指出：换盘不用卸载，整体搬过去就行（dsh_move 保证安全）。
+    "移动安装根目录" in _ad and "不需要卸载" in _ad
+    and "先把所有版本卸载干净" not in _ad)
+chk("C3z16i2 目录分组不再宣称「要换位置请先卸载全部版本」",
+    "要换位置请先卸载全部版本" not in src
+    and "不用卸载" in _fn_body("_dir_group_single"))
 chk("C3z16j 旧的「改根前查新位置有没有槽」逻辑已删除（根锁死后是死代码）",
     "_slots_missing_under" not in src)
 
@@ -1104,17 +1123,14 @@ chk("C3z17d 运行中的槽拒绝移出（判据与卡片上的「运行中」�
     and "proc_alive(procs.get(key))" in _fn_body("_do_detach"))
 chk("C3z17e 重新纳入走 UNINST.readd_slots",
     "UNINST.readd_slots(" in _fn_body("_do_readd"))
-chk("C3z17f 已移出的槽在**独立窗口**里可勾选重新纳入",
-    # 2026-11-01 用户反馈：卸载弹窗里混着"已移出管理"很怪（一次只想卸一个）。
-    # 现在拆成 detached_manager_dialog()，卸载窗只管在管的槽。
-    "重新纳入勾选的" in _fn_body("detached_manager_dialog")
+chk("C3z17f 已移出的槽由「扫描并纳入」原样接回（不再有独立窗口）",
+    # 2026-11-12 用户反馈：没必要记住移出了哪个版本，扫描能重新发现。
+    "_do_readd(_readd_roots)" in _fn_body("scan_and_offer_adopt")
     and "重新纳入勾选的" not in _fn_body("uninstall_versions_dialog"))
-chk("C3z17g 没有在管槽时，卸载窗指引去「已移出管理」找回来",
-    # 2026-11-01：卸载窗只处理在管的槽；一个都没有时明确指路，
-    # 免得用户以为"已移出的版本彻底找不回来了"。
+chk("C3z17g 没有在管槽时，卸载窗指引去「扫描并纳入」接回",
+    # 2026-11-12：独立入口已移除，统一指向扫描。
     "if not SLOT_KEYS:" in _fn_body("uninstall_versions_dialog")
-    and "已移出管理" in _fn_body("uninstall_versions_dialog")
-    and "def detached_manager_dialog" in src)
+    and "扫描已装 dsh 并纳入" in _fn_body("uninstall_versions_dialog"))
 chk("C3z17h 移出确认框明说「磁盘上的文件一个都不会动」",
     "一个都不会动" in _fn_body("uninstall_versions_dialog"))
 # 全部移出后 versions 为空 → _dir_group 的 locked 自然变 False，
@@ -1131,10 +1147,18 @@ chk("C3z17j detach_slots 里没有任何删除/复制动作（只碰 config）",
 chk("C3z17k readd_slots 也不碰磁盘文件",
     "_force_rmtree" not in _rea_body and "shutil.rmtree" not in _rea_body
     and "os.remove" not in _rea_body)
-chk("C3z17l 重新纳入不悄悄改端口（bat 里写死了，改了就对不上）",
-    "suggest_port" not in _rea_body)
-chk("C3z17m detached 记录里存绝对路径（<base> 会跟着新根漂移，必须烘掉）",
-    "def _bake_base(" in _uops and 'replace("<base>", base)' in _uops)
+chk("C3z17l 重新纳入只在端口被占时换端口，且必须回报 port_changed",
+    # 2026-11-13：以前一律"原样保留 + 警告"，结果两条记录抢 6080，一启动就撞车。
+    # 现在：端口从 bat 读；被占就换一个空闲的，并在 payload 里标出来让调用方重写 bat。
+    "port_from_bats(root)" in _rea_body
+    and "port_changed[key]" in _rea_body
+    and "taken" in _rea_body)
+chk("C3z17m detached 只记绝对路径（label/port/配置快照一律不存）",
+    # 2026-11-13：快照描述的是"当时那个槽"，重新纳入时槽键可能已经变了，
+    # 照抄就会造出与现役槽同名、同端口、同路径的幽灵槽（实测就是槽 v4）。
+    '"root": rec_root' in _det_body
+    and "_bake_base" not in _uops
+    and '"config": ' not in _det_body)
 
 # ── C3z17n–r：2026-10-31 实测 bug —— 移出后再点「纳入」一个都扫不到 ─────────
 # 原因：`_managed_roots()` 把 detached 记录也算成「已知」，而纳入扫描正是拿它当
@@ -1142,18 +1166,24 @@ chk("C3z17m detached 记录里存绝对路径（<base> 会跟着新根漂移，�
 # 问一遍），但纳入扫描那一处必须显式关掉。
 _adopt_seg = src[src.index("def scan_and_offer_adopt("):
                  src.index("def scan_and_offer_adopt(") + 4000]
-chk("C3z17n 自动扫描把「已移出」当已知，手动扫描才全量",
-    # 2026-11-01 用户实测：移出一个版本后重启，被当成"新发现"弹窗追问，
-    # 而真正想接回来又只能用另一个列表 —— 自相矛盾。现在：
-    #   自动扫描（manual=False）→ include_detached=True，已移出的不再来烦
-    #   手动扫描（manual=True）  → include_detached=False，全量重扫
-    "include_detached=not manual" in _adopt_seg)
-chk("C3z17o _managed_roots 支持关掉 detached（默认仍含，启动时不再重复问）",
-    "def _managed_roots(include_detached=True):" in src)
-chk("C3z17p 扫不到时明确指路「卸载 / 移出…」窗口下半部分的已移出列表",
-    "已移出管理" in _adopt_seg and "重新纳入勾选的" in _adopt_seg)
-chk("C3z17q 有 detached 记录才提这条提示（没记录时不多话）",
-    "_det = _detached_records()" in _adopt_seg and "if _det:" in _adopt_seg)
+chk("C3z17n 扫描把「移出过的目录」也补进候选（每次点按钮都补）",
+    # 2026-11-13：没有自动扫描了，也就不需要 manual 分支。
+    "for r in _live_detached_records():" in _adopt_seg)
+chk("C3z17o _managed_roots 只收 config 里登记的槽（不再混进 detached）",
+    # 混进来的后果：同一目录既算"已登记"又算"已移出"，手动扫描时被当新发现，
+    # 接回时槽键已被占用 → 幽灵槽。
+    "def _managed_roots():" in src
+    and "_live_detached_records" not in _fn_body("_managed_roots"))
+_adopt_full = _fn_body("scan_and_offer_adopt")
+chk("C3z17p 扫不到时不再指路已删除的「已移出管理」列表",
+    # 那个独立入口 2026-11-12 已删；接回统一走「扫描并纳入」。
+    "已移出管理」列表" not in _adopt_full
+    and "没扫到管理范围外的 dsh" in _adopt_full)
+chk("C3z17q 失效记录只进日志，弹窗里一个字都不提",
+    "_stale_n = len(_stale_detached_records())" in _adopt_full
+    and 'log("[检测] 忽略' in _adopt_full
+    and "另外，磁盘上还有" not in _adopt_full
+    and "已移出管理」列表" not in _adopt_full)
 chk("C3z17s 扫不到时只弹一个说明框，不再连环追问",
     # 2026-11-02 用户反馈「弹出了一些窗口，还有移出管理，不知道你怎么设计的」。
     # 原流程：弹「没有可纳入的」→ 再问「要打开已移出管理吗」→ 打开「卸载/移出」窗。
@@ -1161,6 +1191,432 @@ chk("C3z17s 扫不到时只弹一个说明框，不再连环追问",
     "要打开「已移出管理」列表吗？" not in _adopt_seg)
 chk("C3z17r detached 记录里的 root 写成反斜杠（<base> 烘开后与其余部分是混写的）",
     "rec_root = os.path.normpath(root) if root else \"\"" in _uops)
+
+# ── C3z18：设置页必须真的挂上「装 / 纳入 / 卸载」三个入口 ────────────────
+# 2026-11-11 审计事故：11-01 删掉主界面第二排按钮，注释写着「已全部移进设置」，
+# 但设置页从来没补过这三个入口 —— 零槽引导卡只在 FRESH_START 时出现，于是
+# 装完第一个版本后再也装不了第二个、也卸不掉，而所有回归一路全绿（它们只
+# 断言源码里还有 `command=install_official_version` 这个字符串）。
+_hub = _fn_body("settings_hub_dialog")
+chk("C3z18a 设置页有「版本管理」分组", 'text="版本管理"' in _hub)
+chk("C3z18b 版本管理挂了「安装官方版 dsh」", "install_official_version" in _hub)
+chk("C3z18c 版本管理挂了「扫描并纳入」",
+    "scan_and_offer_adopt()" in _hub)
+chk("C3z18d 版本管理挂了「卸载 / 移出管理」",
+    "uninstall_versions_dialog" in _hub)
+chk("C3z18e 生成 bat 前先拦 cmd 元字符（路径/label 可注入）",
+    "_bat_unsafe_fields(cfg)" in _fn_body("_rebuild_bats")
+    and "_BAT_UNSAFE_CHARS" in src)
+
+# ── C3z19：扫描必须以磁盘为准，不能拿 detached 存档当事实 ────────────────
+# 2026-11-11 用户反馈：移出的 dshV2 目录已经被删掉了，点「扫描并纳入」却还
+# 提示「你有 1 个版本处于已移出管理状态（dshV2）」。根因是提示和「已知」
+# 集合直接读 config 记录，没有复核目录是否还在。
+chk("C3z19a 有按磁盘复核 detached 记录的三个辅助函数",
+    all(("def %s(" % n) in src for n in
+        ("_detached_alive", "_live_detached_records", "_stale_detached_records")))
+chk("C3z19b 已知集合 = config 里登记的槽（不含 detached 存档）",
+    "_live_detached_records" not in _fn_body("_managed_roots")
+    and "for _k in SLOT_KEYS:" in _fn_body("_managed_roots"))
+_adopt = _fn_body("scan_and_offer_adopt")
+chk("C3z19c 补候选的三道闸：目录在 + 有 bin.js + 不在 versions 里",
+    "in _known" in _adopt
+    and '"lib", "bin.js"' in _adopt
+    and "for r in _live_detached_records():" in _adopt)
+chk("C3z19d 没扫到时失效记录只进日志（不弹名字）",
+    "_stale_n = len(_stale_detached_records())" in _adopt
+    and 'log("[检测] 忽略' in _adopt
+    and "_det = _live_detached_records()" not in _adopt)
+chk("C3z19d2 扫描弹窗彻底不显示失效记录的名字（二次反馈）",
+    "另有 %d 条已移出记录" not in _adopt
+    and "for r in _stale" not in _adopt
+    and "不会把已删除的旧记录当成安装" not in _adopt)
+chk("C3z19e 不再无条件宣称已移出的版本「文件还在原处」",
+    "它们不在这条扫描路径上：文件还在原处" not in _adopt)
+chk("C3z19f 不再有「已移出管理」独立入口（统一走「扫描并纳入」）",
+    "detached_manager_dialog" not in src
+    and "已移出管理（%d）" not in src)
+chk("C3z19g 卸载窗不再有「已移出管理（N）」按钮",
+    "_recs_n" not in _fn_body("uninstall_versions_dialog"))
+
+# ── C3z20：装 / 纳入 / 移出 / 卸载后**原地刷新**，不重启进程 ────────────
+# 2026-11-12 用户要求：装完第一个版本就该直接看到结果界面，不要提示重启，
+# 也不要用户手动重开。重启进程只作为兜底。
+_rl = _fn_body("_reload_config_after_change")
+chk("C3z20a 原地刷新：重读 config 并重建 VC / SLOT_KEYS / FRESH_START",
+    "with open(CONFIG_PATH" in _rl
+    and "VC = _build_vc(VERSIONS)" in _rl
+    and "SLOT_KEYS = list(VERSIONS.keys())" in _rl
+    and "FRESH_START = (N_SLOTS == 0)" in _rl)
+chk("C3z20b 原地刷新：保留运行中的进程引用与已抓到的 token",
+    "procs = {k: _old_procs.get(k) for k in SLOT_KEYS}" in _rl
+    and "auth_urls = {k: _old_urls.get(k) for k in SLOT_KEYS}" in _rl)
+chk("C3z20c 原地刷新：重画卡片并按新槽数重算窗口宽度",
+    all(x in _rl for x in ("_clear_cards()", "_build_cards()",
+                           "_build_fresh_guide()", "root.geometry(")))
+chk("C3z20d 所有收尾路径都不再对用户说「即将重启」",
+    all("即将重启" not in _fn_body(f) for f in
+        ("_adopt_one", "_install_queue", "_do_install", "_do_uninstall",
+         "_do_detach", "_do_readd", "_do_move_root")))
+chk("C3z20e 刷新失败才退回重启进程",
+    "_reload_config_after_change(new_keys)" in _fn_body("_restart_or_tell")
+    and "_relaunch_self()" in _fn_body("_restart_or_tell"))
+_iq_code = "\n".join(l for l in _fn_body("_install_queue").splitlines()
+                     if not l.lstrip().startswith("#"))
+chk("C3z20f 批量安装收尾不引用未定义的 payload（曾导致装完不刷新）",
+    "payload" not in _iq_code)
+chk("C3z20h 原地刷新重建探测缓存与状态记忆（否则新槽永远「检测中…」）",
+    "_DETECT.clear()" in _rl and "_prev_state.clear()" in _rl
+    and "_old_detect.get(_k)" in _rl)
+chk("C3z20i 探测线程对缺失槽键用 setdefault（防 KeyError 被吞）",
+    "_DETECT.setdefault(key" in _fn_body("_detect_worker"))
+
+# ── C3z21：移出后再「扫描并纳入」必须原样接回，不能复制成 -2 ─────────────
+# 2026-11-12 实测：移出 v3 后点「扫描并纳入」，走了复制路径 → 736 MB 拷到
+# 一半被强杀，磁盘上留下 dshV3-2（289 MB 残件）。
+chk("C3z21a 分流只看位置：版本根下→原地接回，别处→复制纳入",
+    # 按"有没有移出记录"分类的旧写法，会让同一目录既被判接回又被当新发现，
+    # 正是 dshV3-2 半成品与幽灵槽 v4 的来源。
+    "_is_under_path(_root, _vr)" in _adopt_full
+    and "_det_by_nm" not in _adopt_full
+    and "_do_readd(_readd_roots)" in _adopt_full
+    and '_adopt_one(r["version"], r["loc"])' in _adopt_full)
+_pk2 = _fn_body("_adopt_picker_dialog")
+chk("C3z21b 纳入候选对话框按**位置**说明：原地接回 / 复制一份",
+    # 2026-11-14：说明压成一句，并且**每一行**都标出自己属于哪种。
+    "原地接回 = 只改配置" in _pk2 and "复制一份 = 拷进版本根" in _pk2
+    and 'r.get("action")' in _pk2)
+
+# ── C3z29：按钮冻结的方向不能写反（2026-11-14「全部停止后按钮全失灵」）────
+_sa_body = _fn_body("stop_all_slots")
+chk("C3z29a 全部停止：先冻结、结束后恢复（参数是「可用」，曾经写反）",
+    "_actions_enabled(False)" in _sa_body
+    and "_actions_enabled(True)" in _sa_body
+    and _sa_body.index("_actions_enabled(False)")
+    < _sa_body.index("_actions_enabled(True)"))
+chk("C3z29b 安装/卸载/移出/接回 都是同一顺序（False 开头、True 收尾）",
+    all(_fn_body(_n).index("_actions_enabled(False)")
+        < _fn_body(_n).index("_actions_enabled(True)")
+        for _n in ("_do_uninstall", "_do_detach", "_do_readd")))
+chk("C3z29c 函数名不再叫 _set_busy（名字会让人把方向写反）",
+    "_set_busy(" not in src)
+chk("C3z29d 全部停止在后台线程跑（4 个槽枚举进程会让界面卡住）",
+    "threading.Thread(target=work" in _sa_body
+    and "root.after(0, done)" in _sa_body
+    and "kill_one(k, report=False)" in _sa_body)
+# ── C3z30：进度窗不能有能点的「关闭」（2026-11-14 用户要求）──────────────
+# 注意：`_fn_body` 只认顶层 `def name(`，`class X.method` 形式匹配不到
+# （文本里根本没有 "def _GuiProgress.__init__" 这一串），所以这里直接切 class。
+# 2026-11-14 修：原来是 `_gp[:src.index(...)]` —— 拿**绝对**索引去切**相对**切片，
+# 越界等于没截断，`_gp` 一直是「从 class 到文件末尾」136848 个字符，断言范围
+# 一直过大（`overrideredirect(` 那条实际在扫整个文件）。
+_gp_i = src.index("class _GuiProgress")
+_gp = src[_gp_i:src.index("    def on_step", _gp_i)]
+chk("C3z30a 进度窗自绘标题栏（overrideredirect），标题在左、「—」在右同一行",
+    "overrideredirect(True)" in _gp
+    and 'self.tlabel.pack(side="left"' in _gp
+    and 'self.mini.pack(side="right"' in _gp)
+# 自绘窗口必须清 WS_EX_TOOLWINDOW —— Tk 给 overrideredirect 窗口默认加的就是它，
+# 而工具窗口不进任务栏。早先「最小化后找不回来」误判成"自绘这条路不行"，
+# 其实是漏了这一步（2026-11-14 实测 exstyle 0x80 → 0x40000 后任务栏就有按钮）。
+_mtb = "\n".join(l for l in _fn_body("_make_taskbar_window").splitlines()
+                 if not l.lstrip().startswith("#"))
+chk("C3z30b 自绘窗口清 WS_EX_TOOLWINDOW、加 WS_EX_APPWINDOW（任务栏入口）",
+    "WS_EX_TOOLWINDOW" in _mtb and "WS_EX_APPWINDOW" in _mtb
+    and "& ~WS_EX_TOOLWINDOW" in _mtb and "| WS_EX_APPWINDOW" in _mtb)
+chk("C3z30c 取 wm_frame 之前先 update（否则 HWND 还没建好，改样式静默失败）",
+    _mtb.index("win.update()") < _mtb.index("wm_frame()"))
+chk("C3z30d WM_DELETE_WINDOW 仍兜住 Alt+F4 / 任务栏关闭",
+    'WM_DELETE_WINDOW' in _gp)
+chk("C3z30e 无边框窗口自己实现拖动（只有标题栏能拖，跟正常窗口一致）",
+    "_drag_start" in _gp and "_drag_move" in _gp
+    and 'self.tbar, self.tlabel' in _gp)
+chk("C3z30f 无边框窗口自己居中（没有 WM 帮忙摆初始位置）",
+    "_center_on_root" in _gp and "winfo_screenwidth" in _gp)
+# 最小化这条路踩过三个坑，全部用真机实测确认过（2026-11-14）：
+#   ① Tk 的 iconify() 对 overrideredirect 窗口直接抛
+#      TclError: can't iconify: override-redirect flag is set
+#   ② WinDLL.ShowWindow 会同步派发消息、重入 Tk 回调，而 ctypes 已放 GIL
+#      → Fatal Python error: PyEval_RestoreThread
+#   ③ PyDLL 保持 GIL 也救不了（重入发生在 Tk 的 C 代码里）
+# 唯一稳的：调用期间把 <Unmap> 这个 Python 回调摘掉，回来再挂上。
+_min_i = _gp.index("def _minimize")
+# `_gp` 本身已经截到 `def on_step` 之前，直接取到末尾即可（别再 index on_step）。
+_min_code = "\n".join(
+    l for l in _gp[_min_i:].splitlines()
+    if not l.lstrip().startswith("#"))
+chk("C3z30g 最小化不用 Tk iconify（overrideredirect 会抛 TclError），改 ShowWindow",
+    "user32.ShowWindow(wintypes.HWND(" in _min_code
+    and "self.win.iconify()" not in _min_code)
+chk("C3z30h 调 ShowWindow 前先 unbind <Unmap>（否则重入 Tk 回调 → 进程崩溃）",
+    _min_code.index('self.win.unbind("<Unmap>")')
+    < _min_code.index("user32.ShowWindow.argtypes"))
+chk("C3z30i 最小化前手动 grab_release（摘掉 <Unmap> 后没人替我们放了）",
+    _min_code.index("self.win.grab_release()")
+    < _min_code.index("user32.ShowWindow.argtypes"))
+
+# ── C3z32：进度窗的「—」不能用 tk.Button（2026-11-14 用户截图：白补丁）────
+# Windows 上 tk.Button 是原生控件，`bg` 基本不生效 —— 浅灰窗口上会贴出一块
+# 白色方块，看着像 bug。tk.Label 是 Tk 自绘，底色完全可控。
+_gp_code = "\n".join(l for l in _gp.splitlines() if not l.lstrip().startswith("#"))
+chk("C3z32a 「—」用 tk.Label 而不是 tk.Button（后者 bg 在 Windows 上不生效）",
+    "self.mini = tk.Label(" in _gp_code
+    and "self.mini = tk.Button(" not in _gp_code,
+    "label=%s button=%s len=%d" % (
+        "self.mini = tk.Label(" in _gp_code,
+        "self.mini = tk.Button(" in _gp_code, len(_gp)))
+chk("C3z32b 「—」的底色和窗口内容区同源（都用 _APP_BG，避免色差）",
+    "bg=_APP_BG" in _gp_code and "self.win.configure(bg=_APP_BG)" in _gp_code)
+chk("C3z32c 窗口内容区显式设底色（Toplevel 默认是系统色，会和 ttk 差一层）",
+    "self.win.configure(bg=_APP_BG)" in _gp_code)
+chk("C3z32d 界面上不再写「点右上角…」这类操作提示（正文已含「请勿关闭」）",
+    "点右上角" not in _gp and "可以最小化" not in _gp)
+chk("C3z32e 最小化时释放 grab（否则窗口没了、主界面还是点不动）",
+    "<Unmap>" in _gp_code and "grab_release()" in _gp_code
+    and "<Map>" in _gp_code and "grab_set()" in _gp_code)
+# _APP_BG / _CARD_BG 必须跟着主题走：原来只更新 _INK 那批，深色主题下凡是
+# 后来新建、直接读 _APP_BG 的控件都会冒出浅色补丁。
+_ap = _fn_body("_apply_palette")
+chk("C3z32f _apply_palette 同步重绑 _APP_BG/_CARD_BG/_CARD_BD",
+    "global _APP_BG, _CARD_BG, _CARD_BD" in _ap
+    and '_APP_BG = pal["app_bg"]' in _ap
+    and '_CARD_BG = pal["card_bg"]' in _ap
+    and '_CARD_BD = pal["card_bd"]' in _ap)
+
+# ── C3z33：装新版本时不许把「用别的版本」一起禁掉（2026-11-14 用户提出）──
+# 安装只在新建的槽目录里跑 npm + 往 config 加一条记录，不杀进程、不动已有槽；
+# 装完之前新槽也不在界面上。所以已装槽的启动/停止没有理由跟着冻。
+_ae = _fn_body("_actions_enabled")
+_ae_code = "\n".join(l for l in _ae.splitlines() if not l.lstrip().startswith("#"))
+chk("C3z33a _actions_enabled 支持 keep_run（冻结时跳过卡片上的启动/停止）",
+    "keep_run" in _ae_code
+    and 'if keep_run and not enabled' in _ae_code
+    and 'b not in BUSY["card_run"]' in _ae_code)
+chk("C3z33b 恢复时一律全开（keep_run 只管冻结方向）",
+    "normal\" if enabled else \"disabled" in _ae_code.replace("'", '"'))
+_iq = "\n".join(l for l in _fn_body("_install_queue").splitlines()
+                if not l.lstrip().startswith("#"))
+chk("C3z33c 安装队列冻结时带 keep_run=True",
+    "_actions_enabled(False, keep_run=True)" in _iq)
+chk("C3z33d 装新版本的进度窗非模态（modal=False），不锁主界面",
+    "_GuiProgress(title, done, modal=False)" in _fn_body("_do_install"))
+# 卸载 / 移出 / 移动必须仍然是全模态全冻结 —— 那几个会删或搬磁盘上的东西
+for _fn_name in ("_do_uninstall", "_do_detach", "_do_move"):
+    _b = _fn_body(_fn_name)
+    if not _b:
+        continue
+    chk("C3z33e %s 仍全冻结（不带 keep_run）" % _fn_name,
+        "keep_run" not in _b)
+chk("C3z33f 卡片创建时把启动/停止单独登记进 card_run",
+    'BUSY["card_run"].extend([_b_start, _b_stop])' in src)
+chk("C3z33g 重画卡片要清空 card_run（否则残留已销毁的按钮）",
+    'BUSY["card_run"] = []' in _fn_body("_clear_cards"))
+chk("C3z33h 非模态窗口恢复时不抢 grab",
+    "if not self.modal:" in _gp and "return" in _gp.split("if not self.modal:")[1][:80])
+
+# 真跑一遍 _actions_enabled：静态断言看不出「到底冻了哪几个按钮」。
+_ae_src = ast.get_source_segment(
+    src, [n for n in ast.parse(src).body
+          if isinstance(n, ast.FunctionDef) and n.name == "_actions_enabled"][0])
+
+
+class _FakeBtn:
+    def __init__(self, name):
+        self.name = name
+        self.state = "normal"
+
+    def configure(self, **kw):
+        if "state" in kw:
+            self.state = kw["state"]
+
+
+_install = _FakeBtn("安装")
+_start, _stop, _open = _FakeBtn("启动"), _FakeBtn("停止"), _FakeBtn("打开")
+_ns_ae = {"BUSY": {"btns": [_install],
+                   "card": [_start, _stop, _open],
+                   "card_run": [_start, _stop]}}
+exec(compile(_ae_src, "<ae>", "exec"), _ns_ae)
+_ns_ae["_actions_enabled"](False, keep_run=True)
+chk("C3z33i 装新版本冻结时：安装按钮冻、已装槽的启动/停止仍可用、其它卡片按钮冻",
+    _install.state == "disabled"
+    and _start.state == "normal" and _stop.state == "normal"
+    and _open.state == "disabled",
+    "install=%s start=%s open=%s" % (_install.state, _start.state, _open.state))
+_ns_ae["_actions_enabled"](True)
+chk("C3z33j 恢复时全部可用（含 keep_run 跳过的那些）",
+    all(b.state == "normal" for b in (_install, _start, _stop, _open)))
+_ns_ae["_actions_enabled"](False)      # 不带 keep_run：全冻
+chk("C3z33k 不带 keep_run 时卡片按钮也全冻（卸载/移出/移动走这条）",
+    all(b.state == "disabled" for b in (_install, _start, _stop, _open)))
+
+
+# ── C3z31：版本号只有一个事实来源（VERSION 文件）──────────────────────────
+_root_dir = os.path.abspath(os.path.join(HERE, os.pardir))
+_ver = io.open(os.path.join(_root_dir, "VERSION"), encoding="utf-8").read().strip()
+chk("C3z31a VERSION 文件存在且形如 0.1.0（不带 v 前缀）",
+    bool(re.match(r"^\d+\.\d+\.\d+$", _ver)), _ver)
+chk("C3z31b 界面版本号读 VERSION（不再跟着每台机器的 config.json 走）",
+    'os.path.join(BASE_DIR, "VERSION")' in _fn_body("_app_version")
+    and 'return "0.0.0"' in _fn_body("_app_version"))
+_cl = io.open(os.path.join(_root_dir, "CHANGELOG.md"), encoding="utf-8").read()
+chk("C3z31c CHANGELOG 里有当前版本的条目（改版本号必须同步更新记录）",
+    ("## [%s]" % _ver) in _cl, "VERSION=%s" % _ver)
+_cli = io.open(os.path.join(_root_dir, "dsh-tm.py"), encoding="utf-8").read()
+chk("C3z31d CLI 的 --version 与界面同源",
+    "def app_version(" in _cli and 'os.path.join(BASE_DIR, "VERSION")' in _cli
+    and '"--version"' in _cli)
+
+
+chk("C3z29e 杀完进程立刻刷新探测缓存（否则日志里「已停止」紧跟「运行中(外部)」）",
+    "_refresh_detect_cache(key)" in _fn_body("kill_one")
+    and "_DETECT[key] = {" in _fn_body("_refresh_detect_cache"))
+
+
+# ── C3z26：纳入对话框的尺寸按内容算（2026-11-14「这个界面不太合理」）────────
+chk("C3z26a 窗口高度按行数算，不再用 126px/行 的粗估（单行不再撑出大片空白）",
+    "_row_h = sum(34 if r[\"ok\"] else 72 for r in rows)" in _pk2
+    and "_list_h = max(34, min(300, _row_h))" in _pk2
+    and "_h = 150 + _list_h" in _pk2
+    and "126 *" not in _pk2)
+chk("C3z26b 列表区高度由行数定，画布不写死宽度（写死会和滚动条一起溢出）",
+    'height=_list_h' in _pk2
+    and "width=484" not in _pk2
+    and 'fill="both", expand=True' in _pk2)
+chk("C3z26c 每行标出「原地接回 / 复制一份」，不能纳入的标红",
+    'text=r["action"]' in _pk2 and 'text="不能纳入"' in _pk2)
+# ── C3z27：接回做体检；修复必须由用户点（2026-11-14）────────────────────
+_rep_body = _uops.split("def repair_slot(")[1].split("\ndef ")[0]
+chk("C3z27a 接回走和复制纳入同一套体检（不再只看 bin.js）",
+    "inspect_adopt_source" in _rea_body
+    and "这个安装不完整，不能接回" in _rea_body)
+chk("C3z27b 缺 node **不自动补**（可能是用户故意删的），只在显式修复时补",
+    "补上 node 运行时" not in _rea_body
+    and "补上 node 运行时" in _rep_body)
+chk("C3z27c 接回不碰用户目录；补建 .dsh-home/.tmp 只发生在 repair_slot",
+    'for _sub in (".dsh-home", ".tmp")' not in _rea_body
+    and 'for sub in (".dsh-home", ".tmp")' in _rep_body)
+chk("C3z27d 修复只补不删（repair_slot 里没有删除动作）",
+    "shutil.rmtree" not in _rep_body and "os.remove" not in _rep_body
+    and "os.unlink" not in _rep_body)
+chk("C3z27e 接回只在 bat 缺失或端口变了时重写（不覆盖用户改过的 bat）",
+    "_bats_missing" in _fn_body("_do_readd")
+    and "port_changed" in _fn_body("_do_readd"))
+chk("C3z27f 扫描对话框只指路到「槽体检」，不再自己放修复按钮",
+    "槽体检" in _pk2 and "_is_under_path" in _pk2
+    and "repair_slot" not in _pk2)
+chk("C3z27g 修复入口在槽体检里，且只对「有错误/警告」的槽提供",
+    "fixable" in _fn_body("_health_dialog")
+    and "LEVEL_ERROR" in _fn_body("_health_dialog"))
+
+
+chk("C3z26d _adopt_row_info 按位置算出 action",
+    'action = "原地接回"' in _fn_body("_adopt_row_info")
+    and '"action": _action' in _fn_body("_adopt_row_info"))
+chk("C3z21c 挑 node 来源时传 dict（曾传 list 报 items 错误）",
+    # 2026-11-14：这段逻辑抽成了 _pick_node_source（接回也要用）
+    "_existing = {_k: VC[_k]" in _fn_body("_pick_node_source")
+    and "_pick_node_source(\"纳入\")" in _fn_body("_adopt_one"))
+
+# ── C3z22：后台线程不许直接碰 Tk（纳入/复制卡死的根因）──────────────────
+chk("C3z22a 日志 GUI 输出切回主线程",
+    "_MAIN_TID = threading.get_ident()" in src
+    and "threading.get_ident() != _MAIN_TID" in src)
+chk("C3z22b 进度回调先写日志、再更新标签",
+    'log("[%s] %s" % (self.title, text))' in src
+    and src.index('log("[%s] %s" % (self.title, text))')
+    < src.index('root.after(0, lambda: self.lbl.configure'))
+chk("C3z22c 探测数据未到时也显示端口（不再写「检测中…」）",
+    'status_vars[key].set("检测中…"' not in src
+    and '已停止  :%d" % cfg["port"]' in _fn_body("_refresh_one"))
+chk("C3z22d 单槽刷新有异常隔离（一个槽坏了不影响其它槽显示端口）",
+    # 2026-11-13：v4 没有端口号的真因 —— _scan_pos 缺它的键，_scan_slot 抛
+    # KeyError，而 refresh 的循环没有隔离，v4 及之后的槽全部停在「—」。
+    "def _refresh_one(key):" in src
+    and "_refresh_one(key)" in _fn_body("refresh")
+    and "except Exception as e:" in _fn_body("refresh"))
+chk("C3z22e 日志扫描偏移随软刷新重建（新槽不会 KeyError）",
+    "_scan_pos.update({k: _old_scan.get(k) for k in SLOT_KEYS})"
+    in _fn_body("_reload_config_after_change")
+    and "_scan_pos.get(key) is None" in _fn_body("_scan_slot"))
+
+
+# ── C3z23：槽编号与目录一一对应（2026-11-13「为什么会有 dshV3-2」）──────────
+# 移出管理只删 config 记录、目录还在。若分配编号时只看 config，安装就会把
+# dshV3 让位成 dshV3-2（键仍是 v3），编号与目录从此错位。现在目录占着编号就跳号。
+import shutil as _sh23
+import tempfile as _tf23
+_tmpnum = _tf23.mkdtemp(prefix="dsh-num-")
+try:
+    for _n, _files in (("dshV1", ["x"]), ("dshV2", ["x"]),
+                       ("dshV3", ["x"]), ("dshV4", [])):
+        _d = os.path.join(_tmpnum, _n)
+        os.makedirs(_d)
+        for _f in _files:
+            open(os.path.join(_d, _f), "w").write("x")
+
+    class _FakeOPS23:
+        @staticmethod
+        def _dir_is_empty_shell(p):
+            for _r, _ds, _fs in os.walk(p):
+                if _fs:
+                    return False
+            return True
+
+    _num_seg = "\n\n".join(
+        ast.get_source_segment(src, _n) for _n in ast.parse(src).body
+        if isinstance(_n, ast.FunctionDef)
+        and _n.name in ("_slot_dir_occupied", "_free_slot_keys", "_next_free_slot_key"))
+    _ns23 = {"os": os, "OPS": _FakeOPS23, "MAX_SLOTS": 6,
+             "SLOT_KEYS": ["v1", "v2"], "_versions_root": lambda: _tmpnum}
+    exec(compile(_num_seg, "<num>", "exec"), _ns23)
+    chk("C3z23a 编号分配跳过「磁盘上已有内容」的目录（移出的槽占着编号）",
+        _ns23["_slot_dir_occupied"]("v3") is True
+        and "v3" not in _ns23["_free_slot_keys"]()
+        and _ns23["_next_free_slot_key"]() == "v4",
+        str(_ns23["_free_slot_keys"]()))
+    chk("C3z23b 零文件空壳不算占用（复用同一个编号，不跳号）",
+        _ns23["_slot_dir_occupied"]("v4") is False)
+finally:
+    _sh23.rmtree(_tmpnum, ignore_errors=True)
+
+chk("C3z23c 实时分配也走同一套规则（不再只看 config）",
+    "_free_slot_keys(used)" in _fn_body("_next_free_slot_key_live")
+    and "_free_slot_keys()" in _fn_body("_next_free_slot_key"))
+chk("C3z23d 「没有空编号」时说清是哪个目录占着",
+    "_occupied_unmanaged_keys" in _fn_body("_slot_full_reason")
+    and "占着编号" in _fn_body("_slot_full_reason"))
+chk("C3z23e 安装队列的日志点名被跳过的编号",
+    "_occupied_unmanaged_keys()" in _fn_body("_install_queue"))
+chk("C3z23f 启动检查报告「未登记但完整」的槽目录（它们占着编号）",
+    "detached_dirs" in _fn_body("_log_orphan_shells") and "[编号]" in src)
+
+
+# ── C3z24：主题选择必须一眼看出选了哪个（2026-11-14 用户反馈）────────────
+# 原来用 ttk.Radiobutton：小圆点在浅色/深色下都只有几像素，选中态几乎看不出来。
+# 改成三个分段按钮，选中的那个是品牌色填充 + 白字 + 加粗。
+_hub = _fn_body("settings_hub_dialog")
+chk("C3z24a 主题用分段按钮（选中=填充），不再用小圆点单选",
+    "SegOn.TButton" in _hub and "SegOff.TButton" in _hub
+    and "ttk.Radiobutton(" not in _hub)
+chk("C3z24b 两种样式都随主题配色（深色下也清晰）",
+    'st.configure("SegOn.TButton"' in src
+    and 'st.configure("SegOff.TButton"' in src
+    and 'foreground="white"' in src)
+chk("C3z24c 切主题后重刷选中态（不然按钮还停在旧的高亮上）",
+    "def _refresh_theme_seg()" in _hub
+    and "_refresh_theme_seg()" in _hub
+    and src.count("_refresh_theme_seg()") >= 2)
+
+# ── C3z25：移动安装根不用卸载（2026-11-14 用户指出提示自相矛盾）───────────
+_mv = _fn_body("move_install_root_dialog")
+chk("C3z25a 有版本在运行时拒绝移动（文件被占用会拷坏）",
+    "有版本正在运行" in _mv and "port_open(" in _mv and "proc_alive(" in _mv)
+chk("C3z25b 确认框显示「需要多少 / 可用多少」",
+    "need_bytes" in _mv and "free_bytes" in _mv)
+chk("C3z25c 移动完成后重写三件 bat（bat 里是绝对路径）",
+    "_rebuild_bats()" in _fn_body("_do_move_root"))
+chk("C3z25d 提示不再说「要换位置请先卸载全部版本」",
+    "要换位置请先卸载全部版本" not in src)
 
 
 print()

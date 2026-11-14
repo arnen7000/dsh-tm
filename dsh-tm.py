@@ -9,18 +9,21 @@
    所以这里只复用**纯逻辑**模块：dsh_kill / dsh_health / dsh_registry。
 2. **与 GUI 用同一份 config.json、同一套隔离语义**（DSH_HOME / TEMP / 端口）。
    启动参数直接从 config 的 extra_args 取，不另造一套。
-3. **只做 GUI 做不到或做起来笨的事**：批量启动（界面故意不做）、脚本化查询状态。
+3. **只做 GUI 做不到或做起来笨的事**：批量启动、脚本化查询状态。
    单槽启停在界面上点一下更直观，CLI 也提供但主要用于自动化。
+4. **CLI 拿不到入口 token**：完整 token 只存在 GUI 进程内存的 auth_urls 里，
+   写进日志的是等长掩码后的 `token=abcd****`。所以 `url` 只打印裸地址，
+   带 token 的完整 URL 请在管理器卡片上点「复制入口 URL」。
 
 用法
 ----
     python dsh-tm.py list                  # 列出所有槽与运行状态
     python dsh-tm.py status [槽名]         # 同 list，可指定单个
     python dsh-tm.py start <槽名>          # 启动一个
-    python dsh-tm.py start --all           # 启动全部（界面没有的功能）
+    python dsh-tm.py start --all           # 启动全部
     python dsh-tm.py stop <槽名>           # 停止一个
     python dsh-tm.py stop --all            # 停止全部
-    python dsh-tm.py url <槽名>            # 打印带 token 的入口 URL
+    python dsh-tm.py url <槽名>            # 打印入口地址（不含 token）
     python dsh-tm.py health [槽名]         # 槽体检（只读）
 
 退出码：0 成功 / 1 有失败 / 2 用法错误 / 3 配置错误
@@ -191,13 +194,12 @@ def _slot_env(ctx, key):
     if c.get("dsh_home"):
         env["DSH_HOME"] = c["dsh_home"]
     if c.get("temp_dir"):
-        td = c["temp_dir"]
-        try:
-            os.makedirs(td, exist_ok=True)
-        except Exception:
-            pass
-        env["TEMP"] = td
-        env["TMP"] = td
+        # 纯函数：这里**不建目录**。以前在这里 makedirs，任何调用方
+        # （包括 test-cli.py 这种只读回归）都会在真实盘上留下
+        # `<home>/dsh-versions/dsh-temp/<槽>`，总检的卫生闸因此报红
+        # （2026-11-12 定位到 test-cli）。建目录挪到 _spawn。
+        env["TEMP"] = c["temp_dir"]
+        env["TMP"] = c["temp_dir"]
     try:
         env["NODE_OPTIONS"] = env.get("NODE_OPTIONS", "")
     except Exception:
@@ -219,6 +221,13 @@ def _spawn(ctx, key):
     if node and not os.path.exists(node):
         return False, "node.exe 不存在：%s" % node
     cmd = _build_start_cmd(ctx, key)
+    # 真正启动前才建 TEMP（见 _slot_env 的说明：算环境变量不该有副作用）
+    _td = c.get("temp_dir")
+    if _td:
+        try:
+            os.makedirs(_td, exist_ok=True)
+        except Exception:
+            pass
     env = _slot_env(ctx, key)
     flags = 0
     if os.name == "nt":
@@ -273,7 +282,7 @@ def _make_sig(cfg):
 
 
 def _entry_url(ctx, key):
-    """从日志里捞该槽最近一条带 token 的入口 URL。"""
+    """从日志里捞该槽最近一条入口 URL（拿不到完整 token 时返回空串）。"""
     c = ctx.slot(key)
     if not c or not os.path.exists(LOG_FILE):
         return ""
@@ -295,6 +304,10 @@ def _entry_url(ctx, key):
         if m:
             last = m.group(0).decode("utf-8", "replace")
         pos = (j + 1) if j >= 0 else len(blob)
+    # 管理器把日志里的 token 等长掩码成 `abcd********`。这种 URL 复制到
+    # 浏览器也登不进去，绝不能当成「带 token 的入口」返回。
+    if "*" in last:
+        return ""
     return last
 
 
@@ -392,15 +405,20 @@ def cmd_url(ctx, args):
     keys = _target_keys(ctx, args)
     if not keys:
         return EXIT_USAGE
-    out = ""
+    found = 0
     for k in keys:
         u = _entry_url(ctx, k)
-        if u:
-            out = u
-            print(u)
+        c = ctx.slot(k) or {}
+        bare = ("http://127.0.0.1:%s/" % c["port"]) if c.get("port") else ""
+        if u or bare:
+            found += 1
+            print(u or bare)
+            if not u:
+                print("  （仅入口地址；带 token 的完整 URL 请在管理器点「复制入口 URL」）",
+                      file=sys.stderr)
         else:
-            print("%s  未找到入口 URL（该槽还没启动过，或日志里没有 token）" % k)
-    return EXIT_OK if out or len(keys) else EXIT_FAIL
+            print("%s  找不到入口地址（槽配置里没有 port）" % k)
+    return EXIT_OK if found == len(keys) else EXIT_FAIL
 
 
 def cmd_health(ctx, args):
@@ -444,7 +462,7 @@ def cmd_kill_stray(ctx, args):
       · kill-stray   —— 连"没登记进 config 的 dsh 副本 / 子进程"一起清，
                         用于"端口被一个我不认识的 dsh 占着"的排障场景。
 
-    安全边界与 GUI 原有的「杀全部进程」完全一致：只认命令行里出现
+    安全边界与管理器的停止逻辑一致：只认命令行里出现
     @deepseek-ai/dsh 的 node 进程（SIG_ANY），绝不碰其它应用的 node。
     """
     try:
@@ -494,6 +512,22 @@ def _target_keys(ctx, args):
     return keys
 
 
+def app_version():
+    """程序版本：与 GUI 同源 —— 读仓库根的 `VERSION` 文件（2026-11-14）。
+
+    以前版本号只存在于 config.json（每台机器一份），换台机器就显示兜底值；
+    现在版本跟代码一起提交，`--version` 和界面标题栏读到的是同一个数。
+    """
+    try:
+        with open(os.path.join(BASE_DIR, "VERSION"), "r", encoding="utf-8-sig") as f:
+            v = (f.read() or "").strip()
+        if v:
+            return v
+    except Exception:
+        pass
+    return "0.0.0"
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="dsh-tm",
@@ -501,11 +535,13 @@ def build_parser():
         epilog="示例：python dsh-tm.py start --all / python dsh-tm.py list")
     p.add_argument("--config", default=CONFIG_PATH, help="配置文件路径（缺省同目录 config.json）")
     p.add_argument("--verbose", action="store_true", help="打印底层详细过程（排障用）")
+    p.add_argument("--version", action="version", version="dsh-tm " + app_version(),
+                   help="打印版本号后退出")
     sub = p.add_subparsers(dest="cmd")
 
     for name, help_text in (("list", "列出所有槽与运行状态"),
                             ("status", "同 list，可指定槽"),
-                            ("url", "打印带 token 的入口 URL"),
+                            ("url", "打印入口地址（不含 token）"),
                             ("health", "槽体检（只读）")):
         sp = sub.add_parser(name, help=help_text)
         sp.add_argument("slot", nargs="*", help="槽名（如 v1）；可给多个")
@@ -524,7 +560,7 @@ def build_parser():
 
     sp = sub.add_parser(
         "kill-stray",
-        help="清理槽外 dsh 残留（原界面「杀全部进程」，排障用）")
+        help="清理槽外 dsh 残留（排障用；旧版界面按钮已移除）")
     sp.add_argument("--yes", action="store_true", help="确认执行（不加只打印计划）")
 
     return p

@@ -147,8 +147,10 @@ def main():
         # ── 扫生成到各槽目录的 bat（check-all.py 调的就是这条）──
         roots = slot_roots()
         if not roots:
-            print("没从 config.json 推求出任何槽目录（或都不存在）")
-            return 1
+            # 刚 clone 的源码仓库既没有 config.json、也没有任何槽，这是正常状态：
+            # 没有可检查的对象，不该让发布门禁变红（2026-11-11 干净 clone 实测）。
+            print("[skip] 没从 config.json 推求出任何槽目录（或都不存在）—— 零槽，无需检查")
+            return 0
         bad_all = 0
         total = 0
         for key, root in roots:
