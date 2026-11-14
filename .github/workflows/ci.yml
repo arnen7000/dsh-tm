@@ -65,4 +65,8 @@ jobs:
             $o = & python $p *>&1
             $o | ForEach-Object { Write-Host "$_" }
             Write-Host "=== $t 退出码：$LASTEXITCODE ==="
+            # 把失败的断言单独变成 annotation，这样在网页顶部一眼就能看到
+            foreach ($line in @($o | ForEach-Object { "$_" })) {
+              if ($line -match '^\s*FAIL') { Write-Host "::error::$($line.Trim())" }
+            }
           }
