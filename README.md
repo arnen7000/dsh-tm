@@ -1,5 +1,12 @@
 # dsh 版本管理器（dsh-tm）
 
+> **English readers** — DSH Version Manager runs several **isolated DeepSeek Harness (dsh)**
+> versions side by side on one Windows machine. Each version gets its own process, port,
+> data directory, bundled `node` runtime and temp directory, so a broken test build never
+> touches your daily driver. GUI available in **Chinese and English**.
+> Full English guide: **[docs/user-guide.en.md](docs/user-guide.en.md)** ·
+> Architecture and release docs are Chinese-only (audience: contributors and maintainers).
+
 在同一台 Windows 机器上**并行运行多个互相隔离的 DeepSeek Harness（dsh）版本**，并用一个图形界面统一管理：安装 / 纳入 / 启动 / 停止 / 打开浏览器 / 卸载 / 移出 / 体检。
 
 > **一句话**：每个版本一套自己的进程、端口、数据目录、node 运行时和临时目录，互不污染。主力版本日常用，新版本隔离着装，试坏了删掉重装，不碰主力环境。
@@ -754,16 +761,32 @@ git config core.hooksPath .githooks
 
 ## 九、文档索引
 
+### 用这个软件（终端用户）
+
 | 文档 | 内容 |
 |---|---|
 | [`docs/dsh管理器使用说明.md`](docs/dsh管理器使用说明.md) | **管理器使用说明**：按钮语义、日志、`config.json` 配置、安装与卸载操作 |
 | [`docs/dsh管理器功能说明书.md`](docs/dsh管理器功能说明书.md) | **界面与产物规格**：每个按钮、三个 bat、备份目录的逐项说明 |
-| [`docs/架构与维护说明.md`](docs/架构与维护说明.md) | **★ 想改这个软件就先读这篇**：组件地图、隔离轴、内部数据流、日志与 token 脱敏、进程签名模型、安装/纳入/卸载流程、维护任务、验证方法、已知限制 |
-| [`docs/工程经验总结.md`](docs/工程经验总结.md) | **★ 想懂"为什么这么写"读这篇**：开工前六问、七类反复咬人的坑、四层测试体系、发布前体检清单、与插件开发的对照 |
 | [`docs/常见问题.md`](docs/常见问题.md) | **FAQ**：安装 / 隔离 / 卸载 / 纳入 / 平台 / 验证 / 杂项 |
-| [`docs/发布与更新流程.md`](docs/发布与更新流程.md) | **★ 要发新版本读这篇**：隐私扫描、最小必要原则、历史清理、GitHub 平台要求、首次使用实测、发版清单、版本号约定、插件化差异 |
 | [`docs/DeepSeek-Harness使用手册.md`](docs/DeepSeek-Harness使用手册.md) | **dsh 本体**的文档入口索引 |
 | [`docs/DeepSeek-Harness简明手册.md`](docs/DeepSeek-Harness简明手册.md) | **dsh 本体**·简明版：10 分钟快速上手 |
+| [`docs/user-guide.en.md`](docs/user-guide.en.md) | English user guide（英文版使用说明） |
+
+> 只想装来用的话，看上面这几份就够，下面两组可以跳过。
+
+### 改这个软件（贡献者）
+
+| 文档 | 内容 |
+|---|---|
+| [`docs/架构与维护说明.md`](docs/架构与维护说明.md) | **★ 想改这个软件就先读这篇**：组件地图、隔离轴、内部数据流、日志与 token 脱敏、进程签名模型、安装/纳入/卸载流程、维护任务、验证方法、已知限制 |
+| [`docs/工程经验总结.md`](docs/工程经验总结.md) | **★ 想懂"为什么这么写"读这篇**：开工前六问、七类反复咬人的坑、四层测试体系、发布前体检清单、与插件开发的对照 |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 环境、代码地图、六条硬约束、跑测试、提交信息约定 |
+
+### 发新版本（维护者）
+
+| 文档 | 内容 |
+|---|---|
+| [`docs/发布与更新流程.md`](docs/发布与更新流程.md) | **★ 要发新版本读这篇**：隐私扫描、最小必要原则、历史清理、GitHub 平台要求、首次使用实测、发版清单、版本号约定、插件化差异 |
 
 > 官方手册原文不随本仓库发布（体积大、且很快与具体版本脱节）。需要时看 dsh 官方文档站，或直接读你装的那个版本自带的 `node_modules\@deepseek-ai\dsh\docs\`。
 >
