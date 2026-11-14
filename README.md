@@ -2,6 +2,9 @@
 
 **中文** · [English](README.en.md)
 
+[![check-all](https://github.com/arnen7000/dsh-tm/actions/workflows/ci.yml/badge.svg)](https://github.com/arnen7000/dsh-tm/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/arnen7000/dsh-tm?label=release)](https://github.com/arnen7000/dsh-tm/releases)
+
 在同一台 Windows 机器上**并行运行多个互相隔离的 DeepSeek Harness（dsh）版本**，并用一个图形界面统一管理：安装 / 纳入 / 启动 / 停止 / 打开浏览器 / 卸载 / 移出 / 体检。
 
 > **一句话**：每个版本一套自己的进程、端口、数据目录、node 运行时和临时目录，互不污染。主力版本日常用，新版本隔离着装，试坏了删掉重装，不碰主力环境。
@@ -820,7 +823,7 @@ git config core.hooksPath .githooks
 
 | 文档 | 内容 |
 |---|---|
-| [`docs/工程经验总结.md`](docs/工程经验总结.md) | **★ 想懂"为什么这么写"读这篇**：开工前六问、七类反复咬人的坑、四层测试体系、发布前体检清单、与插件开发的对照 |
+| [`docs/工程经验总结.md`](docs/工程经验总结.md) | **★ 想懂"为什么这么写"读这篇**：开工前六问、八类反复咬人的坑、四层测试体系、发布前体检清单、与插件开发的对照 |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | 环境、代码地图、六条硬约束、跑测试、提交信息约定 |
 
 ### 发新版本（维护者）

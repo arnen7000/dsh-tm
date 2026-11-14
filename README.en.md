@@ -2,6 +2,9 @@
 
 **English** · [中文](README.md)
 
+[![check-all](https://github.com/arnen7000/dsh-tm/actions/workflows/ci.yml/badge.svg)](https://github.com/arnen7000/dsh-tm/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/arnen7000/dsh-tm?label=release)](https://github.com/arnen7000/dsh-tm/releases)
+
 Run several **mutually isolated DeepSeek Harness (dsh)** versions side by side on one
 Windows machine, and drive them all from a single window.
 
