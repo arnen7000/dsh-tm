@@ -8,6 +8,11 @@
 
 **支持 1~6 个版本并存。**
 
+> ### ⬇ 下载
+> **[Releases 页面](https://github.com/arnen7000/dsh-tm/releases)** → 下 `dsh-tm-<版本>-portable.zip`
+> → 解压到任意目录 → 双击 `start-manager.bat`。
+> **不用装 Python、不用装 Node**，包里都带了。
+
 ---
 
 ## 界面

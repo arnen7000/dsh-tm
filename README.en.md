@@ -11,6 +11,11 @@ Windows machine, and drive them all from a single window.
 
 **Up to 6 versions.** GUI in **Chinese and English** (switch in Settings, takes effect immediately).
 
+> ### ⬇ Download
+> **[Releases](https://github.com/arnen7000/dsh-tm/releases)** → grab `dsh-tm-<version>-portable.zip`
+> → unzip anywhere → double-click `start-manager.bat`.
+> **No Python, no Node needed** — both are bundled.
+
 ![Main window](docs/images/main-window.jpg)
 
 *(Screenshot shows the Chinese UI; the English UI is identical in layout.)*

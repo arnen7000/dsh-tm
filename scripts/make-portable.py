@@ -94,15 +94,23 @@ def main():
         kept, skipped = copy_runtime(src_rt, os.path.join(root, "runtime"))
         print("      保留 %d 个文件，跳过 %d 个（pdb / 编译期文件）" % (kept, skipped))
 
-        # 解压后第一眼能看到的东西：告诉用户接下来做哪三步
-        with open(os.path.join(root, "使用前先读我.txt"), "w",
-                  encoding="utf-8-sig", newline="\r\n") as f:
+        # 解压后第一眼能看到的东西：告诉用户接下来做哪三步。
+        # 文件名用 **ASCII**：zip 里非 ASCII 名靠 UTF-8 标志位，Windows 资源管理器
+        # 和 7-Zip 认，但 GNU unzip / 部分老工具会显示成乱码。这个文件是"第一眼"，
+        # 不能有任何环境差异 —— 内容仍然是中文。
+        # newline="" 表示**不做任何换行转换** —— 内容里写的 `\r\n` 就是最终的
+        # `\r\n`。写成 newline="\r\n" 会把内容里的 `\n` 再转一次，得到 `\r\r\n`
+        # （Windows 记事本打开时每行之间多一个空行，2026-11-14 实测踩到）。
+        with open(os.path.join(root, "README-FIRST.txt"), "w",
+                  encoding="utf-8-sig", newline="") as f:
             f.write(
                 "dsh-tm 便携版 %s\r\n"
                 "========================================\r\n\r\n"
                 "1. 双击 start-manager.bat 打开管理器\r\n"
                 "2. 点「安装 dsh」选一个版本 → 装好后点卡片上的「启动」\r\n"
-                "3. 想换语言：设置 → 界面 → 界面语言\r\n\r\n"
+                "3. 想换语言：设置 → 界面 → 界面语言\r\n"
+                "4. 想要桌面图标：在本目录运行\r\n"
+                "   runtime\\python\\python.exe build_lnk.py\r\n\r\n"
                 "不需要安装 Python 或 Node —— 包里自带了，解压即用。\r\n\r\n"
                 "详细说明见 docs 文件夹，或 README.md\r\n"
                 % app_version())
