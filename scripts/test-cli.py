@@ -173,6 +173,33 @@ if loaded:
     import shutil
     shutil.rmtree(d, ignore_errors=True)
 
+# ── E. --json（机器可读输出，2026-11-14）──────────────────────────────
+# 目的：让另一个 agent 能驱动 dsh-tm。给人看的对齐文本 agent 解析起来很痛苦。
+print("== E. --json 机器可读输出 ==")
+_src_cli = io.open(CLI, encoding="utf-8").read()
+chk("E1 CLI 提供 --json 参数", 'p.add_argument("--json"' in _src_cli)
+chk("E2 顶层带 schema_version", "SCHEMA_VERSION = 1" in _src_cli)
+# 四个只读命令都要有 JSON 分支
+_n_json = _src_cli.count('getattr(args, "json", False)')
+chk("E3 四个只读命令都有 JSON 分支（list/status/url/health）", _n_json >= 4, "%d 处" % _n_json)
+# 字段名与枚举值必须是英文，不跟 --lang 漂移
+chk("E4 level 归一成英文枚举",
+    mod._lv_en("错误") == "error" and mod._lv_en("警告") == "warning"
+    and mod._lv_en("提示") == "info",
+    "%s / %s / %s" % (mod._lv_en("错误"), mod._lv_en("警告"), mod._lv_en("提示")))
+chk("E5 英文 level 也认（界面语言切换后不炸）",
+    mod._lv_en("error") == "error" and mod._lv_en("warning") == "warning")
+# JSON 模式下不能调 _target_keys —— 它没槽时会往 stderr 写中文，把 stdout 弄脏
+chk("E6 JSON 模式绕开 _target_keys（避免 stderr 污染机器可读输出）",
+    "JSON 模式下不调 _target_keys" in _src_cli
+    and "同 health：不调 _target_keys" in _src_cli)
+# `list --json` 比 `--json list` 自然，argparse 只认后者，所以有 argv 重排
+chk("E7 --json / --lang 可写在子命令之后（argv 重排）",
+    "_pre + _argv" in _src_cli and 'if _a == "--json"' in _src_cli)
+# 槽快照字段固定
+chk("E8 槽快照字段固定（key/label/port/state/version）",
+    all(('"%s"' % f) in _src_cli for f in ("key", "label", "port", "state", "version")))
+
 print()
 # 与其它回归脚本同一套收尾格式：check-all.ps1 只从以 RESULT 开头的行里取摘要，
 # 少了这一行，总检会打出一个空的「+ 」（退出码仍是 0，但看着像没跑）。

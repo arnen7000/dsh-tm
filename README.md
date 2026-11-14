@@ -114,6 +114,9 @@ python scripts\check-env.py
 
 ```
 1. 解压 / clone 本仓库到任意目录（路径建议无空格、无中文）
+   · **从源码跑需要 Python ≥ 3.8（带 tkinter）**，装 dsh 时还需要 Node ≥ 22.19；
+     便携包自带这两个运行时，什么都不用装。详见 [2.1](#21-两种获取方式)
+   · 不确定机器行不行？先跑 `python scripts\check-env.py`，它会逐项告诉你缺什么
         │
         ▼
 2. 双击  start-manager.bat          ← 只打开管理器窗口，不装任何东西
@@ -454,8 +457,43 @@ python dsh-tm.py health v1 --deep    :: 槽体检（只读）
 | `--verbose` | 打印底层详细过程（排障用） |
 | `--config <路径>` | 用别的配置文件（缺省同目录 `config.json`） |
 | `--wait <秒>` | `start` 专用：等端口监听的超时，缺省 20 秒 |
+| `--lang zh\|en` | 输出语言；不给则跟随 `config.json` 的 `ui.lang` |
+| `--json` | **机器可读输出**（见下） |
 
 退出码：`0` 全成功 / `1` 有失败 / `2` 用法错误 / `3` 配置错误。
+
+**`--json`：给 agent / 脚本用**。只读命令（`list` / `status` / `url` / `health`）
+都支持，输出固定 schema：
+
+```bat
+python dsh-tm.py list --json
+```
+
+```json
+{
+  "schema_version": 1,
+  "command": "list",
+  "ok": true,
+  "count": 3,
+  "slots": [
+    {"key": "v1", "label": "dshV1", "port": 4080, "state": "stopped",
+     "version": "0.2.2-rc.3", "bin_js": "...", "dsh_home": "...",
+     "temp_dir": "...", "browser": "default"}
+  ]
+}
+```
+
+约定：
+
+- **字段名与枚举值固定英文**（`running` / `stopped` / `ok` / `warning` / `error`），
+  不跟 `--lang` 漂移 —— 机器读的东西不该随界面语言变
+- 顶层必有 `schema_version`；加字段不升版本，**改已有字段名要升**
+- `health --json` 的每条问题带 `level` + `title` + `detail`，没指定槽就查全部
+- JSON 模式下不会往 stderr 写提示，`stdout` 是干净的一整段 JSON
+- 带 token 的完整入口 URL 只存在管理器进程内存里，CLI 拿不到 ——
+  `url --json` 里 `has_token: false` 表示这只是裸地址
+
+`--json` / `--lang` 写在子命令前后都行（`list --json` 和 `--json list` 等价）。
 
 > **「全部启动」为什么两个入口都有？**
 > 标题栏的「全部启动 / 全部停止」只作用于 config 里登记的这几个槽；CLI 的

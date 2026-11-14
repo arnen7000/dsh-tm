@@ -106,6 +106,51 @@ def load_config(path=CONFIG_PATH):
     return cfg, ""
 
 
+# ── 机器可读输出（2026-11-14）──────────────────────────────────────
+# 为什么要 `--json`：dsh-tm 的价值是"确定、可复现、不猜"，最适合被另一个
+# agent 驱动。但给人看的对齐文本 agent 解析起来很痛苦，所以每个只读命令都
+# 提供固定 schema 的 JSON 出口。
+#
+# 约定：
+#   · **字段名与枚举值一律英文**，不跟 `--lang` 变 —— 机器读的东西不该随界面语言漂移
+#   · 顶层必有 `schema_version`，加字段可以，改已有字段名要升版本
+#   · 只读命令（list / status / url / health）输出 `ok: true` 表示"命令跑通了"，
+#     不代表槽都健康 —— 槽的问题在 `slots[].level` 里
+SCHEMA_VERSION = 1
+
+
+def _emit(obj):
+    """统一的 JSON 出口。"""
+    print(json.dumps(obj, ensure_ascii=False, indent=2))
+
+
+def _slot_json(ctx, key):
+    """一个槽的机器可读快照。只读，不启动任何东西。"""
+    c = ctx.slot(key) or {}
+    return {
+        "key": key,
+        "label": c.get("label") or key,
+        "port": c.get("port"),
+        "state": "running" if _is_running(ctx, key) else "stopped",
+        "version": _installed_version(c) or None,
+        "bin_js": c.get("bin_js"),
+        "dsh_home": c.get("dsh_home"),
+        "temp_dir": c.get("temp_dir"),
+        "browser": c.get("browser"),
+    }
+
+
+# 体检条目的 level 在界面语言下是本地化字符串（中文「错误」/ 英文 "error"）。
+# JSON 里必须归一成语言无关的枚举，否则 agent 得同时认两种写法。
+_LV_EN = {"错误": "error", "error": "error", "Error": "error",
+          "警告": "warning", "warning": "warning", "Warning": "warning",
+          "提示": "info", "info": "info", "note": "info", "Note": "info"}
+
+
+def _lv_en(lv):
+    return _LV_EN.get(str(lv).strip(), str(lv).strip().lower())
+
+
 class Ctx(object):
     """解析后的运行上下文：占位符已展开、版本表已就绪。"""
 
@@ -334,6 +379,11 @@ def _entry_url(ctx, key):
 
 # ─────────────────────────── 子命令 ───────────────────────────
 def cmd_list(ctx, args):
+    if getattr(args, "json", False):
+        _emit({"schema_version": SCHEMA_VERSION, "command": "list", "ok": True,
+               "count": len(ctx.keys),
+               "slots": [_slot_json(ctx, k) for k in ctx.keys]})
+        return EXIT_OK
     if not ctx.keys:
         print(T("当前没有管理任何版本槽（config.json 的 versions 为空）。"))
         return EXIT_OK
@@ -415,6 +465,12 @@ def cmd_stop(ctx, args):
 
 
 def cmd_status(ctx, args):
+    if getattr(args, "json", False):
+        keys = _target_keys(ctx, args) if args.slot else ctx.keys
+        _emit({"schema_version": SCHEMA_VERSION, "command": "status", "ok": True,
+               "count": len(keys),
+               "slots": [_slot_json(ctx, k) for k in keys]})
+        return EXIT_OK
     if args.slot:
         for k in _target_keys(ctx, args):
             print("%s: %s" % (k, T("运行中") if _is_running(ctx, k) else T("已停止")))
@@ -423,9 +479,21 @@ def cmd_status(ctx, args):
 
 
 def cmd_url(ctx, args):
-    keys = _target_keys(ctx, args)
-    if not keys:
-        return EXIT_USAGE
+    if getattr(args, "json", False):
+        # 同 health：不调 _target_keys，避免 stderr 混进机器可读输出
+        keys = [k for k in (getattr(args, "slot", None) or []) if k in ctx.versions] or ctx.keys
+        rows = []
+        for k in keys:
+            u = _entry_url(ctx, k)
+            c = ctx.slot(k) or {}
+            bare = ("http://127.0.0.1:%s/" % c["port"]) if c.get("port") else ""
+            rows.append({"key": k, "url": u or bare or None,
+                         # has_token=False 表示这只是裸地址，带 token 的完整 URL
+                         # 只存在管理器进程内存里，CLI 拿不到
+                         "has_token": bool(u)})
+        _emit({"schema_version": SCHEMA_VERSION, "command": "url", "ok": True,
+               "slots": rows})
+        return EXIT_OK
     found = 0
     for k in keys:
         u = _entry_url(ctx, k)
@@ -449,7 +517,37 @@ def cmd_health(ctx, args):
     except Exception as e:
         sys.stderr.write(T("[错误] 无法加载 dsh_health：%s\n") % e)
         return EXIT_FAIL
-    keys = _target_keys(ctx, args)
+    if getattr(args, "json", False):
+        # JSON 模式下不调 _target_keys —— 它会在没给槽时往 stderr 写中文提示，
+        # 把 stdout 的 JSON 弄脏。没指定槽就查全部（agent 通常想要全貌）。
+        keys = [k for k in (getattr(args, "slot", None) or []) if k in ctx.versions] or ctx.keys
+        slots = []
+        for k in keys:
+            c = ctx.slot(k) or {}
+            try:
+                items = dsh_health.check_slot(
+                    k, c, base=ctx.install_base, home=HOME, self_dir=BASE_DIR,
+                    deep=bool(getattr(args, "deep", False)))
+            except Exception as e:
+                slots.append({"key": k, "label": c.get("label") or k,
+                              "level": "error",
+                              "items": [{"level": "error",
+                                         "title": "health check failed",
+                                         "detail": str(e)}]})
+                continue
+            mapped = [{"level": _lv_en(lv), "title": title, "detail": detail}
+                      for lv, title, detail in items]
+            level = ("error" if any(m["level"] == "error" for m in mapped)
+                     else "warning" if mapped else "ok")
+            slots.append({"key": k, "label": c.get("label") or k,
+                          "level": level, "items": mapped})
+        worst = ("error" if any(x["level"] == "error" for x in slots)
+                 else "warning" if any(x["level"] == "warning" for x in slots)
+                 else "ok")
+        _emit({"schema_version": SCHEMA_VERSION, "command": "health", "ok": True,
+               "deep": bool(getattr(args, "deep", False)),
+               "level": worst, "count": len(slots), "slots": slots})
+        return EXIT_FAIL if worst == "error" else EXIT_OK
     bad = 0
     for k in keys:
         c = ctx.slot(k)
@@ -557,6 +655,8 @@ def build_parser():
     p.add_argument("--config", default=CONFIG_PATH, help=T("配置文件路径（缺省同目录 config.json）"))
     p.add_argument("--lang", choices=("zh", "en"),
                    help=T("输出语言（缺省跟随 config.json 的 ui.lang）"))
+    p.add_argument("--json", action="store_true",
+                   help=T("输出机器可读 JSON（字段名与枚举值固定英文，不随界面语言变）"))
     p.add_argument("--verbose", action="store_true", help=T("打印底层详细过程（排障用）"))
     p.add_argument("--version", action="version", version="dsh-tm " + app_version(),
                    help=T("打印版本号后退出"))
@@ -593,6 +693,19 @@ def main(argv=None):
     # 语言必须在**建 parser 之前**定：`help=` / `description=` 是构建时求值的，
     # 而 `--help` 在 parse_args 里立刻打印并退出，等解析完再 set_lang 就来不及了。
     _argv = list(sys.argv[1:] if argv is None else argv)
+    # `--lang` / `--json` 允许写在子命令之后（`list --json` 比 `--json list` 自然），
+    # 但 argparse 只认子命令之前的全局参数 —— 这里先把它们挪到最前面。
+    _pre, _i = [], 0
+    while _i < len(_argv):
+        _a = _argv[_i]
+        if _a == "--json":
+            _pre.append(_a); _argv.pop(_i); continue
+        if _a == "--lang" and _i + 1 < len(_argv):
+            _pre += [_a, _argv[_i + 1]]; del _argv[_i:_i + 2]; continue
+        if _a.startswith("--lang="):
+            _pre.append(_a); _argv.pop(_i); continue
+        _i += 1
+    _argv = _pre + _argv
     for _i, _a in enumerate(_argv):
         if _a == "--lang" and _i + 1 < len(_argv):
             I18N.set_lang(_argv[_i + 1])
@@ -601,7 +714,7 @@ def main(argv=None):
             I18N.set_lang(_a.split("=", 1)[1])
             break
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(_argv)
     if not args.cmd:
         parser.print_help()
         return EXIT_USAGE

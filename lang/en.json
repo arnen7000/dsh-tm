@@ -987,6 +987,7 @@
   "读取 config.json 失败：%s": "Failed to read config.json: %s",
   "跟随系统": "System",
   "跳过 %d 个：": "%d skipped:",
+  "输出机器可读 JSON（字段名与枚举值固定英文，不随界面语言变）": "emit machine-readable JSON (field names and enums stay English regardless of UI language)",
   "输出语言（缺省跟随 config.json 的 ui.lang）": "output language (defaults to ui.lang in config.json)",
   "运行中": "Running",
   "运行中  pid=%s  :%d  ✓": "Running  pid=%s  :%d  ✓",
