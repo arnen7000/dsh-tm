@@ -377,6 +377,8 @@ if ($Fast) {
         (Join-Path $Repo "scripts\test-standalone.py"),
         (Join-Path $Repo "scripts\test-tk-selfheal.py"),
         (Join-Path $Repo "scripts\test-cli.py"),
+        # 中英双语的完整性（每个 T() 都有译文、换行没被写成 /n、无空译文）
+        (Join-Path $Repo "scripts\test-i18n.py"),
         (Join-Path $Repo "scripts\test-move.py"),
         (Join-Path $Repo "scripts\test-log-levels.py"),
         (Join-Path $Repo "tests\test-manager.py"),

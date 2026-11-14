@@ -37,10 +37,30 @@ import re
 import subprocess
 import sys
 import time
+import dsh_i18n as I18N
 from dsh_i18n import T
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+
+
+def _adopt_config_lang(path=None):
+    """按 config.json 的 `ui.lang` 设置 CLI 的输出语言。
+
+    为什么放在模块顶层就试一次：argparse 的 `help=` 文本在**构建 parser 时**
+    就求值了，等 `main()` 里读完 config 再设就晚了 —— `--help` 会一直是中文。
+    这里先按默认路径猜一下；`main()` 里读到真实 config（可能来自 `--config`）
+    之后再校正一次。
+    """
+    try:
+        with open(path or CONFIG_PATH, encoding="utf-8-sig") as f:
+            ui = (json.load(f) or {}).get("ui") or {}
+        I18N.set_lang(ui.get("lang") or "zh")
+    except Exception:
+        pass
+
+
+_adopt_config_lang()
 HOME = os.path.expanduser("~")
 LOG_FILE = os.path.join(BASE_DIR, "dsh-manager.log")
 
@@ -535,6 +555,8 @@ def build_parser():
         description=T("dsh-tm 命令行接口（与图形界面共用同一份 config.json）"),
         epilog=T("示例：python dsh-tm.py start --all / python dsh-tm.py list"))
     p.add_argument("--config", default=CONFIG_PATH, help=T("配置文件路径（缺省同目录 config.json）"))
+    p.add_argument("--lang", choices=("zh", "en"),
+                   help=T("输出语言（缺省跟随 config.json 的 ui.lang）"))
     p.add_argument("--verbose", action="store_true", help=T("打印底层详细过程（排障用）"))
     p.add_argument("--version", action="version", version="dsh-tm " + app_version(),
                    help=T("打印版本号后退出"))
@@ -568,11 +590,26 @@ def build_parser():
 
 
 def main(argv=None):
+    # 语言必须在**建 parser 之前**定：`help=` / `description=` 是构建时求值的，
+    # 而 `--help` 在 parse_args 里立刻打印并退出，等解析完再 set_lang 就来不及了。
+    _argv = list(sys.argv[1:] if argv is None else argv)
+    for _i, _a in enumerate(_argv):
+        if _a == "--lang" and _i + 1 < len(_argv):
+            I18N.set_lang(_argv[_i + 1])
+            break
+        if _a.startswith("--lang="):
+            I18N.set_lang(_a.split("=", 1)[1])
+            break
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.cmd:
         parser.print_help()
         return EXIT_USAGE
+    # 显式 --lang 优先；否则跟随 config.json 的 ui.lang（--config 可能指到别处）
+    if getattr(args, "lang", None):
+        I18N.set_lang(args.lang)
+    else:
+        _adopt_config_lang(args.config)
     _VERBOSE["on"] = bool(getattr(args, "verbose", False))
     ctx = Ctx(_cfg_or_die(args.config))
     handler = {
