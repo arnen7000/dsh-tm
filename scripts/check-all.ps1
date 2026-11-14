@@ -233,6 +233,22 @@ if (-not $PyExe) {
         }
     } else { Ok "槽目录 .bat 编码（GBK）检查通过" }
 }
+
+# 文本模式的 open() 必须显式 encoding。
+# 为什么单独设闸（2026-11-14，CI 连红 25 次才查出来）：GitHub Actions 的 windows
+# runner 是**英文系统**，ANSI 代码页 cp1252；本机中文 Windows 是 cp936。同一行
+#   open(p, "w").write("槽外数据")
+# 本地写得进去，CI 抛 `UnicodeEncodeError: 'charmap' codec can't encode`。
+# PYTHONIOENCODING 只管 stdout/stderr，**管不到 open()**，所以设了也没用。
+# 症状是"本地一直绿、线上一直红"，属于最难查的一类 —— 用静态检查代替记忆。
+$openc = Join-Path $Repo "scripts\check-open-encoding.py"
+if (-not $PyExe) {
+    Warn "跳过 open() 编码检查：没有可用的 Python 解释器（见 0/6）"
+} elseif (Test-Path $openc) {
+    $out3 = (& $PyExe $openc 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { Bad "文本模式 open() 未指定 encoding：`n$out3" }
+    else { Ok "文本模式 open() 都写了 encoding（英文 Windows 上也不会炸）" }
+}
 # ── Python 行内的“行尾注释剥离”（引号内的 # 不算注释）────────────────────
 # 检查器自己误报过一次（见 4/6 里关于 token 占位符的注释），所以这里先把
 # 字符串/注释排除掉，再判断是否是真正的代码 —— 否则文档里写一句“不要用 text=True”

@@ -1580,7 +1580,7 @@ try:
         _d = os.path.join(_tmpnum, _n)
         os.makedirs(_d)
         for _f in _files:
-            open(os.path.join(_d, _f), "w").write("x")
+            open(os.path.join(_d, _f), "w", encoding="utf-8").write("x")
 
     class _FakeOPS23:
         @staticmethod

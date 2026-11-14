@@ -664,7 +664,7 @@ def _clean_stale_lock(key):
         return
     pid = None
     try:
-        pid = int(open(lock, "r").read().strip())
+        pid = int(open(lock, "r", encoding="utf-8").read().strip())
     except Exception:
         pid = None
     if pid is None:

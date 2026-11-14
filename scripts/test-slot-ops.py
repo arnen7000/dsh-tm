@@ -123,18 +123,18 @@ def make_slot(key, with_home=True):
     d = os.path.join(VER, "dsh" + key.upper())
     pkg = os.path.join(d, "node_modules", "@deepseek-ai", "dsh")
     os.makedirs(os.path.join(pkg, "lib"), exist_ok=True)
-    open(os.path.join(pkg, "lib", "bin.js"), "w").write("// x")
-    open(os.path.join(pkg, "package.json"), "w").write(
+    open(os.path.join(pkg, "lib", "bin.js"), "w", encoding="utf-8").write("// x")
+    open(os.path.join(pkg, "package.json"), "w", encoding="utf-8").write(
         json.dumps({"name": "@deepseek-ai/dsh", "version": "0.2.0-rc.2"}))
     os.makedirs(os.path.join(d, "node"), exist_ok=True)
     open(os.path.join(d, "node", "node.exe"), "wb").write(b"x" * 1024)
     if with_home:
         os.makedirs(os.path.join(d, ".dsh-home"), exist_ok=True)
-        open(os.path.join(d, ".dsh-home", "settings.yaml"), "w").write("a: 1")
+        open(os.path.join(d, ".dsh-home", "settings.yaml"), "w", encoding="utf-8").write("a: 1")
     os.makedirs(os.path.join(d, ".tmp"), exist_ok=True)
-    open(os.path.join(d, "dsh.bat"), "w").write("@echo off")
+    open(os.path.join(d, "dsh.bat"), "w", encoding="utf-8").write("@echo off")
     # 槽根的 npm 清单：卸载时要连它一起备份（用户装过哪些插件全在这里）
-    open(os.path.join(d, "package.json"), "w").write(
+    open(os.path.join(d, "package.json"), "w", encoding="utf-8").write(
         json.dumps({"name": "dsh-slot", "dependencies": {"some-plugin": "^1.2.3"}}))
     return d
 
@@ -309,10 +309,10 @@ chk("I35 提示里如实说「未生成备份」",
 # ── 槽目录被手工增删文件时，三个动作仍要能跑（2026-11-14 用户提问）──────
 _F1 = os.path.join(VER, "dshV10")
 make_slot("v10")
-open(os.path.join(_F1, "我的笔记.txt"), "w").write("hi")
+open(os.path.join(_F1, "我的笔记.txt"), "w", encoding="utf-8").write("hi")
 os.makedirs(os.path.join(_F1, "my-plugins"))
-open(os.path.join(_F1, "my-plugins", "a.js"), "w").write("//")
-open(os.path.join(_F1, "kill-10080.bat"), "w").write("@echo off")
+open(os.path.join(_F1, "my-plugins", "a.js"), "w", encoding="utf-8").write("//")
+open(os.path.join(_F1, "kill-10080.bat"), "w", encoding="utf-8").write("@echo off")
 _f1 = U.slot_foreign_entries(_F1)
 chk("I36 认出用户自己放的条目，忽略标准条目与 kill-<端口>.bat",
     _f1 == ["my-plugins", "我的笔记.txt"], str(_f1))
@@ -536,12 +536,12 @@ try:
     # 槽外插件仓库（绝不能被删、也不该被拷进备份）
     outside = os.path.join(JT, "outside-plugin")
     os.makedirs(outside, exist_ok=True)
-    open(os.path.join(outside, "keep.txt"), "w").write("槽外数据")
+    open(os.path.join(outside, "keep.txt"), "w", encoding="utf-8").write("槽外数据")
     # 槽内 .dsh-home：一个正常文件 + 一个只读对象文件 + 一个指向槽外的 junction
     home = os.path.join(JT, "slot", ".dsh-home")
     nm = os.path.join(home, "profiles", "node_modules")
     os.makedirs(nm, exist_ok=True)
-    open(os.path.join(home, "settings.yaml"), "w").write("a: 1")
+    open(os.path.join(home, "settings.yaml"), "w", encoding="utf-8").write("a: 1")
     ro = os.path.join(home, "ro-object.bin")
     open(ro, "wb").write(b"x" * 64)
     os.chmod(ro, 0o444)                       # 模拟 attachments 的对象文件
@@ -812,11 +812,11 @@ try:
     d8 = os.path.join(VER8, "dshV8")
     pkg8 = os.path.join(d8, "node_modules", "@deepseek-ai", "dsh")
     os.makedirs(os.path.join(pkg8, "lib"), exist_ok=True)
-    open(os.path.join(pkg8, "lib", "bin.js"), "w").write("// x")
-    open(os.path.join(pkg8, "package.json"), "w").write(
+    open(os.path.join(pkg8, "lib", "bin.js"), "w", encoding="utf-8").write("// x")
+    open(os.path.join(pkg8, "package.json"), "w", encoding="utf-8").write(
         json.dumps({"name": "@deepseek-ai/dsh", "version": "0.1.0"}))
     os.makedirs(os.path.join(d8, ".dsh-home"), exist_ok=True)
-    open(os.path.join(d8, ".dsh-home", "settings.yaml"), "w").write("a: 1")
+    open(os.path.join(d8, ".dsh-home", "settings.yaml"), "w", encoding="utf-8").write("a: 1")
     cfgp8 = os.path.join(FAKE8, "config.json")
     open(cfgp8, "w", encoding="utf-8").write(json.dumps(
         {"install_base": "<self>", "versions": {"v8": slot_cfg("v8", 12080)}},
@@ -860,16 +860,16 @@ def _mk_slot(ver_dir, name, port, version="0.1.5-rc.2"):
     d = os.path.join(ver_dir, name)
     pkg = os.path.join(d, "node_modules", "@deepseek-ai", "dsh")
     os.makedirs(os.path.join(pkg, "lib"), exist_ok=True)
-    open(os.path.join(pkg, "lib", "bin.js"), "w").write("// x")
-    open(os.path.join(pkg, "package.json"), "w").write(
+    open(os.path.join(pkg, "lib", "bin.js"), "w", encoding="utf-8").write("// x")
+    open(os.path.join(pkg, "package.json"), "w", encoding="utf-8").write(
         json.dumps({"name": "@deepseek-ai/dsh", "version": version}))
     os.makedirs(os.path.join(d, "node"), exist_ok=True)
     open(os.path.join(d, "node", "node.exe"), "wb").write(b"x" * 512)
     os.makedirs(os.path.join(d, ".dsh-home"), exist_ok=True)
-    open(os.path.join(d, ".dsh-home", "settings.yaml"), "w").write("a: 1")
+    open(os.path.join(d, ".dsh-home", "settings.yaml"), "w", encoding="utf-8").write("a: 1")
     # 真实槽的 dsh.bat 里有 `--port N` —— 接回时端口就是从这里读的，
     # 夹具必须同构，否则测不到解析逻辑（2026-11-13 加）。
-    open(os.path.join(d, "dsh.bat"), "w").write(
+    open(os.path.join(d, "dsh.bat"), "w", encoding="utf-8").write(
         "@echo off\r\n"
         '"%s" "%s" web --host 127.0.0.1 --port %d --no-open\r\n'
         % (os.path.join(d, "node", "node.exe"),

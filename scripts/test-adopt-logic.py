@@ -242,7 +242,7 @@ try:
 
     badpj = os.path.join(tmp, "badpkg")
     os.makedirs(badpj)
-    with open(os.path.join(badpj, "package.json"), "w") as f:
+    with open(os.path.join(badpj, "package.json"), "w", encoding="utf-8") as f:
         f.write("{ this is not json")
     chk("坏 JSON 返回空串而非抛异常", A.read_package_version(badpj) == "")
 
@@ -261,9 +261,9 @@ tmp = tempfile.mkdtemp(prefix="dsh-bak-")
 try:
     home = os.path.join(tmp, ".dsh-home")
     os.makedirs(os.path.join(home, "sessions"))
-    with open(os.path.join(home, "settings.yaml"), "w") as f:
+    with open(os.path.join(home, "settings.yaml"), "w", encoding="utf-8") as f:
         f.write("agent-default-model:\n")
-    with open(os.path.join(home, "sessions", "a.jsonl"), "w") as f:
+    with open(os.path.join(home, "sessions", "a.jsonl"), "w", encoding="utf-8") as f:
         f.write("{}")
 
     dst, err = A.backup_dsh_home(home, os.path.join(tmp, "backups"), stamp="20260101-000000")
@@ -374,10 +374,10 @@ try:
                 json.dump({"name": "@deepseek-ai/dsh", "version": ver,
                            "dependencies": deps or {}}, f)
         if binjs:
-            with open(os.path.join(d, "lib", "bin.js"), "w") as f:
+            with open(os.path.join(d, "lib", "bin.js"), "w", encoding="utf-8") as f:
                 f.write("// bin")
         if lock:
-            with open(os.path.join(nm, "..", "package-lock.json"), "w") as f:
+            with open(os.path.join(nm, "..", "package-lock.json"), "w", encoding="utf-8") as f:
                 f.write("{}")
         return d
 
@@ -445,12 +445,12 @@ try:
     # 下面挂一个 junction 指向旧槽的 node_modules（dsh 的插件就是这么挂的）。
     old = os.path.join(tmp, "oldslot")
     os.makedirs(os.path.join(old, "node_modules", "somepkg"))
-    with open(os.path.join(old, "node_modules", "somepkg", "index.js"), "w") as f:
+    with open(os.path.join(old, "node_modules", "somepkg", "index.js"), "w", encoding="utf-8") as f:
         f.write("x" * 4096)
     home = os.path.join(old, ".dsh-home")
     plug_nm = os.path.join(home, "profiles", "web", "node_modules")
     os.makedirs(plug_nm)
-    with open(os.path.join(home, "settings.yaml"), "w") as f:
+    with open(os.path.join(home, "settings.yaml"), "w", encoding="utf-8") as f:
         f.write("a: 1\n")
     link = os.path.join(plug_nm, "somepkg")
     made = A._make_junction(link, os.path.join(old, "node_modules", "somepkg"))
@@ -511,9 +511,9 @@ tmp = tempfile.mkdtemp(prefix="dsh-vfy-")
 try:
     home = os.path.join(tmp, ".dsh-home")
     os.makedirs(os.path.join(home, "sessions"))
-    with open(os.path.join(home, "settings.yaml"), "w") as f:
+    with open(os.path.join(home, "settings.yaml"), "w", encoding="utf-8") as f:
         f.write("a: 1\n")
-    with open(os.path.join(home, "sessions", "a.jsonl"), "w") as f:
+    with open(os.path.join(home, "sessions", "a.jsonl"), "w", encoding="utf-8") as f:
         f.write("{}")
     locked = os.path.join(home, "locked.bin")
     with open(locked, "wb") as f:

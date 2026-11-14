@@ -279,7 +279,7 @@ try:
     nm_a = os.path.join(tmp, "half", "node_modules")
     d = os.path.join(nm_a, "@deepseek-ai", "dsh")
     os.makedirs(os.path.join(d, "lib"))
-    with open(os.path.join(d, "package.json"), "w") as f:
+    with open(os.path.join(d, "package.json"), "w", encoding="utf-8") as f:
         json.dump({"version": "0.1.5-rc.2"}, f)      # 有版本号，但没 bin.js
     ok, key, msg = O.adopt_existing(A, nm_a, vroot, cfgp, "v2", [],
                                     node_exe_source=node_src)
@@ -292,7 +292,7 @@ try:
     nm_b = os.path.join(tmp, "nopkg", "node_modules")
     db = os.path.join(nm_b, "@deepseek-ai", "dsh")
     os.makedirs(os.path.join(db, "lib"))
-    with open(os.path.join(db, "lib", "bin.js"), "w") as f:
+    with open(os.path.join(db, "lib", "bin.js"), "w", encoding="utf-8") as f:
         f.write("// bin")
     ok, key, msg = O.adopt_existing(A, nm_b, vroot, cfgp, "v2", [],
                                     node_exe_source=node_src)
@@ -512,7 +512,7 @@ try:
     chk("空壳判定：只有空目录 → 是空壳", O._dir_is_empty_shell(shell) is True)
     _with_file = os.path.join(vroot, "dshV8")
     os.makedirs(_with_file, exist_ok=True)
-    open(os.path.join(_with_file, "keep.txt"), "w").close()
+    open(os.path.join(_with_file, "keep.txt"), "w", encoding="utf-8").close()
     chk("空壳判定：有一个文件就不算（绝不误删）",
         O._dir_is_empty_shell(_with_file) is False)
     chk("空壳判定：不存在的目录不算", O._dir_is_empty_shell(
@@ -892,7 +892,7 @@ try:
         os.makedirs(os.path.join(vroot5, n, "node_modules", "@deepseek-ai",
                                  "dsh", "lib"))
         open(os.path.join(vroot5, n, "node_modules", "@deepseek-ai",
-                          "dsh", "lib", "bin.js"), "w").close()
+                          "dsh", "lib", "bin.js"), "w", encoding="utf-8").close()
         os.makedirs(os.path.join(vroot5, n, ".dsh-home"))
     cfgp5 = os.path.join(tmp5, "config.json")
     O.write_config_atomic(cfgp5, {"install_base": base5, "versions": {
