@@ -33,9 +33,12 @@ pythonw dsh_manager.pyw           # 无控制台（与发布版一致，异常�
 | `dsh_ui_prefs.py` | 界面显示偏好（纯逻辑） |
 | `dsh_kill.py` | 按「签名 + 端口」精准清理进程 |
 | `dsh_registry.py` | 拉 npm 版本列表 |
+| `dsh_i18n.py` | 中英翻译层：**中文原文就是 key**，英文查 `lang/en.json`，查不到原样返回中文；`retranslate()` 负责就地切换 |
 | `dsh-tm.py` | CLI |
+| `lang/en.json` | 英文文案表（`中文原文 → English`），缺一条就回退中文，不会空白 |
+| `scripts/i18n-wrap.py` | 把源码里的 UI 文案包成 `T("...")` 的 AST 工具（白名单，可重复执行） |
 
-## 五条硬约束（改代码前先记住）
+## 六条硬约束（改代码前先记住）
 
 1. **`.bat` 必须是 GBK + CRLF + 无 BOM**。UTF-8 会让相邻中文 `REM` 撕裂，cmd 报 255、双击闪退。
    写 bat 只能走 `_write_bat` / `dsh_install_ops._gen_slot_bats`，回归 `scripts/test-bat-text.py` 守着。
@@ -46,11 +49,16 @@ pythonw dsh_manager.pyw           # 无控制台（与发布版一致，异常�
 4. **不要静默吞异常**。该报的错写进日志并让用户看见；`.pyw` 无控制台，`except: pass` 等于把问题藏起来。
 5. **不要提交** `config.json`、`*.log`、`dsh备份/`、`runtime/`、`dsh-versions/`。
    `.gitignore` 已覆盖，提交钩子会再拦一次。
+6. **新增的界面文案要包 `T()`，并在 `lang/en.json` 补一条翻译**。用
+   `python scripts/i18n-wrap.py` 自动包（AST 白名单，可重复执行）。
+   **逻辑值绝不包**：日志分级关键词（`失败`/`错误`/`异常`）、`dsh备份` 目录名、
+   `纳入`/`运行中` 等枚举值、下拉里的 `选择其他程序…` —— 翻了就是 bug，
+   而且这类 bug 不会报错，只会让判断永远不成立。
 
 ## 跑测试
 
 ```powershell
-# 提交前总检：6 项静态检查 + 13 套离线回归（约 40 秒）
+# 提交前总检：6 项静态检查 + 14 套离线回归（约 40 秒）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1
 
 # 只跑静态检查（快，适合频繁改）

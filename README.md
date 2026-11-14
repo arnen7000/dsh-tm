@@ -293,7 +293,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -Targe
 
 ### 4.9 界面显示偏好与拖动排序
 
-标题栏 **「设置」** 打开一个窗口，里面分五组：**版本管理**（安装 / 纳入 / 卸载 · 移出）、**界面**（显示哪些槽、顺序、主题）、**目录**（安装根）、**维护**（环境检查 / 槽体检 / 生成 bat / 使用说明）、**日志**（大小与清理）。主界面只留槽 + 日志 + 全启停，装/纳入/卸载这些动作统一收在「版本管理」里。
+标题栏 **「设置」** 打开一个窗口，里面分五组：**版本管理**（安装 / 纳入 / 卸载 · 移出）、**界面**（显示哪些槽、顺序、主题、**界面语言**）、**目录**（安装根）、**维护**（环境检查 / 槽体检 / 生成 bat / 使用说明）、**日志**（大小与清理）。主界面只留槽 + 日志 + 全启停，装/纳入/卸载这些动作统一收在「版本管理」里。
+
+界面支持**中英双语**：设置 → 界面 → 「界面语言」切 中文 / English，**切换立即生效、不用重启**。
+英文模式下「使用说明」会打开 [`docs/user-guide.en.md`](docs/user-guide.en.md)。
 
 界面设置可以决定**显示哪几个槽、最多显示几个、左右顺序**：
 
@@ -696,7 +699,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1 -Fast   # 跳过耗时回归
 ```
 
-**CI**：`.github/workflows/ci.yml` 在 `windows-latest` 上跑同一份全量 `check-all.ps1`（含 13 套回归）。push 到 `main` 或开 PR 都会触发；仓库不含 `config.json`，CI 会先用 `config/config.example.json` 生成一份零槽配置。项目本身是 Windows 专属，所以只跑 Windows runner。
+**CI**：`.github/workflows/ci.yml` 在 `windows-latest` 上跑同一份全量 `check-all.ps1`（含 14 套回归）。push 到 `main` 或开 PR 都会触发；仓库不含 `config.json`，CI 会先用 `config/config.example.json` 生成一份零槽配置。项目本身是 Windows 专属，所以只跑 Windows runner。
 
 它覆盖 6 项 + 13 套离线回归：
 
