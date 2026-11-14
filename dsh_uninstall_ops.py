@@ -35,6 +35,7 @@ import time
 
 # 与 dsh_install_ops 共用同一套配置读写（原子写、备份），不重复实现。
 import dsh_install_ops as OPS
+from dsh_i18n import T
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -859,7 +860,7 @@ def detach_slots(keys, config_path, home, repo, self_dir, versions_root="",
                         "这个槽正在运行，请先点「停止」再移出 —— "
                         "移出后管理器就不再跟踪它的进程了")
                     kept.append(key)
-                    p.on_step("[%s] 跳过：正在运行" % key)
+                    p.on_step(T("[%s] 跳过：正在运行") % key)
                     continue
             except Exception:
                 pass    # 判不了就当没在跑：移出不破坏任何东西
@@ -882,7 +883,7 @@ def detach_slots(keys, config_path, home, repo, self_dir, versions_root="",
                     if norm(r.get("root") or "") != norm(root)]
         new_recs.append(rec)
         moved.append(key)
-        p.on_step("[%s] 移出管理：%s（磁盘未改动）" % (key, root or plan["label"]))
+        p.on_step(T("[%s] 移出管理：%s（磁盘未改动）") % (key, root or plan["label"]))
 
     if not moved:
         msgs = ["%s：%s" % (d["key"], "；".join(d["errors"])) for d in details if d["errors"]]
@@ -1178,7 +1179,7 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
         added.append(key)
         drop.append(root)
         d["key"] = key
-        p.on_step("[%s] 接回：%s（端口 %d）" % (key, root, port))
+        p.on_step(T("[%s] 接回：%s（端口 %d）") % (key, root, port))
 
     if not added:
         msgs = ["%s：%s" % (d["root"], "；".join(d["errors"]))
@@ -1252,7 +1253,7 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
     base = install_base_of(cfg, home, self_dir)
     backup_root = backup_root or os.path.join(base, "dsh备份")
 
-    p.on_step("备份 config.json…")
+    p.on_step(T("备份 config.json…"))
     try:
         OPS.backup_config(config_path, stamp=stamp)
     except IOError as e:
@@ -1274,14 +1275,14 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
         if plan["blocked"]:
             d["errors"].append(plan["blocked"])
             kept.append(key)
-            p.on_step("[%s] 跳过：%s" % (key, plan["blocked"]))
+            p.on_step(T("[%s] 跳过：%s") % (key, plan["blocked"]))
             continue
 
         # 1) 停进程。失败只记 warning 不阻断：
         #    进程可能本来就没在跑（正常），或者停不掉但文件仍可删。
         #    若真被占用，下面的删除会失败 —— 那时才算错误。
         if stop_fn:
-            p.on_step("[%s] 停止端口 %s 上的 dsh（门控：只杀 dsh）…" % (key, port))
+            p.on_step(T("[%s] 停止端口 %s 上的 dsh（门控：只杀 dsh）…") % (key, port))
             try:
                 stop_fn(key, port)
                 d["stopped"] = True
@@ -1292,7 +1293,7 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
         #    2026-10-30 起备份内容扩展：除了 .dsh-home（会话/配置/凭据/插件配置），
         #    还留一份槽根的 package.json / package-lock.json（用户装过哪些插件、
         #    钉的是哪个版本全在里面）和 _meta.json（槽名/实装版本/端口/时间）。
-        p.on_step("[%s] 备份用户数据与插件清单…" % key)
+        p.on_step(T("[%s] 备份用户数据与插件清单…") % key)
         try:
             d["foreign"] = plan.get("foreign") or []
             dst, vfy = _backup_slot(plan, key, backup_root, stamp)
@@ -1302,15 +1303,15 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
             # 备份失败就不删程序 —— 用户数据没保险，宁可中止这个槽
             d["errors"].append("备份失败（已中止该槽，未删除任何文件）：%s" % e)
             kept.append(key)
-            p.on_step("[%s] 中止：备份失败 %s" % (key, e))
+            p.on_step(T("[%s] 中止：备份失败 %s") % (key, e))
             continue
         if not d["backup"]:
             # 没有用户数据 → 不建备份目录（见 _backup_slot 开头）。日志里留版本号，
             # 以后想装回同一个版本照着抄即可。
-            p.on_step("[%s] 没有用户数据（.dsh-home 为空），未生成备份（实装 %s）"
+            p.on_step(T("[%s] 没有用户数据（.dsh-home 为空），未生成备份（实装 %s）")
                       % (key, d.get("version") or "未知"))
         if d["backup"]:
-            p.on_step("[%s] 已备份并核对通过：%d 个文件 → %s"
+            p.on_step(T("[%s] 已备份并核对通过：%d 个文件 → %s")
                       % (key, vfy.get("checked", 0), d["backup"]))
             # 大小不一致 = 备份过程中源文件被改过（多半是 dsh 没停干净）。
             # 文件都在，不阻断；但必须让用户看见，否则"备份完整"是假的。
@@ -1318,17 +1319,17 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
                 msg = ("备份期间有 %d 个文件大小变了（该槽可能仍在运行，"
                        "备份的是当时那一刻的内容）" % vfy["size_changed"])
                 d["warnings"].append(msg)
-                p.on_step("[%s] 注意：%s" % (key, msg))
+                p.on_step(T("[%s] 注意：%s") % (key, msg))
 
         # 3) 删程序产物 + 用户数据（备份已成功，空壳不再保留）
         if plan["exists"]:
-            p.on_step("[%s] 删除槽目录内容（共 %s）…" % (key, human_size(plan["bytes"])))
+            p.on_step(T("[%s] 删除槽目录内容（共 %s）…") % (key, human_size(plan["bytes"])))
             for ch in plan["children"]:
                 if ch["action"] not in ("delete", "purge"):
                     continue
                 # 逐个报进度：node_modules 里几万个文件，Windows 上删一次要几十秒，
                 # 只报一句「删除程序文件…」会让人以为卡死（2026-10-29 实测踩到）。
-                p.on_step("[%s] 正在删除 %s（%s）…"
+                p.on_step(T("[%s] 正在删除 %s（%s）…")
                           % (key, ch["name"], human_size(ch["size"])))
                 try:
                     if os.path.isdir(ch["path"]):
@@ -1344,7 +1345,7 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
                     if ch["action"] == "purge":
                         d["errors"].append(
                             "已停止删除该槽的其余部分（程序文件保持完整，可修好后重试）")
-                        p.on_step("[%s] 中止删除：%s 删不掉" % (key, ch["name"]))
+                        p.on_step(T("[%s] 中止删除：%s 删不掉") % (key, ch["name"]))
                         break
 
             # 4) 槽根自身：删空目录。只删**空**的，所以万一还有保留下来的项
@@ -1365,7 +1366,7 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
                     d["warnings"].append(
                         "槽目录没能整个删掉（%s）：%s —— 下次装同一槽可能会被命名成 %s-2"
                         % (plan["root"], last, os.path.basename(plan["root"])))
-                    p.on_step("[%s] 提示：槽目录没能整个删掉（%s），下次装同名槽会复用或改名"
+                    p.on_step(T("[%s] 提示：槽目录没能整个删掉（%s），下次装同名槽会复用或改名")
                               % (key, last))
 
         total_bytes += d["bytes"]
@@ -1378,7 +1379,7 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
 
     # 5) 写回 config.json（只移除成功的那些）
     if removed:
-        p.on_step("更新 config.json（移除 %s）…" % ", ".join(removed))
+        p.on_step(T("更新 config.json（移除 %s）…") % ", ".join(removed))
         try:
             cfg = OPS.read_config(config_path)
             for k in removed:

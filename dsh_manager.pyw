@@ -84,6 +84,8 @@ except ImportError as _e:
     _sys.stderr.write(_msg + "\n")
     _sys.exit(1)
 import subprocess, os, time, socket, json, sys, shutil, threading, re, csv, io
+import dsh_i18n as I18N
+from dsh_i18n import T
 
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
@@ -176,7 +178,7 @@ except Exception:
 # ── 加载配置 ──────────────────────────────────────────────────────────────
 def _fatal(msg):
     root = tk.Tk(); root.withdraw()
-    messagebox.showerror("DSH 版本管理器", msg)
+    messagebox.showerror(T("DSH 版本管理器"), msg)
     sys.exit(1)
 
 def _boot_log(msg):
@@ -239,7 +241,7 @@ except Exception as e:
             # pythonw 没有控制台，print 没人看得见 —— 必须弹框，否则就是静默替换配置
             try:
                 root_warn = tk.Tk(); root_warn.withdraw()
-                messagebox.showwarning("config.json 解析失败（已用示例重建）", _msg)
+                messagebox.showwarning(T("config.json 解析失败（已用示例重建）"), _msg)
                 root_warn.destroy()
             except Exception:
                 pass
@@ -352,6 +354,14 @@ SLOT_KEYS = list(VERSIONS.keys())   # 顺序保留：第 0 个在最左，依次
 # 不会停它的 dsh，也不会让它从「卸载」「杀全部」的名单里消失。
 # 这样用户调布局时不可能丢东西，也就不需要为「隐藏」写任何数据迁移。
 UI_CFG = CFG.get("ui") if isinstance(CFG.get("ui"), dict) else {}
+
+# 界面语言（2026-11-14）：config 的 ui.lang = zh / en。
+# **必须在建任何控件之前设好** —— 模块顶层那些 `text=T("设置")` 是在 import
+# 过程中求值的，晚一步设置就会有一批控件停在中文上。
+try:
+    I18N.set_lang(UI_CFG.get("lang") or "zh")
+except Exception:
+    pass
 
 # 主题模式（2026-11-01）：config 的 ui.theme = system / light / dark
 try:
@@ -561,7 +571,7 @@ if dsh_kill is not None:
     dsh_kill.LOG = log
 
 # 尽早落一行启动日志：用于区分「进程压根没起来」与「起来后在建窗口前就崩了」
-log("--- 解释器起来了 pid=%d exe=%s cwd=%s（下面开始建窗口）---"
+log(T("--- 解释器起来了 pid=%d exe=%s cwd=%s（下面开始建窗口）---")
     % (os.getpid(), sys.executable, os.getcwd()))
 
 # ── 商店版 Python 守卫：包身份会劫持任务栏图标 ────────────────────────────
@@ -583,10 +593,10 @@ def _relaunch_if_store_python():
     if ("windowsapps" not in low) and ("pythonsoftwarefoundation" not in low):
         return                      # 已经是独立/正常解释器，什么都不用做
     if os.environ.get("DSH_MANAGER_RELAUNCHED") == "1":
-        log("!! 仍运行在商店版 Python 上（重启用），任务栏图标可能显示 Python")
+        log(T("!! 仍运行在商店版 Python 上（重启用），任务栏图标可能显示 Python"))
         return
     if not os.path.exists(STANDALONE_PYW):
-        log("!! 当前是商店版 Python 且独立解释器缺失：%s —— 任务栏图标会被劫持" % STANDALONE_PYW)
+        log(T("!! 当前是商店版 Python 且独立解释器缺失：%s —— 任务栏图标会被劫持") % STANDALONE_PYW)
         return
     env = dict(os.environ)
     env["DSH_MANAGER_RELAUNCHED"] = "1"
@@ -594,11 +604,11 @@ def _relaunch_if_store_python():
         subprocess.Popen([STANDALONE_PYW, os.path.abspath(__file__)],
                          cwd=BASE_DIR, env=env,
                          creationflags=CREATE_NO_WINDOW)
-        log("检测到商店版 Python（任务栏图标会被劫持为 Python 图标），"
-            "已自动用独立解释器重启：%s" % STANDALONE_PYW)
+        log(T("检测到商店版 Python（任务栏图标会被劫持为 Python 图标），"
+            "已自动用独立解释器重启：%s") % STANDALONE_PYW)
         os._exit(0)                 # GUI 尚未创建，直接退出无副作用
     except Exception as e:
-        log("自动切换独立解释器失败：%s" % e)
+        log(T("自动切换独立解释器失败：%s") % e)
 
 _relaunch_if_store_python()
 
@@ -663,11 +673,11 @@ def _clean_stale_lock(key):
     if stale:
         try:
             os.remove(lock)
-            log("[%s] 清理陈旧的 .credentials.yaml.lock (pid=%s，%s)" % (key, pid, why))
+            log(T("[%s] 清理陈旧的 .credentials.yaml.lock (pid=%s，%s)") % (key, pid, why))
         except Exception as e:
-            log("[%s] 清理 lock 失败：%s" % (key, e))
+            log(T("[%s] 清理 lock 失败：%s") % (key, e))
     else:
-        log("[%s] lock 被存活的本槽 dsh 持有 (pid=%s)，不动" % (key, pid))
+        log(T("[%s] lock 被存活的本槽 dsh 持有 (pid=%s)，不动") % (key, pid))
 
 
 def _holder_is_this_slot(key, pid):
@@ -915,7 +925,7 @@ def _rebuild_bats():
         problem = _bat_unsafe_fields(cfg)
         if problem:
             failed.append("%s %s" % (key, problem))
-            log("[%s] 跳过生成 bat：%s" % (key, problem))
+            log(T("[%s] 跳过生成 bat：%s") % (key, problem))
             continue
         root = _version_root(cfg)
         if not root or not os.path.isdir(root):
@@ -931,11 +941,11 @@ def _rebuild_bats():
             ok, info = _write_bat(path, text, stamp)
             if ok:
                 made.append("%s [%s] %s" % (key, kind, path))
-                log("[%s] 已生成 %s bat：%s%s"
+                log(T("[%s] 已生成 %s bat：%s%s")
                     % (key, kind, path, ("（原文件已备份为 %s）" % os.path.basename(info)) if info else ""))
             else:
                 failed.append("%s [%s] %s —— %s" % (key, kind, path, info))
-                log("[%s] 生成 %s bat 失败：%s" % (key, kind, info))
+                log(T("[%s] 生成 %s bat 失败：%s") % (key, kind, info))
     return made, failed, skipped
 
 
@@ -958,24 +968,24 @@ def gen_bats():
     if not msg:
         msg.append("没有可生成的版本。")
     body = "\n".join(msg)
-    log("=== 生成 bat 完成 ===\n" + body)
+    log(T("=== 生成 bat 完成 ===\n") + body)
     try:
-        messagebox.showinfo("生成启动/kill/CLI bat", body)
+        messagebox.showinfo(T("生成启动/kill/CLI bat"), body)
     except Exception:
         pass
 
 def start_one(key):
     cfg = VC[key]
     if proc_alive(procs[key]):
-        log("[%s] 启动忽略：已在运行 pid=%s" % (key, procs[key].pid)); return
+        log(T("[%s] 启动忽略：已在运行 pid=%s") % (key, procs[key].pid)); return
     if port_open(cfg["port"]):
         # 端口被占用：先说清「是谁」再决定动作，避免误伤别家程序。
         if dsh_kill is None:
             hint = ("端口 %d 被占用，但无法识别占用者（dsh_kill 未加载）。\n"
                     "请手动关闭占用程序，或改 config.json 里该版本的 port 后重启管理器。" % cfg["port"])
-            log("[%s] 启动失败：%s" % (key, hint))
+            log(T("[%s] 启动失败：%s") % (key, hint))
             try:
-                messagebox.showwarning("端口被占用", "[%s]\n%s" % (key, hint))
+                messagebox.showwarning(T("端口被占用"), "[%s]\n%s" % (key, hint))
             except Exception:
                 pass
             return
@@ -986,21 +996,21 @@ def start_one(key):
             # 非 dsh 程序占了端口：绝不自动结束，给详细提示 + 不启动
             hint = (text + "\n\n这不是 dsh 进程。为避免影响其它程序，管理器不会自动结束它。\n"
                     "请手动关闭占用程序，或修改 config.json 里该版本的 port 后重启管理器。")
-            log("[%s] 启动失败：端口被非 dsh 程序占用 ->\n%s" % (key, text))
+            log(T("[%s] 启动失败：端口被非 dsh 程序占用 ->\n%s") % (key, text))
             try:
-                messagebox.showwarning("端口被占用（非 dsh 程序）", "[%s]\n%s" % (key, hint))
+                messagebox.showwarning(T("端口被占用（非 dsh 程序）"), "[%s]\n%s" % (key, hint))
             except Exception:
                 pass
             return
         # 占用者是自家 dsh（旧实例 / 外部用 bat 拉起）：提示后清理再启动
-        log("[%s] 端口被自家 dsh 占用，准备先清理再启动 ->\n%s" % (key, text))
+        log(T("[%s] 端口被自家 dsh 占用，准备先清理再启动 ->\n%s") % (key, text))
         try:
-            ok = messagebox.askyesno("端口被你的 dsh 占用",
-                "[%s]\n%s\n\n是否结束该 dsh 进程并启动新实例？" % (key, text))
+            ok = messagebox.askyesno(T("端口被你的 dsh 占用"),
+                T("[%s]\n%s\n\n是否结束该 dsh 进程并启动新实例？") % (key, text))
         except Exception:
             ok = True  # GUI 不可用则默认继续（等价于原行为：直接清掉重启）
         if not ok:
-            log("[%s] 用户取消：保留现有 dsh，不启动新实例。" % key)
+            log(T("[%s] 用户取消：保留现有 dsh，不启动新实例。") % key)
             return
         kill_one(key)
         # 等端口释放（最多 ~6s），再走下面的启动逻辑
@@ -1019,13 +1029,13 @@ def start_one(key):
                 os.makedirs(td, exist_ok=True)
                 env["TEMP"] = td
                 env["TMP"] = td
-                log("[%s] TEMP 已隔离 -> %s" % (key, td))
+                log(T("[%s] TEMP 已隔离 -> %s") % (key, td))
             except OSError as e:
                 # 建不出来就退回继承，绝不因此拦住启动
-                log("[%s] 警告：TEMP 目录不可用（%s），退回继承默认 TEMP" % (key, e))
+                log(T("[%s] 警告：TEMP 目录不可用（%s），退回继承默认 TEMP") % (key, e))
         # -------------------------------------------------------------------
         _clean_stale_lock(key)
-        log("[%s] 启动 env: DSH_HOME=%s TEMP=%s"
+        log(T("[%s] 启动 env: DSH_HOME=%s TEMP=%s")
             % (key, cfg["dsh_home"], env.get("TEMP", "(继承)")))
     # 入口 URL 的扫描与 dsh_home 无关（见 VC 里的说明）：每个槽都布防，抓到就用。
     auth_urls[key] = None
@@ -1036,10 +1046,10 @@ def start_one(key):
         p = subprocess.Popen(cmd, env=env, stdout=LOG_FH, stderr=subprocess.STDOUT,
                              creationflags=CREATE_NO_WINDOW)
         procs[key] = p
-        log("[%s] 已启动 pid=%s (port %d)" % (key, p.pid, cfg["port"]))
+        log(T("[%s] 已启动 pid=%s (port %d)") % (key, p.pid, cfg["port"]))
     except FileNotFoundError as e:
-        log("[%s] 启动失败（找不到可执行文件）：%s" % (key, e))
-        log("[%s] 自检：node_exe=%r 存在=%s | bin_js=%r 存在=%s（不存在说明该版本没装好，重新安装该槽）"
+        log(T("[%s] 启动失败（找不到可执行文件）：%s") % (key, e))
+        log(T("[%s] 自检：node_exe=%r 存在=%s | bin_js=%r 存在=%s（不存在说明该版本没装好，重新安装该槽）")
             % (key, cfg["node_exe"], os.path.exists(cfg["node_exe"]),
                cfg["bin_js"], os.path.exists(cfg["bin_js"])))
         # 必须弹框：pythonw 没有控制台，只写日志的话用户点了「启动」看着像没反应。
@@ -1049,15 +1059,15 @@ def start_one(key):
                               % (cfg["node_exe"], os.path.exists(cfg["node_exe"]),
                                  cfg["bin_js"], os.path.exists(cfg["bin_js"])))
     except Exception as e:
-        log("[%s] 启动失败：%s" % (key, e))
+        log(T("[%s] 启动失败：%s") % (key, e))
         _notify_start_failure(key, "%s" % e, str(e))
 
 def _notify_start_failure(key, brief, detail):
     """启动失败时弹框（pythonw 下这是用户唯一的反馈渠道）。
     GUI 不可用时静默跳过——此时日志仍是唯一记录，不能因弹框失败而中断。"""
-    log("[%s] 启动失败（已弹框告知用户）：%s" % (key, brief))
+    log(T("[%s] 启动失败（已弹框告知用户）：%s") % (key, brief))
     try:
-        messagebox.showerror("启动失败 [%s]" % key, "%s\n\n%s" % (brief, detail))
+        messagebox.showerror(T("启动失败 [%s]") % key, "%s\n\n%s" % (brief, detail))
     except Exception:
         pass
 
@@ -1151,10 +1161,10 @@ def kill_one(key, report=True):
     if dsh_kill is None:
         # 降级：只杀本 app 跟踪的进程树（仍不误杀）
         if tracked is not None:
-            log("[%s] 停止：dsh_kill 未加载，退化为杀 tracked 进程树 pid=%d" % (key, tracked))
+            log(T("[%s] 停止：dsh_kill 未加载，退化为杀 tracked 进程树 pid=%d") % (key, tracked))
             _kill_pid_tree(tracked, key)
         else:
-            log("[%s] 停止：dsh_kill 未加载且无 tracked 进程" % key)
+            log(T("[%s] 停止：dsh_kill 未加载且无 tracked 进程") % key)
         procs[key] = None
         _refresh_detect_cache(key)
         if report:
@@ -1185,10 +1195,10 @@ def _report_port_after_kill(key, port, killed):
     try:
         owners, text = dsh_kill.format_port_owners(port)
     except Exception as e:
-        log("[%s] 停止后复查端口失败：%s" % (key, e))
+        log(T("[%s] 停止后复查端口失败：%s") % (key, e))
         return
     if not owners:
-        log("[%s] 停止完成：端口 %d 已释放%s"
+        log(T("[%s] 停止完成：端口 %d 已释放%s")
             % (key, port, ("（清理 %d 个进程）" % killed) if killed else ""))
         return
 
@@ -1196,28 +1206,28 @@ def _report_port_after_kill(key, port, killed):
     other_left = [o for o in owners if o["kind"] not in ("dsh", "dsh-ambiguous")]
 
     if dsh_left and not other_left:
-        log("[%s] 停止后端口 %d 仍被自家 dsh 占用：%s"
+        log(T("[%s] 停止后端口 %d 仍被自家 dsh 占用：%s")
             % (key, port, ", ".join("pid=%d" % o["pid"] for o in dsh_left)))
         try:
             messagebox.showwarning(
-                "停止未完全成功 [%s]" % key,
-                "已发出停止指令，但端口 %d 仍被 dsh 进程占用：\n\n%s\n\n"
+                T("停止未完全成功 [%s]") % key,
+                T("已发出停止指令，但端口 %d 仍被 dsh 进程占用：\n\n%s\n\n"
                 "通常是进程尚未退出，或存在子进程残留。\n"
                 "可再点一次「停止」；反复不行就点「全部停止」，"
-                "或用命令行：python dsh-tm.py kill-stray" % (port, text))
+                "或用命令行：python dsh-tm.py kill-stray") % (port, text))
         except Exception:
             pass
         return
 
     # 端口被非 dsh 程序占着：最需要用户知道的情况（多半是别的软件抢了端口）
-    log("[%s] 停止后端口 %d 被非 dsh 程序占用：\n%s" % (key, port, text))
+    log(T("[%s] 停止后端口 %d 被非 dsh 程序占用：\n%s") % (key, port, text))
     try:
         messagebox.showwarning(
-            "端口被其它程序占用 [%s]" % key,
-            "dsh 已停止，但端口 %d 仍被其它程序占用——所以它不会随 dsh 一起消失。\n\n%s\n\n"
+            T("端口被其它程序占用 [%s]") % key,
+            T("dsh 已停止，但端口 %d 仍被其它程序占用——所以它不会随 dsh 一起消失。\n\n%s\n\n"
             "管理器不会自动结束别人的程序（避免误杀）。\n"
             "请自行决定：关闭那个程序，或在 config.json 里把该槽的 port 改成别的"
-            "（记得同步 extra_args 里的 --port）。" % (port, text))
+            "（记得同步 extra_args 里的 --port）。") % (port, text))
     except Exception:
         pass
 
@@ -1246,15 +1256,15 @@ def stop_all_slots():
         except Exception:
             pass
     if not running:
-        messagebox.showinfo("全部停止", "当前没有任何槽在运行。")
+        messagebox.showinfo(T("全部停止"), T("当前没有任何槽在运行。"))
         return
     if not messagebox.askyesno(
-            "全部停止",
-            "将停止以下 %d 个槽：\n\n%s\n\n"
-            "只停管理器管的这些槽（不碰其它 dsh 安装）。"
+            T("全部停止"),
+            T("将停止以下 %d 个槽：\n\n%s\n\n"
+            "只停管理器管的这些槽（不碰其它 dsh 安装）。")
             % (len(running), "、".join(VC[k]["label"] for k in running))):
         return
-    log("=== 全部停止：%s ===" % "、".join(running))
+    log(T("=== 全部停止：%s ===") % "、".join(running))
     # 2026-11-14 修两处：
     #  ① 方向：这里原来把「可用」当「忙碌」传反了，停完后所有按钮被禁用且不再恢复；
     #  ② 卡顿：原来在 UI 线程里同步跑 kill_one —— 每个槽都要枚举全部进程
@@ -1292,15 +1302,15 @@ def stop_all_slots():
         still = ["%s（端口 %d 仍在监听）" % (k, VC[k]["port"])
                  for k, _n, s, err in results if s and not err]
         if failed:
-            messagebox.showwarning("全部停止", "以下槽未能停止：\n\n" + "\n".join(failed))
+            messagebox.showwarning(T("全部停止"), T("以下槽未能停止：\n\n") + "\n".join(failed))
         if still:
             messagebox.showwarning(
-                "全部停止",
-                "已发出停止指令，但这些端口还在监听：\n\n  " + "\n  ".join(still) +
+                T("全部停止"),
+                T("已发出停止指令，但这些端口还在监听：\n\n  ") + "\n  ".join(still) +
                 "\n\n可能是进程尚未退出，或端口被别的程序占着。"
                 "稍等再看状态；反复不行可用 CLI：python dsh-tm.py kill-stray")
         if not failed and not still:
-            log("[全部停止] 完成：%d 个槽已停止" % len(running))
+            log(T("[全部停止] 完成：%d 个槽已停止") % len(running))
 
     threading.Thread(target=work, daemon=True).start()
 
@@ -1324,7 +1334,7 @@ def start_all_slots():
     """
     keys = [k for k in SLOT_KEYS]
     if not keys:
-        messagebox.showinfo("全部启动", "当前没有任何槽可启动。")
+        messagebox.showinfo(T("全部启动"), T("当前没有任何槽可启动。"))
         return
 
     started, skipped, blocked = [], [], []
@@ -1355,21 +1365,21 @@ def start_all_slots():
             blocked.append("%s（%s）" % (k, e))
 
     if started:
-        log("=== 全部启动：%s ===" % "、".join(started))
+        log(T("=== 全部启动：%s ===") % "、".join(started))
     if skipped:
-        log("[全部启动] 已在运行，跳过：%s" % "、".join(skipped))
+        log(T("[全部启动] 已在运行，跳过：%s") % "、".join(skipped))
     for _b in blocked:
-        log("[全部启动] 未能启动：%s" % _b)
+        log(T("[全部启动] 未能启动：%s") % _b)
 
     if blocked:
         messagebox.showwarning(
-            "全部启动",
-            "以下槽未能启动：\n\n  " + "\n  ".join(blocked) +
+            T("全部启动"),
+            T("以下槽未能启动：\n\n  ") + "\n  ".join(blocked) +
             "\n\n非 dsh 程序占用的端口不会自动结束，请手动处理或改端口。")
     elif not started:
-        messagebox.showinfo("全部启动", "所有槽都已经在运行了。")
+        messagebox.showinfo(T("全部启动"), T("所有槽都已经在运行了。"))
     else:
-        log("[全部启动] 已发出 %d 个启动指令，等待端口监听…" % len(started))
+        log(T("[全部启动] 已发出 %d 个启动指令，等待端口监听…") % len(started))
     refresh(once=True)
 
 
@@ -1398,7 +1408,7 @@ def _spawn_slot_silent(key):
                          stderr=subprocess.DEVNULL,
                          creationflags=flags)
     procs[key] = p
-    log("[%s] 已启动 pid=%s 端口=%d" % (key, p.pid, cfg["port"]))
+    log(T("[%s] 已启动 pid=%s 端口=%d") % (key, p.pid, cfg["port"]))
 
 
 def kill_all():
@@ -1406,7 +1416,7 @@ def kill_all():
     两个槽各自的签名（槽内，精确到安装目录）+ 泛签名兜底（槽外：别的安装位置、
     不是 bin.js 拉起的子进程）。泛签名只认 @deepseek-ai/dsh，绝不碰其他 node。"""
     if dsh_kill is None:
-        log("=== 杀全部：dsh_kill 未加载，退化为杀 tracked 进程树 ===")
+        log(T("=== 杀全部：dsh_kill 未加载，退化为杀 tracked 进程树 ==="))
         for k in SLOT_KEYS:
             kill_one(k)
         return
@@ -1461,10 +1471,10 @@ def _browser_label(browser):
     按钮列放不下会被切。"""
     b = (browser or "").strip().lower()
     if b in BROWSER_KNOWN:
-        return "浏览器" if b == "default" else BROWSER_KNOWN[b][0]
+        return T("浏览器") if b == "default" else BROWSER_KNOWN[b][0]
     if b:
         return os.path.basename(browser.strip())
-    return "浏览器"
+    return T("浏览器")
 
 
 def _browser_installed(browser):
@@ -1523,7 +1533,7 @@ def _scan_slot(key):
             m = re.search(rb"https?://\S+", line)
             if m:
                 auth_urls[key] = m.group(0).decode("utf-8", "replace")
-                log("[%s] 已捕获入口 URL（日志里的 token 已就地隐去）" % key)
+                log(T("[%s] 已捕获入口 URL（日志里的 token 已就地隐去）") % key)
         for tm in _TOKEN_BYTES_RE.finditer(line):
             tok = tm.group(2)
             if len(tok) <= 4:
@@ -1570,13 +1580,13 @@ def open_browser(key):
     url = auth_urls.get(key)
     if not url:
         if proc_alive(procs[key]):
-            log("[%s] 仍在启动：入口 URL 还没生成，状态变 ✓ 后再点" % key); return
+            log(T("[%s] 仍在启动：入口 URL 还没生成，状态变 ✓ 后再点") % key); return
         if not port_open(cfg["port"]):
-            log("[%s] 未运行，请先启动" % key); return
+            log(T("[%s] 未运行，请先启动") % key); return
         # 在监听但不是本管理器拉起的：抓不到 URL，只能给裸地址
         url = "http://127.0.0.1:%d" % cfg["port"]
-        log("[%s] 未捕获到入口 URL（该实例不是本管理器启动的）；"
-            "若该版本有 token 保护，请从管理器重启它" % key)
+        log(T("[%s] 未捕获到入口 URL（该实例不是本管理器启动的）；"
+            "若该版本有 token 保护，请从管理器重启它") % key)
     kind, exe = _resolve_browser(cfg["browser"])
     if kind == "start":
         # 两种情形都落到这里：① 配置就是 default（默认值）；② 配了某个浏览器
@@ -1585,21 +1595,21 @@ def open_browser(key):
         # 各槽即使用同一个浏览器也不串台：cookie 绑定 host:port，端口不同就隔离。
         _b = (cfg["browser"] or "default").strip()
         if _b.lower() in ("", "default"):
-            log("[%s] 用系统默认浏览器打开 %s" % (key, url))
+            log(T("[%s] 用系统默认浏览器打开 %s") % (key, url))
         else:
-            log("[%s] 本机没找到 %s，改由系统默认浏览器打开 %s" % (key, _b, url))
+            log(T("[%s] 本机没找到 %s，改由系统默认浏览器打开 %s") % (key, _b, url))
         try:
             os.startfile(url)
-            log("[%s] 浏览器已启动（系统默认）" % key)
+            log(T("[%s] 浏览器已启动（系统默认）") % key)
         except Exception as e:
-            log("[%s] 系统默认浏览器打开失败：%s（请手动复制上面的 URL 到浏览器）" % (key, e))
+            log(T("[%s] 系统默认浏览器打开失败：%s（请手动复制上面的 URL 到浏览器）") % (key, e))
         return
-    log("[%s] 打开浏览器(%s) -> %s" % (key, cfg["browser"], url))
+    log(T("[%s] 打开浏览器(%s) -> %s") % (key, cfg["browser"], url))
     try:
         subprocess.Popen([exe, url])                 # GUI 浏览器绝不能加 CREATE_NO_WINDOW
-        log("[%s] 浏览器已启动" % key)
+        log(T("[%s] 浏览器已启动") % key)
     except Exception as e:
-        log("[%s] 浏览器启动失败：%s" % (key, e))
+        log(T("[%s] 浏览器启动失败：%s") % (key, e))
 
 def copy_url(key):
     """把该槽的完整入口 URL（含 token）复制到剪贴板。
@@ -1611,18 +1621,18 @@ def copy_url(key):
     url = auth_urls.get(key)
     if not url:
         if proc_alive(procs[key]) or port_open(cfg["port"]):
-            log("[%s] 入口 URL 还没抓到（可能还在启动）；状态变 ✓ 后再点" % key)
+            log(T("[%s] 入口 URL 还没抓到（可能还在启动）；状态变 ✓ 后再点") % key)
             return
         url = "http://127.0.0.1:%d" % cfg["port"]
-        log("[%s] 未捕获到带 token 的入口 URL（该实例不是本管理器启动的），已复制裸地址"
+        log(T("[%s] 未捕获到带 token 的入口 URL（该实例不是本管理器启动的），已复制裸地址")
             % key)
     try:
         root.clipboard_clear()
         root.clipboard_append(url)
         root.update_idletasks()          # 让剪贴板内容在管理器退出后仍然有效
-        log("[%s] 已复制入口 URL 到剪贴板（含 token，请勿外发）" % key)
+        log(T("[%s] 已复制入口 URL 到剪贴板（含 token，请勿外发）") % key)
     except Exception as e:
-        log("[%s] 复制入口 URL 失败：%s" % (key, e))
+        log(T("[%s] 复制入口 URL 失败：%s") % (key, e))
 
 
 # ── 长任务期间冻结按钮 ──────────────────────────────────────────────────
@@ -1646,7 +1656,7 @@ def _slot_title(key):
     """
     cfg = VC[key]
     ver = INSTALLED.get(key)
-    vtxt = ver if ver else "未知"
+    vtxt = ver if ver else T("未知")
     label = cfg.get("label") or key
     # 防御：config 里若出现两条同 label 的记录（旧版纳入逻辑会造出「槽 v4
     # 顶着 dshV3 的名字」这种幽灵槽），标题带上槽键 —— 否则两张卡片同名，
@@ -1674,7 +1684,7 @@ def _build_version_picker(parent, var, height=9, width=38, multi=False):
     联网在后台线程做，结果用 root.after 回主线程 —— tkinter 不是线程安全的。
     返回 {"frame", "refresh", "listbox", "status"}，调用方把它 pack/grid 进对话框。
     """
-    box = ttk.LabelFrame(parent, text="可用版本（来自 npm registry）", padding=(8, 6))
+    box = ttk.LabelFrame(parent, text=T("可用版本（来自 npm registry）"), padding=(8, 6))
     inner = ttk.Frame(box)
     inner.pack(fill="both", expand=True)
     lb = tk.Listbox(inner, height=height, width=width,
@@ -1688,9 +1698,9 @@ def _build_version_picker(parent, var, height=9, width=38, multi=False):
 
     row = ttk.Frame(box)
     row.pack(fill="x", pady=(6, 0))
-    btn = ttk.Button(row, text="刷新列表")
+    btn = ttk.Button(row, text=T("刷新列表"))
     btn.pack(side="left")
-    status = ttk.Label(row, text="准备获取…", foreground=_MUTED)
+    status = ttk.Label(row, text=T("准备获取…"), foreground=_MUTED)
     status.pack(side="left", padx=(8, 0))
 
     state = {"items": [], "busy": False}
@@ -1715,13 +1725,13 @@ def _build_version_picker(parent, var, height=9, width=38, multi=False):
             lb.selection_set(idx)
             lb.see(idx)
             var.set(items[idx]["version"])
-        status.configure(text="共 %d 个版本（%s）" % (len(items), source))
+        status.configure(text=T("共 %d 个版本（%s）") % (len(items), source))
         state["busy"] = False
         btn.configure(state="normal")
 
     def fail(msg):
-        status.configure(text="获取失败，可手动输入版本号")
-        log("[版本列表] 获取失败：%s" % msg)
+        status.configure(text=T("获取失败，可手动输入版本号"))
+        log(T("[版本列表] 获取失败：%s") % msg)
         state["busy"] = False
         btn.configure(state="normal")
 
@@ -1737,7 +1747,7 @@ def _build_version_picker(parent, var, height=9, width=38, multi=False):
 
     def do_fetch(force=False):
         if REG is None:
-            status.configure(text="缺少 dsh_registry.py，只能手动输入版本号")
+            status.configure(text=T("缺少 dsh_registry.py，只能手动输入版本号"))
             return
         if state["busy"]:
             return
@@ -1748,7 +1758,7 @@ def _build_version_picker(parent, var, height=9, width=38, multi=False):
                 return
         state["busy"] = True
         btn.configure(state="disabled")
-        status.configure(text="正在从 npm registry 获取版本列表…")
+        status.configure(text=T("正在从 npm registry 获取版本列表…"))
 
         def work():
             ok, items, src = REG.fetch_versions()
@@ -1787,9 +1797,9 @@ def _set_app_id():
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
             ctypes.c_wchar_p("deepseek.dsh.dualversion.manager.3"))
-        log("已设置进程 AppID（任务栏将使用海豚图标）")
+        log(T("已设置进程 AppID（任务栏将使用海豚图标）"))
     except Exception as e:
-        log("设置进程 AppID 失败（任务栏可能显示 Python 图标）：%s" % e)
+        log(T("设置进程 AppID 失败（任务栏可能显示 Python 图标）：%s") % e)
 
 # ── 单实例保护：已有实例时激活其窗口后退出（防「点任务栏又开一个」）─────────
 import ctypes  # 此处可能早于文件其他位置的 ctypes 导入，局部确保可用
@@ -1825,9 +1835,9 @@ _mutex_h = _k32.CreateMutexW(
     None, False, "DeepSeek.DSH.Manager.SingleInstance")
 if ctypes.get_last_error() == 183:   # ERROR_ALREADY_EXISTS
     if _activate_existing_instance():
-        log("已有实例在运行：已激活其窗口，本实例退出（单实例保护）")
+        log(T("已有实例在运行：已激活其窗口，本实例退出（单实例保护）"))
     else:
-        log("已有实例在运行但未找到其窗口，本实例退出（单实例保护）")
+        log(T("已有实例在运行但未找到其窗口，本实例退出（单实例保护）"))
     sys.exit(0)
 
 # ── 任务栏固定项图标自愈 ──────────────────────────────────────────────────
@@ -1929,12 +1939,12 @@ def _heal_pinned_shortcut_icon():
                        and SetIcon3(punk3, _icon_bs, 0) == 0
                        and Save3(ppf3, full, 0) == 0)
                 if _ok:
-                    log("已自动修复任务栏固定项（整体重建+图标）：%s" % name)
+                    log(T("已自动修复任务栏固定项（整体重建+图标）：%s") % name)
             except Exception:
                 continue
     except Exception as _e:
         try:
-            log("固定项图标自愈失败（不影响运行）：%s" % _e)
+            log(T("固定项图标自愈失败（不影响运行）：%s") % _e)
         except Exception:
             pass
 
@@ -2005,7 +2015,7 @@ try:
     root = tk.Tk()
 except Exception as _e:
     import traceback
-    log("!!! 创建 tkinter 窗口失败：%s\n%s" % (_e, traceback.format_exc()))
+    log(T("!!! 创建 tkinter 窗口失败：%s\n%s") % (_e, traceback.format_exc()))
     try:
         import ctypes
         ctypes.windll.user32.MessageBoxW(0,
@@ -2014,7 +2024,7 @@ except Exception as _e:
     except Exception:
         pass
     sys.exit(1)
-root.title("DSH 版本管理器")
+root.title(T("DSH 版本管理器"))
 
 # 抢在窗口显示前替换窗口类图标。
 # 两处要点（都踩过）：
@@ -2036,12 +2046,12 @@ try:
         _ct.windll.user32.SendMessageW(_hwnd, 0x80, 1, _hb)      # WM_SETICON ICON_BIG
         _ct.windll.user32.SendMessageW(_hwnd, 0x80, 0, _hs or _hb)
         _rb = _ct.windll.user32.GetClassLongPtrW(_hwnd, -14)
-        log("已在窗口显示前设置顶层窗口(%s)图标，回读 GCLP_HICON=%s"
+        log(T("已在窗口显示前设置顶层窗口(%s)图标，回读 GCLP_HICON=%s")
             % (_hwnd, "成功" if _rb == _hb else "失败(%s)" % _rb))
     else:
-        log("未能取到 ico 帧或顶层窗口，窗口将使用 Tk 默认图标")
+        log(T("未能取到 ico 帧或顶层窗口，窗口将使用 Tk 默认图标"))
 except Exception as _e:
-    log("替换窗口类图标失败（不影响运行）：%s" % _e)
+    log(T("替换窗口类图标失败（不影响运行）：%s") % _e)
 
 # ── 界面配色：向 dsh 本体的视觉语言靠拢（2026-11-01）──────────────────
 # 用户要求「整体风格往 dsh 靠近」。做法不是凭感觉配色，而是**从 dsh 自己的主题包里
@@ -2154,7 +2164,7 @@ try:
                      foreground=_INK, font=("Segoe UI", 10, "bold"),
                      padding=(6, 6))
 except Exception as _e:
-    log("皮肤初始化失败，回退默认主题：%s" % _e)
+    log(T("皮肤初始化失败，回退默认主题：%s") % _e)
 root.configure(bg=_APP_BG)
 
 root.resizable(True, True)
@@ -2191,9 +2201,9 @@ try:
         # 任务栏显示的就是缩放后的模糊结果（实测"图标很虚"）。而且 Tk 不支持
         # iconphoto(ICO)（实测报couldn't recognize data in image file）。
         # 统一交给下面的 _force_taskbar_icon() 用 Win32 ExtractIconEx 按原始帧设置。
-        log("图标将由 _force_taskbar_icon() 以原始帧设置（不走 Tk 的缩放路径）")
+        log(T("图标将由 _force_taskbar_icon() 以原始帧设置（不走 Tk 的缩放路径）"))
 except Exception as e:
-    log("窗口图标路径检查失败：%s" % e)
+    log(T("窗口图标路径检查失败：%s") % e)
 
 def _force_taskbar_icon():
     """用 Win32 API 显式设置窗口的 ICON_BIG / ICON_SMALL / 类图标。
@@ -2212,10 +2222,10 @@ def _force_taskbar_icon():
     try:
         import ctypes
         from ctypes import wintypes
-        log("图标自诊断：cwd=%s ICON_PATH=%s 存在=%s"
+        log(T("图标自诊断：cwd=%s ICON_PATH=%s 存在=%s")
             % (os.getcwd(), ICON_PATH, bool(ICON_PATH and os.path.exists(ICON_PATH))))
         if not (ICON_PATH and os.path.exists(ICON_PATH)):
-            log("!! 图标文件找不到（相对路径+错误工作目录会导致这里静默失败）")
+            log(T("!! 图标文件找不到（相对路径+错误工作目录会导致这里静默失败）"))
             return
         user32 = ctypes.windll.user32
         shell32 = ctypes.windll.shell32     # ExtractIconExW 属于 Shell Functions
@@ -2255,10 +2265,10 @@ def _force_taskbar_icon():
             user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, h_small)
             user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL2, h_small)
             user32.SetClassLongPtrW(hwnd, GCLP_HICONSM, h_small)
-        log("已用原始帧设置窗口图标（不缩放，避免发虚）"
-            "（ICON_BIG=%s ICON_SMALL=%s）" % (bool(h_big), bool(h_small)))
+        log(T("已用原始帧设置窗口图标（不缩放，避免发虚）"
+            "（ICON_BIG=%s ICON_SMALL=%s）") % (bool(h_big), bool(h_small)))
     except Exception as e:
-        log("强制设置任务栏图标失败：%s" % e)
+        log(T("强制设置任务栏图标失败：%s") % e)
 
 _force_taskbar_icon()
 
@@ -2296,7 +2306,7 @@ def _make_taskbar_window(win):
                             0x0020 | 0x0001 | 0x0002 | 0x0004)  # FRAMECHANGED|NOSIZE|NOMOVE|NOZORDER
     except Exception as e:
         try:
-            log("[界面] 设置任务栏入口失败（不影响安装）：%s" % e)
+            log(T("[界面] 设置任务栏入口失败（不影响安装）：%s") % e)
         except Exception:
             pass
 
@@ -2391,7 +2401,7 @@ def _show_env_report():
     """
     script = os.path.join(BASE_DIR, "scripts", "check-env.py")
     if not os.path.isfile(script):
-        messagebox.showerror("无法检查", "找不到 %s" % script)
+        messagebox.showerror(T("无法检查"), T("找不到 %s") % script)
         return
     try:
         # pythonw 没有控制台，子进程输出重定向到临时文件再读
@@ -2404,13 +2414,13 @@ def _show_env_report():
                          creationflags=CREATE_NO_WINDOW).returncode
         raw = open(tmp, "rb").read().decode("utf-8", "replace")
     except Exception as e:
-        messagebox.showerror("检查失败", "运行环境检查出错：\n%s" % e)
+        messagebox.showerror(T("检查失败"), T("运行环境检查出错：\n%s") % e)
         return
     # 只保留有意义的行，压掉分隔线与空行
     lines = [ln.rstrip() for ln in raw.splitlines()
              if ln.strip() and not set(ln.strip()) <= set("=-")]
     body = "\n".join(lines[-40:])
-    log("=== 环境检查（rc=%d）===\n%s" % (rc, body))
+    log(T("=== 环境检查（rc=%d）===\n%s") % (rc, body))
     (messagebox.showinfo if rc == 0 else messagebox.showwarning)(
         "运行环境检查", "%s\n\n%s" % (
             "环境满足要求。" if rc == 0 else "环境有不满足项，请看下面的说明。",
@@ -2430,15 +2440,15 @@ def _open_dir(path, what="数据目录"):
     （pythonw 无控制台，只写日志用户看不见，所以同时弹框）。"""
     try:
         if not os.path.isdir(path):
-            log("打开%s失败（目录不存在）：%s" % (what, path))
-            messagebox.showerror("DSH 版本管理器",
-                                 "%s不存在：\n%s\n\n可能尚未初始化（先启动一次 dsh）。" % (what, path))
+            log(T("打开%s失败（目录不存在）：%s") % (what, path))
+            messagebox.showerror(T("DSH 版本管理器"),
+                                 T("%s不存在：\n%s\n\n可能尚未初始化（先启动一次 dsh）。") % (what, path))
             return
         os.startfile(path)          # Windows：交给资源管理器打开文件夹
-        log("已打开%s：%s" % (what, path))
+        log(T("已打开%s：%s") % (what, path))
     except Exception as e:
-        log("打开%s失败 %s：%s" % (what, path, e))
-        messagebox.showerror("DSH 版本管理器", "打开%s失败：\n%s\n\n%s" % (what, path, e))
+        log(T("打开%s失败 %s：%s") % (what, path, e))
+        messagebox.showerror(T("DSH 版本管理器"), T("打开%s失败：\n%s\n\n%s") % (what, path, e))
 
 cards_frame = ttk.Frame(root)
 cards_frame.grid(row=1, column=0, sticky="nsew", padx=12, pady=4)
@@ -2860,7 +2870,7 @@ def _pick_up(evt):
         card.lift()
         card.configure(style="Lifted.TLabelframe")
     except Exception as e:
-        log("[设置] 拖动浮起失败（退回普通排序）：%s" % e)
+        log(T("[设置] 拖动浮起失败（退回普通排序）：%s") % e)
         _back_to_grid(card)
         return False
     DRAG["picked"] = True
@@ -3000,17 +3010,17 @@ def _drag_end(_evt=None):
                           VERSIONS, SLOT_KEYS, MAX_SLOTS)
     err = _save_ui_prefs(prefs)
     if err:
-        log("[设置] 拖动排序保存失败：%s" % err)
+        log(T("[设置] 拖动排序保存失败：%s") % err)
         # 别在按钮的 <ButtonRelease> 处理里销毁控件，推迟到空闲时重建
         _abort_drop()
         root.after(0, _build_cards)
-        messagebox.showerror("保存失败", err)
+        messagebox.showerror(T("保存失败"), err)
         return
     UI_CFG.clear()
     UI_CFG.update(prefs)
     if not floating:
         _regrid(new_disp)
-    log("[设置] 拖动排序：%s" % "、".join(_display_keys()))
+    log(T("[设置] 拖动排序：%s") % "、".join(_display_keys()))
 
 
 def _drag_end_btn(_evt=None):
@@ -3078,7 +3088,7 @@ try:
     import dsh_health as HEALTH_MOD
 except Exception as _e:
     HEALTH_MOD = None
-    log("[体检] 缺少 dsh_health.py，体检功能不可用：%s" % _e)
+    log(T("[体检] 缺少 dsh_health.py，体检功能不可用：%s") % _e)
 
 HEALTH = {}          # 槽键 -> [(级别, 项目, 说明)]
 HEALTH_GLOBAL = []   # 跨槽问题（端口冲突等）
@@ -3130,15 +3140,15 @@ def _health_apply(res, dialog=False):
         HEALTH[key] = items
 
     for lv, item, msg in HEALTH_GLOBAL:
-        log("[体检] 全局 %s：%s —— %s" % (lv, item, msg))
+        log(T("[体检] 全局 %s：%s —— %s") % (lv, item, msg))
     bad = 0
     for key in SLOT_KEYS:
         for lv, item, msg in HEALTH.get(key) or []:
             if lv in (HEALTH_MOD.LEVEL_ERROR, HEALTH_MOD.LEVEL_WARN):
                 bad += 1
-                log("[体检] %s %s：%s —— %s" % (key, lv, item, msg))
+                log(T("[体检] %s %s：%s —— %s") % (key, lv, item, msg))
     if not bad and not HEALTH_GLOBAL:
-        log("[体检] %d 个槽全部正常（程序入口 / node / 数据目录 / 启动脚本都在）"
+        log(T("[体检] %d 个槽全部正常（程序入口 / node / 数据目录 / 启动脚本都在）")
             % len(HEALTH))
     refresh(once=True)          # 只刷一次状态行，不另起定时链
     if dialog:
@@ -3152,18 +3162,18 @@ def _health_dialog():
     汇总"每个槽差在哪"的地方，在这里修最顺手。
     """
     win = tk.Toplevel(root)
-    win.title("槽体检结果")
+    win.title(T("槽体检结果"))
     win.transient(root)
     _apply_icon(win)
     win.geometry("720x460")
 
-    ttk.Label(win, text="体检结果", font=("Microsoft YaHei UI", 11, "bold")
+    ttk.Label(win, text=T("体检结果"), font=("Microsoft YaHei UI", 11, "bold")
               ).pack(padx=16, pady=(14, 2), anchor="w")
     ttk.Label(win, foreground=_MUTED, justify="left", wraplength=680,
-              text="这里报告「现在的样子和登记的样子差在哪」，默认**不会修改任何文件**。"
+              text=T("这里报告「现在的样子和登记的样子差在哪」，默认**不会修改任何文件**。"
                    "\n缺 node 运行时或数据目录的槽，可以在下面选一个点「修复…」——"
                    "只补缺的东西，不删、不覆盖你已有的文件。"
-                   "确实装坏了就走「卸载 → 重装」（那条路有完整备份）。"
+                   "确实装坏了就走「卸载 → 重装」（那条路有完整备份）。")
               ).pack(padx=16, pady=(0, 8), anchor="w")
 
     frame = ttk.Frame(win)
@@ -3215,9 +3225,9 @@ def _health_dialog():
         try:
             root.clipboard_clear()
             root.clipboard_append("".join(t for t, _ in lines))
-            log("[体检] 结果已复制到剪贴板")
+            log(T("[体检] 结果已复制到剪贴板"))
         except Exception as e:
-            log("[体检] 复制失败：%s" % e)
+            log(T("[体检] 复制失败：%s") % e)
 
     # ── 修复（用户点了才动）─────────────────────────────────────────
     # 只列"有错误/警告"的槽；修复本身只补 node 运行时与 .dsh-home/.tmp，
@@ -3231,7 +3241,7 @@ def _health_dialog():
     if fixable:
         frow = ttk.Frame(win)
         frow.pack(fill="x", padx=16, pady=(0, 6))
-        ttk.Label(frow, text="修复").pack(side="left")
+        ttk.Label(frow, text=T("修复")).pack(side="left")
         _fdisp = ["%s（%s）" % (k, VC[k].get("label") or k) for k in fixable]
         _fvar = tk.StringVar(value=_fdisp[0])
         _fcb = ttk.Combobox(frow, textvariable=_fvar, values=_fdisp,
@@ -3246,10 +3256,10 @@ def _health_dialog():
             key = fixable[i]
             root_ = _version_root(VC[key])
             if not messagebox.askyesno(
-                    "修复这个槽？",
-                    "只会**补上缺的东西**（node 运行时、.dsh-home / .tmp 空目录），\n"
+                    T("修复这个槽？"),
+                    T("只会**补上缺的东西**（node 运行时、.dsh-home / .tmp 空目录），\n"
                     "不会删除或覆盖你已有的文件。\n\n"
-                    "%s（%s）\n%s\n\n继续？"
+                    "%s（%s）\n%s\n\n继续？")
                     % (key, VC[key].get("label") or key, root_),
                     default="yes"):
                 return
@@ -3266,11 +3276,11 @@ def _health_dialog():
 
         def _after_fix(ok, acts, err):
             if not ok:
-                messagebox.showerror("修复未完成", err or "原因未知")
+                messagebox.showerror(T("修复未完成"), err or "原因未知")
                 return
             messagebox.showinfo(
-                "已修复",
-                "已完成：\n  " + "\n  ".join(acts or ["（无需改动）"]) +
+                T("已修复"),
+                T("已完成：\n  ") + "\n  ".join(acts or ["（无需改动）"]) +
                 "\n\n重新体检一次看结果。")
             try:
                 win.destroy()
@@ -3281,12 +3291,12 @@ def _health_dialog():
             except Exception:
                 pass
 
-        ttk.Button(frow, text="修复…", command=_do_fix).pack(side="left")
+        ttk.Button(frow, text=T("修复…"), command=_do_fix).pack(side="left")
 
     btns = ttk.Frame(win)
     btns.pack(fill="x", padx=16, pady=(0, 14))
-    ttk.Button(btns, text="复制到剪贴板", command=_copy).pack(side="left")
-    ttk.Button(btns, text="关闭窗口", command=win.destroy).pack(side="right")
+    ttk.Button(btns, text=T("复制到剪贴板"), command=_copy).pack(side="left")
+    ttk.Button(btns, text=T("关闭窗口"), command=win.destroy).pack(side="right")
     win.bind("<Escape>", lambda e: win.destroy())
 
 
@@ -3294,17 +3304,17 @@ def _run_health(deep=False, dialog=False):
     """后台跑体检（stat 几万个文件不能让界面卡住）。"""
     if HEALTH_MOD is None:
         if dialog:
-            messagebox.showerror("体检不可用",
-                                 "缺少 dsh_health.py，请确认管理器目录完整。")
+            messagebox.showerror(T("体检不可用"),
+                                 T("缺少 dsh_health.py，请确认管理器目录完整。"))
         return
     if dialog:
-        log("[体检] 开始深度体检（只读，不改任何文件）…")
+        log(T("[体检] 开始深度体检（只读，不改任何文件）…"))
 
     def work():
         try:
             res = HEALTH_MOD.check_all(VC, deep=deep)
         except Exception as e:
-            root.after(0, lambda: log("[体检] 失败：%s" % e))
+            root.after(0, lambda: log(T("[体检] 失败：%s") % e))
             return
         root.after(0, lambda: _health_apply(res, dialog))
 
@@ -3326,7 +3336,7 @@ try:
     import dsh_drift as DRIFT_MOD
 except Exception as _e:
     DRIFT_MOD = None
-    log("[变更] 缺少 dsh_drift.py，插件/配置变更不会记进日志：%s" % _e)
+    log(T("[变更] 缺少 dsh_drift.py，插件/配置变更不会记进日志：%s") % _e)
 
 DRIFT = {}                    # 槽键 -> 上一次的指纹
 _DRIFT_TICK = {"n": 0}        # refresh 计数：每 7 次（约 10 秒）比一次
@@ -3345,10 +3355,10 @@ def _drift_seed():
                 n += 1
         except Exception as e:
             DRIFT[key] = None
-            log("[变更] %s 读插件清单失败（不影响使用）：%s" % (key, e))
+            log(T("[变更] %s 读插件清单失败（不影响使用）：%s") % (key, e))
     # 2026-11-02：零槽时这条纯属噪音（没东西可记录），不打。
     if n > 0:
-        log("[变更] 已记录 %d 个槽的插件与配置基线（之后插件或 cordis 配置有改动会记在这里）"
+        log(T("[变更] 已记录 %d 个槽的插件与配置基线（之后插件或 cordis 配置有改动会记在这里）")
             % n)
 
 
@@ -3373,9 +3383,9 @@ def _check_drift():
         except Exception:
             continue
         for line in changes[:20]:
-            log("[变更] %s %s" % (key, line))
+            log(T("[变更] %s %s") % (key, line))
         if len(changes) > 20:
-            log("[变更] %s 还有 %d 条变化未列出（改动太大，建议直接看槽目录）"
+            log(T("[变更] %s 还有 %d 条变化未列出（改动太大，建议直接看槽目录）")
                 % (key, len(changes) - 20))
 
 
@@ -3400,15 +3410,15 @@ def _build_cards():
 
     if not keys:
         # 「全隐藏」：有槽，但用户把显示全关了。空白界面会被当成程序坏了。
-        _w = ttk.LabelFrame(cards_frame, text="没有显示任何版本槽", padding=(20, 18))
+        _w = ttk.LabelFrame(cards_frame, text=T("没有显示任何版本槽"), padding=(20, 18))
         _w.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
-        ttk.Label(_w, text="当前设置把 %d 个版本槽全部隐藏了。\n"
+        ttk.Label(_w, text=T("当前设置把 %d 个版本槽全部隐藏了。\n"
                            "它们的进程、端口、数据目录都还在，只是不画卡片 —— "
-                           "想启动/停止可以直接打开设置把它们显示回来。"
+                           "想启动/停止可以直接打开设置把它们显示回来。")
                            % len(SLOT_KEYS),
                   style="Card.TLabel", justify="left"
                   ).pack(anchor="w", pady=(0, 12))
-        ttk.Button(_w, text="打开设置…",
+        ttk.Button(_w, text=T("打开设置…"),
                    command=settings_dialog).pack(anchor="w")
         return
 
@@ -3444,24 +3454,24 @@ def _build_cards():
         for _w in (_card, _body, _st):
             _bind_drag(_w, key)
 
-        _b_start = ttk.Button(_body, text="启动", style="Green.TButton",
+        _b_start = ttk.Button(_body, text=T("启动"), style="Green.TButton",
                               command=lambda k=key: start_one(k))
         _b_start.grid(row=1, column=0, padx=3, pady=3, sticky="ew")
-        _b_stop = ttk.Button(_body, text="停止", style="Red.TButton",
+        _b_stop = ttk.Button(_body, text=T("停止"), style="Red.TButton",
                              command=lambda k=key: kill_one(k))
         _b_stop.grid(row=1, column=1, padx=3, pady=3, sticky="ew")
-        _b_open = ttk.Button(_body, text="打开 %s" % _browser_label(cfg["browser"]),
+        _b_open = ttk.Button(_body, text=T("打开 %s") % _browser_label(cfg["browser"]),
                              command=lambda k=key: open_browser(k))
         _b_open.grid(row=2, column=0, padx=3, pady=3, sticky="ew")
-        _b_copy = ttk.Button(_body, text="复制入口 URL", command=lambda k=key: copy_url(k))
+        _b_copy = ttk.Button(_body, text=T("复制入口 URL"), command=lambda k=key: copy_url(k))
         _b_copy.grid(row=2, column=1, padx=3, pady=3, sticky="ew")
         # 程序目录 / 数据目录 一键直达（2026-10-01 新增）
         _root_dir = _version_root(cfg) or ""
-        _b_pdir = ttk.Button(_body, text="程序目录",
+        _b_pdir = ttk.Button(_body, text=T("程序目录"),
                              command=lambda k=key, p=_root_dir: _open_dir(p, "程序目录"))
         _b_pdir.grid(row=3, column=0, padx=3, pady=(3, 0), sticky="ew")
         _home_dir = cfg["dsh_home"] or os.path.join(os.path.expanduser("~"), ".dsh")
-        _b_ddir = ttk.Button(_body, text="数据目录",
+        _b_ddir = ttk.Button(_body, text=T("数据目录"),
                              command=lambda k=key, p=_home_dir: _open_dir(p, "数据目录"))
         _b_ddir.grid(row=3, column=1, padx=3, pady=(3, 0), sticky="ew")
         BUSY["card"].extend([_b_start, _b_stop, _b_open, _b_copy, _b_pdir, _b_ddir])
@@ -3671,23 +3681,23 @@ def _log_orphan_shells():
             except Exception:
                 continue
         if shells:
-            log("[清理] 发现空壳目录（没有任何文件、也不在 config 里）：%s"
+            log(T("[清理] 发现空壳目录（没有任何文件、也不在 config 里）：%s")
                 % "、".join(shells))
-            log("[清理] 它们只是占着槽名，不会影响使用；下次装同名槽会自动复用。"
-                "要清掉可手工删除：%s"
+            log(T("[清理] 它们只是占着槽名，不会影响使用；下次装同名槽会自动复用。"
+                "要清掉可手工删除：%s")
                 % "、".join(os.path.join(root, n) for n in shells))
         if partials:
-            log("[清理] 发现未完成的槽目录（不在 config 里、且缺 lib/bin.js，"
-                "多半是上次纳入 / 安装被中断）：%s" % "、".join(partials))
-            log("[清理] 它们不参与任何操作，可整个删除：%s"
+            log(T("[清理] 发现未完成的槽目录（不在 config 里、且缺 lib/bin.js，"
+                "多半是上次纳入 / 安装被中断）：%s") % "、".join(partials))
+            log(T("[清理] 它们不参与任何操作，可整个删除：%s")
                 % "、".join(os.path.join(root, n) for n in partials))
         if detached_dirs:
-            log("[编号] 这些槽目录装着完整的 dsh、但不在管理里（多半是你移出的）：%s"
+            log(T("[编号] 这些槽目录装着完整的 dsh、但不在管理里（多半是你移出的）：%s")
                 % "、".join(detached_dirs))
-            log("[编号] 它们占着自己的编号 —— 新装会跳过这些编号（不会再多出 "
-                "dshVx-2）。想接着用就点「扫描已装 dsh 并纳入」；不要了就把目录删掉。")
+            log(T("[编号] 它们占着自己的编号 —— 新装会跳过这些编号（不会再多出 "
+                "dshVx-2）。想接着用就点「扫描已装 dsh 并纳入」；不要了就把目录删掉。"))
     except Exception as e:
-        log("[清理] 空壳目录检查失败（不影响使用）：%s" % e)
+        log(T("[清理] 空壳目录检查失败（不影响使用）：%s") % e)
 
 def _slot_dir_occupied(key):
     """槽键对应的目录（`<槽根>/dshV<KEY>`）是否已被占用。
@@ -3823,7 +3833,7 @@ class _GuiProgress(OPS.Progress if OPS else object):
             _w.bind("<B1-Motion>", self._drag_move)
         tk.Frame(body, bg=_DIVIDER, height=1).pack(fill="x")
 
-        self.lbl = ttk.Label(body, text="准备中…", wraplength=420,
+        self.lbl = ttk.Label(body, text=T("准备中…"), wraplength=420,
                              justify="left")
         self.lbl.pack(padx=20, pady=(14, 12))
         self.bar = ttk.Progressbar(body, mode="indeterminate", length=400)
@@ -3898,7 +3908,7 @@ class _GuiProgress(OPS.Progress if OPS else object):
                               6)          # SW_MINIMIZE
         except Exception as e:
             try:
-                log("[界面] 最小化进度窗失败：%s" % e)
+                log(T("[界面] 最小化进度窗失败：%s") % e)
             except Exception:
                 pass
         finally:
@@ -4058,9 +4068,9 @@ def _reload_config_after_change(new_keys=None):
     try:
         err = _ensure_slots_visible(new_keys or [])
         if err:
-            log("[配置] 新槽并入显示白名单失败（不影响使用）：%s" % err)
+            log(T("[配置] 新槽并入显示白名单失败（不影响使用）：%s") % err)
     except Exception as e:
-        log("[配置] 同步 ui.visible 时出错（忽略）：%s" % e)
+        log(T("[配置] 同步 ui.visible 时出错（忽略）：%s") % e)
 
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
@@ -4125,7 +4135,7 @@ def _reload_config_after_change(new_keys=None):
         _build_cards()
         _build_fresh_guide()
     except Exception as e:
-        log("[配置] 重画卡片失败：%s" % e)
+        log(T("[配置] 重画卡片失败：%s") % e)
 
     # 零槽 ↔ 有槽时窗口宽度必须跟着变（引导卡很窄，槽卡片按 240px/槽）
     try:
@@ -4148,12 +4158,12 @@ def _reload_config_after_change(new_keys=None):
                                     "ts": time.time()})
             except Exception as _e:
                 # 不再静默：探测失败时状态行只能走兜底文案，必须留下原因。
-                log("[配置] 探测槽 %s 端口失败（状态行先按「已停止 :端口」显示）：%s"
+                log(T("[配置] 探测槽 %s 端口失败（状态行先按「已停止 :端口」显示）：%s")
                     % (_k, _e))
 
     _missing = [k for k in SLOT_KEYS if not (_DETECT.get(k) or {}).get("ts")]
     if _missing:
-        log("[配置] 刷新后有 %d 个槽还没探测数据（状态行先按「已停止 :端口」显示）：%s"
+        log(T("[配置] 刷新后有 %d 个槽还没探测数据（状态行先按「已停止 :端口」显示）：%s")
             % (len(_missing), "、".join(_missing)))
 
     try:
@@ -4171,11 +4181,11 @@ def _reload_config_after_change(new_keys=None):
     # 自检：把每个槽最终的状态行文字写进日志。以后再出「没有端口号」，
     # 不用靠猜、也不用让用户复现 —— 日志里直接能看到当时到底显示了什么。
     try:
-        log("[配置] 刷新后状态行：%s"
+        log(T("[配置] 刷新后状态行：%s")
             % " | ".join("%s=%s" % (k, status_vars[k].get()) for k in SLOT_KEYS))
     except Exception:
         pass
-    log("[配置] 已原地刷新界面（无需重启）：%d 个槽" % len(SLOT_KEYS))
+    log(T("[配置] 已原地刷新界面（无需重启）：%d 个槽") % len(SLOT_KEYS))
     return True, ""
 
 
@@ -4189,7 +4199,7 @@ def _restart_or_tell(what="版本列表", new_keys=None):
     ok, why = _reload_config_after_change(new_keys)
     if ok:
         return
-    log("[配置] 原地刷新失败：%s，尝试重启管理器" % why)
+    log(T("[配置] 原地刷新失败：%s，尝试重启管理器") % why)
     ok2, why2 = _relaunch_self()
     if ok2:
         try:
@@ -4199,9 +4209,9 @@ def _restart_or_tell(what="版本列表", new_keys=None):
         return
     try:
         messagebox.showwarning(
-            "已更新，但界面没能刷新",
-            "配置已改好，但管理器没能原地刷新（%s），重启也没成功（%s）。\n\n"
-            "请手动关闭本窗口并重新打开管理器，新的%s就会生效。"
+            T("已更新，但界面没能刷新"),
+            T("配置已改好，但管理器没能原地刷新（%s），重启也没成功（%s）。\n\n"
+            "请手动关闭本窗口并重新打开管理器，新的%s就会生效。")
             % (why, why2, what))
     except Exception:
         pass
@@ -4307,7 +4317,7 @@ def _adopt_picker_dialog(found):
             rows.append(_adopt_row_info(b.get("version"), loc))
 
     win = tk.Toplevel(root)
-    win.title("发现已安装的 dsh")
+    win.title(T("发现已安装的 dsh"))
     win.transient(root)
     # 2026-11-14 重做尺寸：原来按「126px/行 + 210」估，只有一行时也撑到 336 高，
     # 列表下面一大片空白；宽度还写死 700，短内容显得空荡。
@@ -4321,12 +4331,12 @@ def _adopt_picker_dialog(found):
     win.geometry("560x%d" % _h)
     win.resizable(False, False)
     _apply_icon(win)
-    ttk.Label(win, text="发现 %d 个未纳入的 dsh" % len(rows),
+    ttk.Label(win, text=T("发现 %d 个未纳入的 dsh") % len(rows),
               font=("Microsoft YaHei UI", 10, "bold")).pack(padx=18, pady=(14, 2))
     ttk.Label(win, foreground=_MUTED, wraplength=510, justify="left",
               # 显式分行：交给 Tk 自动换行会从「几百MB」中间断开（实测很难看）。
-              text="勾选要纳入的版本。原地接回 = 只改配置（几秒）；\n"
-                   "复制一份 = 拷进版本根（几百 MB，较慢），原安装不动。"
+              text=T("勾选要纳入的版本。原地接回 = 只改配置（几秒）；\n"
+                   "复制一份 = 拷进版本根（几百 MB，较慢），原安装不动。")
               ).pack(padx=18, pady=(0, 8), anchor="w")
 
     outer = ttk.Frame(win)
@@ -4387,7 +4397,7 @@ def _adopt_picker_dialog(found):
             _mark.configure(foreground="#999")
             _txt.configure(foreground="#999")
             if _tag is not None:
-                _tag.configure(text="不能纳入", foreground=_RED)
+                _tag.configure(text=T("不能纳入"), foreground=_RED)
         # 2026-11-03 用户要求：「纳入时里面的详情可以删掉，直接显示版本号就行」。
         # 原来有「位置 / 组件 / 依赖 N 项 / 旧数据」+ 可展开的详情区，太啰嗦。
         # 现在：
@@ -4408,8 +4418,8 @@ def _adopt_picker_dialog(found):
             except Exception:
                 _can_fix = False
             if _can_fix:
-                ttk.Label(box, text="可到「设置 → 维护 → 槽体检」里点「修复…」"
-                                    "（只补缺的文件，不删不改）",
+                ttk.Label(box, text=T("可到「设置 → 维护 → 槽体检」里点「修复…」"
+                                    "（只补缺的文件，不删不改）"),
                           foreground=_MUTED, wraplength=440, justify="left"
                           ).pack(anchor="w", padx=(22, 0))
         vars_.append((v, r))
@@ -4421,8 +4431,8 @@ def _adopt_picker_dialog(found):
         if not picked:
             # 2026-11-13 用户要求：这里只做「纳入 / 不纳入」的选择，
             # 不记录任何"以后不再提示"的名单 —— 所以一个都没勾就等于不纳入。
-            messagebox.showwarning("没有勾选版本",
-                                   "请勾选要纳入的版本；不想纳入就直接关掉这个窗口。")
+            messagebox.showwarning(T("没有勾选版本"),
+                                   T("请勾选要纳入的版本；不想纳入就直接关掉这个窗口。"))
             return
         res["picked"] = picked
         win.destroy()
@@ -4434,8 +4444,8 @@ def _adopt_picker_dialog(found):
 
     btns = ttk.Frame(win)
     btns.pack(padx=18, pady=(4, 14), fill="x")
-    ttk.Button(btns, text="纳入勾选的", command=on_ok).pack(side="left", padx=(0, 6))
-    ttk.Button(btns, text="取消", command=on_cancel).pack(side="left")
+    ttk.Button(btns, text=T("纳入勾选的"), command=on_ok).pack(side="left", padx=(0, 6))
+    ttk.Button(btns, text=T("取消"), command=on_cancel).pack(side="left")
 
     win.protocol("WM_DELETE_WINDOW", on_cancel)
     win.bind("<Escape>", lambda e: on_cancel())
@@ -4459,7 +4469,7 @@ def scan_and_offer_adopt():
     没勾就什么都不做，下次点还会重新列出来。
     """
     if dsh_adopt is None:
-        messagebox.showerror("无法扫描", "缺少 dsh_adopt.py 模块。")
+        messagebox.showerror(T("无法扫描"), T("缺少 dsh_adopt.py 模块。"))
         return
     try:
         _known = set(os.path.normcase(os.path.abspath(p))
@@ -4507,32 +4517,32 @@ def scan_and_offer_adopt():
                                    "node_modules": _nm}],
                 })
         except Exception as _e:
-            log("[检测] 合并已移出记录时出错（忽略）：%s" % _e)
+            log(T("[检测] 合并已移出记录时出错（忽略）：%s") % _e)
     except Exception as e:
-        log("[检测] 扫描已装版本失败（不影响使用）：%s" % e)
+        log(T("[检测] 扫描已装版本失败（不影响使用）：%s") % e)
         return
 
     if not found:
-        log("[检测] 本机没有发现（新的）管理范围外的 dsh 安装。")
+        log(T("[检测] 本机没有发现（新的）管理范围外的 dsh 安装。"))
         _stale_n = len(_stale_detached_records())
         if _stale_n:
             # 只在日志里留个数：界面上**一个字都不提**已删掉的旧版本，
             # 用户要的是「重新搜索」，不是被告知「我替你忽略了什么」。
-            log("[检测] 忽略 %d 条目录已不存在的移出记录（config 保留，"
-                "移动盘 / 网络盘接回后仍有效）。" % _stale_n)
+            log(T("[检测] 忽略 %d 条目录已不存在的移出记录（config 保留，"
+                "移动盘 / 网络盘接回后仍有效）。") % _stale_n)
         messagebox.showinfo(
-            "没有可纳入的 dsh",
-            "没扫到管理范围外的 dsh。\n\n"
+            T("没有可纳入的 dsh"),
+            T("没扫到管理范围外的 dsh。\n\n"
             "扫描每次都重新查磁盘：已经在槽位里的版本不会重复出现，"
-            "目录已被删掉的旧版本也不会。")
+            "目录已被删掉的旧版本也不会。"))
         return
 
-    log("[检测] 发现 %d 个管理范围外的版本：%s"
+    log(T("[检测] 发现 %d 个管理范围外的版本：%s")
         % (len(found), ", ".join(b.get("version") or "?" for b in found)))
     picked = _adopt_picker_dialog(found)
     if not picked:
         # 取消 / 关窗口 = 这次不纳入，什么都不记
-        log("[检测] 用户没有勾选任何版本，本次不纳入。")
+        log(T("[检测] 用户没有勾选任何版本，本次不纳入。"))
         return
     # 第一次纳入（一个槽都没有）→ 先确认版本放哪（纳入会把程序复制进这个根）。
     # 必须在循环之前问一次：放进循环就会为每个安装各问一遍。
@@ -4552,7 +4562,7 @@ def scan_and_offer_adopt():
         else:
             _adopt_items.append(r)
     if _readd_roots:
-        log("[纳入] %d 个是版本根下的槽目录，按原样接回（不复制）"
+        log(T("[纳入] %d 个是版本根下的槽目录，按原样接回（不复制）")
             % len(_readd_roots))
         _do_readd(_readd_roots)
     for r in _adopt_items:
@@ -4573,7 +4583,7 @@ def _pick_node_source(tag="纳入"):
         if OPS is not None and hasattr(OPS, "_pick_node_exe"):
             node_src = OPS._pick_node_exe(_existing, INSTALL_BASE, HOME) or ""
     except Exception as e:
-        log("[%s] 挑选 node 运行时出错（继续尝试其它来源）：%s" % (tag, e))
+        log(T("[%s] 挑选 node 运行时出错（继续尝试其它来源）：%s") % (tag, e))
     if not node_src:
         for _k in SLOT_KEYS:
             n = VC[_k].get("node_exe") or ""
@@ -4592,10 +4602,10 @@ def _pick_node_source(tag="纳入"):
 def _adopt_one(version, loc):
     """纳入单个安装。容量/耗时都大，走后台线程 + 进度窗。"""
     if OPS is None or dsh_adopt is None:
-        messagebox.showerror("无法纳入", "缺少 dsh_install_ops.py / dsh_adopt.py 模块。")
+        messagebox.showerror(T("无法纳入"), T("缺少 dsh_install_ops.py / dsh_adopt.py 模块。"))
         return
     if not _free_slot_keys():
-        messagebox.showwarning("槽位已满", _slot_full_reason())
+        messagebox.showwarning(T("槽位已满"), _slot_full_reason())
         return
 
     slot_key = _next_free_slot_key()
@@ -4612,7 +4622,7 @@ def _adopt_one(version, loc):
     # detect_existing_installs 的 path 是后者，必须经 _adopt_loc_nm 换过来。
     # （2026-10-30 修：之前直接传 path，体检必然报「这里没有 @deepseek-ai/dsh」。）
     nm_src = _adopt_loc_nm(loc)
-    log("[纳入] 开始：%s <- %s" % (version, nm_src))
+    log(T("[纳入] 开始：%s <- %s") % (version, nm_src))
 
     def work():
         ok, payload, msg = OPS.adopt_existing(
@@ -4630,16 +4640,16 @@ def _adopt_one(version, loc):
     def done(ok, payload, msg):
         msg = (payload or {}).get("message") or msg or ""
         if ok:
-            log("[纳入] 成功：%s" % msg)
-            messagebox.showinfo("纳入成功",
-                                "%s\n\n槽：%s（%s）\n端口：%d\n数据目录：%s\n\n"
-                                "原安装未做任何改动。"
+            log(T("[纳入] 成功：%s") % msg)
+            messagebox.showinfo(T("纳入成功"),
+                                T("%s\n\n槽：%s（%s）\n端口：%d\n数据目录：%s\n\n"
+                                "原安装未做任何改动。")
                                 % (msg, payload["slot_key"], payload["label"],
                                    payload["port"], payload["dsh_home"]))
             _restart_or_tell("槽列表", [payload.get("slot_key")])
         else:
-            log("[纳入] 失败：%s" % msg)
-            messagebox.showerror("纳入失败", msg)
+            log(T("[纳入] 失败：%s") % msg)
+            messagebox.showerror(T("纳入失败"), msg)
 
     prog = _GuiProgress("纳入 dsh %s" % version, done)
     OPS.run_in_thread(work, prog, None)
@@ -4687,7 +4697,7 @@ def install_official_version():
     空槽），中途某个失败不影响后面的，全部结束后只重启一次管理器。
     """
     if OPS is None or dsh_adopt is None:
-        messagebox.showerror("无法安装", "缺少 dsh_install_ops.py / dsh_adopt.py 模块。")
+        messagebox.showerror(T("无法安装"), T("缺少 dsh_install_ops.py / dsh_adopt.py 模块。"))
         return
     # 可用槽位 = 没登记、且磁盘上没有同名目录占着的编号（见 _free_slot_keys）
     _free_keys = _free_slot_keys()
@@ -4701,10 +4711,10 @@ def install_official_version():
                         "它们占着编号。想接着用就点「扫描已装 dsh 并纳入」接回来；"
                         "不要了就把对应目录删掉，编号会自动空出来。"
                         % "、".join("dsh%s" % k.upper() for k in _occ))
-        messagebox.showwarning("槽位已满",
-                               "管理器最多管理 %d 个版本，当前已有 %d 个：%s\n\n"
+        messagebox.showwarning(T("槽位已满"),
+                               T("管理器最多管理 %d 个版本，当前已有 %d 个：%s\n\n"
                                "要装新版本，请先用「设置 → 版本管理 → 卸载 / 移出管理」卸掉不用的槽。"
-                               "%s"
+                               "%s")
                                % (MAX_SLOTS, len(SLOT_KEYS), ", ".join(SLOT_KEYS),
                                   _occ_txt))
         return
@@ -4714,36 +4724,36 @@ def install_official_version():
         return
 
     win = tk.Toplevel(root)
-    win.title("安装官方版 dsh")
+    win.title(T("安装官方版 dsh"))
     win.transient(root)
     win.resizable(False, False)
     _apply_icon(win)      # 安装对话框也要有图标
-    ttk.Label(win, text="安装官方版 dsh（一次最多 %d 个）" % free,
+    ttk.Label(win, text=T("安装官方版 dsh（一次最多 %d 个）") % free,
               font=("Microsoft YaHei UI", 10, "bold")).pack(padx=20, pady=(16, 4))
-    ttk.Label(win, text="从下面选版本：Ctrl 点选多个 / Shift 连选；"
-                        "也可以直接在下面手填。", foreground=_MUTED
+    ttk.Label(win, text=T("从下面选版本：Ctrl 点选多个 / Shift 连选；"
+                        "也可以直接在下面手填。"), foreground=_MUTED
               ).pack(padx=20, pady=(0, 6))
 
     ver_var = tk.StringVar(value="")
     _picker = _build_version_picker(win, ver_var, height=9, width=44, multi=True)
     _picker["frame"].pack(padx=20, pady=(0, 10), fill="both", expand=True)
 
-    ttk.Label(win, text="或手动输入版本号（多个用逗号 / 空格分隔；也可填 latest / next）：",
+    ttk.Label(win, text=T("或手动输入版本号（多个用逗号 / 空格分隔；也可填 latest / next）："),
               foreground=_MUTED).pack(anchor="w", padx=20)
     ent = ttk.Entry(win, textvariable=ver_var, width=44)
     ent.pack(padx=20, pady=(2, 6), anchor="w")
     ent.focus_set()
 
-    ttk.Label(win, text="将从官方 npm registry 下载安装；需要 Node.js ≥ 22.19。\n"
-                        "每个版本装进一个独立的空槽（自带数据目录与端口），不影响已有版本。",
+    ttk.Label(win, text=T("将从官方 npm registry 下载安装；需要 Node.js ≥ 22.19。\n"
+                        "每个版本装进一个独立的空槽（自带数据目录与端口），不影响已有版本。"),
               foreground=_MUTED, wraplength=440, justify="left"
               ).pack(padx=20, pady=(0, 12))
 
     def on_ok(_evt=None):
         raw = (ver_var.get() or "").strip()
         if not raw:
-            messagebox.showwarning("还没选版本",
-                                   "请在上面的列表里点一个版本，或在输入框里填版本号。")
+            messagebox.showwarning(T("还没选版本"),
+                                   T("请在上面的列表里点一个版本，或在输入框里填版本号。"))
             return
         # dist-tag（latest/next）是 npm 的合法入参，不能当成"格式错误"打回去
         vers = []
@@ -4753,22 +4763,22 @@ def install_official_version():
                 continue
             ver = dsh_adopt.normalize_version(tok)
             if not ver:
-                messagebox.showerror("版本号格式不对",
-                                     "「%s」不是有效的官方版本号。\n\n%s"
+                messagebox.showerror(T("版本号格式不对"),
+                                     T("「%s」不是有效的官方版本号。\n\n%s")
                                      % (tok, dsh_adopt.version_hint()))
                 return
             if ver != tok:
-                log("[安装] 版本号按官方格式修正：%s -> %s" % (tok, ver))
+                log(T("[安装] 版本号按官方格式修正：%s -> %s") % (tok, ver))
             if ver.lower() not in [v.lower() for v in vers]:
                 vers.append(ver)
         if not vers:
-            messagebox.showwarning("还没选版本", "没有解析出任何版本号。")
+            messagebox.showwarning(T("还没选版本"), T("没有解析出任何版本号。"))
             return
         if len(vers) > free:
             messagebox.showwarning(
-                "槽位装不下",
-                "本次填了 %d 个版本，但只剩 %d 个空槽（上限 %d）。\n\n"
-                "请减少几个，或先卸载不用的槽。" % (len(vers), free, MAX_SLOTS))
+                T("槽位装不下"),
+                T("本次填了 %d 个版本，但只剩 %d 个空槽（上限 %d）。\n\n"
+                "请减少几个，或先卸载不用的槽。") % (len(vers), free, MAX_SLOTS))
             return
         try:
             win.destroy()
@@ -4778,9 +4788,9 @@ def install_official_version():
 
     btns = ttk.Frame(win)
     btns.pack(padx=20, pady=(0, 16))
-    ttk.Button(btns, text="安装", style="Green.TButton",
+    ttk.Button(btns, text=T("安装"), style="Green.TButton",
                command=on_ok).pack(side="left", padx=4)
-    ttk.Button(btns, text="取消", command=win.destroy).pack(side="left", padx=4)
+    ttk.Button(btns, text=T("取消"), command=win.destroy).pack(side="left", padx=4)
     ent.bind("<Return>", on_ok)
     win.bind("<Escape>", lambda e: win.destroy())
     win.grab_set()
@@ -4797,12 +4807,12 @@ def _install_queue(versions):
     """
     total = len(versions)
     results = []
-    log("[安装] 队列：共 %d 个版本 —— %s" % (total, "、".join(versions)))
+    log(T("[安装] 队列：共 %d 个版本 —— %s") % (total, "、".join(versions)))
     # 编号为什么跳号，当场说清楚（用户反馈「为什么会有 dshV3-2」的直接答案）
     _occ = _occupied_unmanaged_keys()
     if _occ:
-        log("[安装] 这些编号的目录还在磁盘上、但不在管理里：%s —— 本次会跳过它们"
-            "（不删你的目录；想接着用就点「扫描已装 dsh 并纳入」）"
+        log(T("[安装] 这些编号的目录还在磁盘上、但不在管理里：%s —— 本次会跳过它们"
+            "（不删你的目录；想接着用就点「扫描已装 dsh 并纳入」）")
             % "、".join("dsh%s" % k.upper() for k in _occ))
 
     def finish():
@@ -4819,10 +4829,10 @@ def _install_queue(versions):
         body = "\n".join(lines)
         if badr:
             messagebox.showwarning(
-                "安装结束（成功 %d / 失败 %d）" % (len(okr), len(badr)),
-                "%s\n\n失败的版本可以直接再点「安装官方版 dsh」重试。" % body)
+                T("安装结束（成功 %d / 失败 %d）") % (len(okr), len(badr)),
+                T("%s\n\n失败的版本可以直接再点「安装官方版 dsh」重试。") % body)
         else:
-            messagebox.showinfo("安装成功", body)
+            messagebox.showinfo(T("安装成功"), body)
         if okr:
             # payload 是 _do_install.done 的局部变量，这个作用域里根本不存在。
             # 2026-11-12 实测：装完 v2 弹了「安装成功」，然后这里 NameError，
@@ -4862,22 +4872,22 @@ def _do_install(version, slot_key, on_done=None, index=1, total=1):
     `on_done(ok, msg)` 非空时由调用方接管收尾（一次装多个时用：接着装下一个），
     为空则沿用单装行为 —— 弹框 + 重启管理器。
     """
-    log("[安装] 开始：官方版 %s -> 槽 %s" % (version, slot_key))
+    log(T("[安装] 开始：官方版 %s -> 槽 %s") % (version, slot_key))
 
     def done(ok, payload, msg):
         msg = (payload or {}).get("message") or msg or ""
         if ok:
-            log("[安装] 成功：%s" % msg)
+            log(T("[安装] 成功：%s") % msg)
         else:
-            log("[安装] 失败：%s" % msg.replace("\n", " | "))
+            log(T("[安装] 失败：%s") % msg.replace("\n", " | "))
         if on_done:
             on_done(ok, msg)
             return
         if ok:
-            messagebox.showinfo("安装成功", msg)
+            messagebox.showinfo(T("安装成功"), msg)
             _restart_or_tell("槽列表", _installed_keys_from(payload))
         else:
-            messagebox.showerror("安装失败", msg)
+            messagebox.showerror(T("安装失败"), msg)
 
     title = ("安装官方版 %s（%d/%d）" % (version, index, total)
              if total > 1 else "安装官方版 %s" % version)
@@ -4940,7 +4950,7 @@ def _actions_enabled(enabled, keep_run=False):
 def _slot_brief(key):
     """一行摘要：v1（dshV1，端口 4080，实装 0.1.5-rc.2）· 运行中"""
     cfg = VC[key]
-    ver = INSTALLED.get(key) or "未知"
+    ver = INSTALLED.get(key) or T("未知")
     running = port_open(cfg["port"]) or proc_alive(procs.get(key))
     return "%s（%s，端口 %d，实装 %s）· %s" % (
         key, cfg["label"], cfg["port"], ver, "运行中" if running else "已停止")
@@ -4979,9 +4989,9 @@ def uninstall_versions_dialog():
     移出不是破坏性动作，但沿用同一个单选，省得两套选择逻辑互相干扰。
     """
     if UNINST is None or OPS is None:
-        messagebox.showerror("无法卸载",
-                             "缺少 dsh_uninstall_ops.py / dsh_install_ops.py 模块，"
-                             "请确认管理器目录完整。")
+        messagebox.showerror(T("无法卸载"),
+                             T("缺少 dsh_uninstall_ops.py / dsh_install_ops.py 模块，"
+                             "请确认管理器目录完整。"))
         return
     if not SLOT_KEYS:
         # 零槽时本窗口会直接返回，但「已移出管理」按钮画在窗口里 ——
@@ -4989,32 +4999,32 @@ def uninstall_versions_dialog():
         _det_live = _live_detached_records()
         if _det_live:
             messagebox.showinfo(
-                "没有可卸载的版本",
-                "当前管理器没有管理任何 dsh 版本。\n\n"
+                T("没有可卸载的版本"),
+                T("当前管理器没有管理任何 dsh 版本。\n\n"
                 "不过磁盘上还有 %d 个移出过、仍可接回的版本 ——\n"
-                "点「扫描已装 dsh 并纳入」就能重新发现并原样接回（不复制）。"
+                "点「扫描已装 dsh 并纳入」就能重新发现并原样接回（不复制）。")
                 % len(_det_live))
         else:
             messagebox.showinfo(
-                "没有可卸载的版本",
-                "当前管理器没有管理任何 dsh 版本。\n\n"
+                T("没有可卸载的版本"),
+                T("当前管理器没有管理任何 dsh 版本。\n\n"
                 "先到「设置 → 版本管理 → 安装官方版 dsh」装一个版本，\n"
-                "或用「扫描已装 dsh 并纳入」把已有的接进来。")
+                "或用「扫描已装 dsh 并纳入」把已有的接进来。"))
         return
 
     win = tk.Toplevel(root)
-    win.title("卸载 / 移出管理")
+    win.title(T("卸载 / 移出管理"))
     win.transient(root)
     win.resizable(False, False)
     _apply_icon(win)
-    ttk.Label(win, text="卸载 = 删掉它；移出管理 = 放它自己跑",
+    ttk.Label(win, text=T("卸载 = 删掉它；移出管理 = 放它自己跑"),
               font=("Microsoft YaHei UI", 10, "bold")).pack(padx=20, pady=(16, 4))
-    ttk.Label(win, text="两个动作改的都是 config.json；区别在磁盘上的文件动没动。",
+    ttk.Label(win, text=T("两个动作改的都是 config.json；区别在磁盘上的文件动没动。"),
               foreground=_MUTED).pack(padx=20, pady=(0, 8))
 
     pick = tk.StringVar(value=SLOT_KEYS[0] if SLOT_KEYS else "")
     if SLOT_KEYS:
-        box = ttk.LabelFrame(win, text="在管的版本槽（一次一个）", padding=(10, 6))
+        box = ttk.LabelFrame(win, text=T("在管的版本槽（一次一个）"), padding=(10, 6))
         box.pack(padx=20, pady=(0, 8), fill="both", expand=True)
         for key in SLOT_KEYS:
             ttk.Radiobutton(box, text=_slot_brief(key), value=key, variable=pick
@@ -5022,7 +5032,7 @@ def uninstall_versions_dialog():
 
     backup_root = os.path.join(INSTALL_BASE, "dsh备份")
     ttk.Label(win, justify="left", wraplength=470, foreground=_MUTED,
-              text=("【卸载】停进程 → 备份 → 删除整个槽目录 → 从 config 移除\n"
+              text=(T("【卸载】停进程 → 备份 → 删除整个槽目录 → 从 config 移除\n"
                     "  备份到 %s\\<槽>-userdata-<时间>\\：.dsh-home（会话/设置/凭据/\n"
                     "  插件配置）+ 插件清单 + 版本信息；不含 node_modules 与 node。\n"
                     "  ⚠ 你自己放进槽目录的东西（笔记、补丁、下载的文件）也会一起删掉且不进备份。\n"
@@ -5033,13 +5043,13 @@ def uninstall_versions_dialog():
                     "  · 之后点「扫描已装 dsh 并纳入」还能重新发现它，\n"
                     "    原样接回（端口沿用、不复制文件）\n"
                     "  · 正在运行的槽要先点卡片上的「停止」才允许移出\n"
-                    "  · 全部移出后安装根解锁，可以换到别的位置再装 / 纳入新的 dsh"
+                    "  · 全部移出后安装根解锁，可以换到别的位置再装 / 纳入新的 dsh")
                     % backup_root)).pack(padx=20, pady=(0, 10), anchor="w")
 
     def on_ok():
         key = pick.get()
         if not key or key not in SLOT_KEYS:
-            messagebox.showwarning("还没选版本", "请选中一个要卸载的版本槽。")
+            messagebox.showwarning(T("还没选版本"), T("请选中一个要卸载的版本槽。"))
             return
         keys = [key]
         detail = "\n".join("  · " + _slot_brief(k) for k in keys)
@@ -5058,14 +5068,14 @@ def uninstall_versions_dialog():
                       "如果里面有你要的东西，请先自己拷走。"
                       % (len(_foreign), _shown))
         if not messagebox.askyesno(
-                "确认卸载",
-                "即将卸载这个版本：\n\n%s\n\n"
+                T("确认卸载"),
+                T("即将卸载这个版本：\n\n%s\n\n"
                 "整个槽目录会被删除 —— 包括你自己放进这个槽目录里的任何文件。\n"
                 "有备份的只有：.dsh-home（会话/凭据/插件配置）、槽的 package.json 与"
                 "版本信息。\n%s\n"
                 "备份会放到：\n%s\n\n"
                 "只想让它脱离管理、文件都留着？请按「取消」，改用「移出管理」。\n\n"
-                "确定继续？" % (detail, _extra, backup_root), default="no", icon="warning"):
+                "确定继续？") % (detail, _extra, backup_root), default="no", icon="warning"):
             return
         try:
             win.destroy()
@@ -5076,19 +5086,19 @@ def uninstall_versions_dialog():
     def on_detach():
         key = pick.get()
         if not key or key not in SLOT_KEYS:
-            messagebox.showwarning("还没选版本", "请选中一个要移出的版本槽。")
+            messagebox.showwarning(T("还没选版本"), T("请选中一个要移出的版本槽。"))
             return
         cfgk = VC.get(key) or {}
         if not messagebox.askyesno(
-                "确认移出管理",
-                "即将把这个版本移出管理：\n\n  · %s\n\n"
+                T("确认移出管理"),
+                T("即将把这个版本移出管理：\n\n  · %s\n\n"
                 "磁盘上的文件一个都不会动 —— 槽目录、node_modules、node、\n"
                 ".dsh-home（会话/凭据/插件配置）全都原样保留。\n\n"
                 "移出后：\n"
                 "  · 管理器不再显示它、也不再管它的进程；\n"
                 "  · 直接双击 %s\\dsh.bat 就能启动它；\n"
                 "  · 它会被记进「已移出」列表，随时可以重新纳入。\n\n"
-                "确定继续？" % (_slot_brief(key), cfgk.get("label") or key),
+                "确定继续？") % (_slot_brief(key), cfgk.get("label") or key),
                 default="no"):
             return
         try:
@@ -5099,13 +5109,13 @@ def uninstall_versions_dialog():
 
     btns = ttk.Frame(win)
     btns.pack(padx=20, pady=(0, 16))
-    ttk.Button(btns, text="卸载选中", style="Red.TButton",
+    ttk.Button(btns, text=T("卸载选中"), style="Red.TButton",
                command=on_ok).pack(side="left", padx=4)
-    _b_det = ttk.Button(btns, text="移出管理（不删文件）", command=on_detach)
+    _b_det = ttk.Button(btns, text=T("移出管理（不删文件）"), command=on_detach)
     _b_det.pack(side="left", padx=4)
     if not SLOT_KEYS:
         _b_det.state(["disabled"])
-    ttk.Button(btns, text="取消", command=win.destroy).pack(side="left", padx=4)
+    ttk.Button(btns, text=T("取消"), command=win.destroy).pack(side="left", padx=4)
     # 2026-11-12：不再有「已移出管理」独立入口 —— 同目录下的槽，点
     # 「扫描已装 dsh 并纳入」就能重新发现并原样接回（见 scan_and_offer_adopt
     # 的 _readd_roots 分流）。界面少一个概念，用户也不用理解"记录"这回事。
@@ -5117,18 +5127,18 @@ def uninstall_versions_dialog():
 def _do_uninstall(keys):
     """后台卸载若干槽。进度窗在主线程回调 done 一次（不重复调）。"""
     _actions_enabled(False)
-    log("[卸载] 开始：%s" % ", ".join(keys))
+    log(T("[卸载] 开始：%s") % ", ".join(keys))
 
     def done(ok, payload, msg):
         _actions_enabled(True)
         msg = (payload or {}).get("message") or msg or ""
         if ok:
-            log("[卸载] 完成：%s" % msg.replace("\n", " | "))
-            messagebox.showinfo("卸载完成", msg)
+            log(T("[卸载] 完成：%s") % msg.replace("\n", " | "))
+            messagebox.showinfo(T("卸载完成"), msg)
             _restart_or_tell("槽列表")
         else:
-            log("[卸载] 未完成：%s" % msg.replace("\n", " | "))
-            messagebox.showerror("卸载未完成", msg or "原因未知")
+            log(T("[卸载] 未完成：%s") % msg.replace("\n", " | "))
+            messagebox.showerror(T("卸载未完成"), msg or "原因未知")
 
     # 进度窗必须先建并把 prog 传进 uninstall_slots：删 node_modules 在机械盘上
     # 要几十秒，没有 step 回调窗口就一直停在「准备中…」——2026-10-29 实测被当成
@@ -5155,18 +5165,18 @@ def _do_detach(keys):
     正在跑的槽**拒绝移出**。移出后管理器就不再跟踪它，用户会失去「停止」入口；
     卸载可以先杀再删，移出什么都不动，所以只能要求先停。"""
     _actions_enabled(False)
-    log("[移出] 开始：%s" % ", ".join(keys))
+    log(T("[移出] 开始：%s") % ", ".join(keys))
 
     def done(ok, payload, msg):
         _actions_enabled(True)
         msg = (payload or {}).get("message") or msg or ""
         if ok:
-            log("[移出] 完成：%s" % msg.replace("\n", " | "))
-            messagebox.showinfo("已移出管理", msg)
+            log(T("[移出] 完成：%s") % msg.replace("\n", " | "))
+            messagebox.showinfo(T("已移出管理"), msg)
             _restart_or_tell("槽列表")
         else:
-            log("[移出] 未完成：%s" % msg.replace("\n", " | "))
-            messagebox.showerror("移出未完成", msg or "原因未知")
+            log(T("[移出] 未完成：%s") % msg.replace("\n", " | "))
+            messagebox.showerror(T("移出未完成"), msg or "原因未知")
 
     prog = _GuiProgress("移出管理", done)
 
@@ -5214,14 +5224,14 @@ def _do_readd(roots):
     端口原样保留 —— 槽里的 bat 已经把端口写死在 `--port` 里，改端口就得重写三件
     bat，那不是"重新纳入"该干的事（ops 层会在端口已被别的槽占用时给出警告）。"""
     _actions_enabled(False)
-    log("[纳入] 重新纳入已移出的槽：%s" % ", ".join(roots))
+    log(T("[纳入] 重新纳入已移出的槽：%s") % ", ".join(roots))
 
     def done(ok, payload, msg):
         _actions_enabled(True)
         msg = (payload or {}).get("message") or msg or ""
         if ok:
-            log("[纳入] 完成：%s" % msg.replace("\n", " | "))
-            messagebox.showinfo("已重新纳入", msg)
+            log(T("[纳入] 完成：%s") % msg.replace("\n", " | "))
+            messagebox.showinfo(T("已重新纳入"), msg)
             _restart_or_tell("槽列表", _installed_keys_from(payload))
             # 只在**必要时**重写三件 bat（2026-11-14）：
             #   · 端口被换过 → bat 里的 --port 必须跟着改，否则一启动就撞车；
@@ -5233,13 +5243,13 @@ def _do_readd(roots):
             if _need_bats:
                 try:
                     made, failed, skipped = _rebuild_bats()
-                    log("[纳入] 三件 bat 有缺失或端口变了，已重写：成功 %d，失败 %d，跳过 %d"
+                    log(T("[纳入] 三件 bat 有缺失或端口变了，已重写：成功 %d，失败 %d，跳过 %d")
                         % (len(made), len(failed), len(skipped)))
                 except Exception as e:
-                    log("[纳入] 重写 bat 失败（可点「设置 → 维护 → 生成 bat」）：%s" % e)
+                    log(T("[纳入] 重写 bat 失败（可点「设置 → 维护 → 生成 bat」）：%s") % e)
         else:
-            log("[纳入] 未完成：%s" % msg.replace("\n", " | "))
-            messagebox.showerror("重新纳入未完成", msg or "原因未知")
+            log(T("[纳入] 未完成：%s") % msg.replace("\n", " | "))
+            messagebox.showerror(T("重新纳入未完成"), msg or "原因未知")
 
     prog = _GuiProgress("重新纳入", done)
 
@@ -5446,7 +5456,7 @@ def _detect_worker():
                 # 以前静默 pass：探测一直失败时，状态行就永远没有端口
                 # （2026-11-12 二次反馈的排查点）。首次失败记一行，避免刷屏。
                 if not (_DETECT.get(key) or {}).get("ts"):
-                    log("[探测] %s 端口探测失败（会重试）：%s" % (key, _e))
+                    log(T("[探测] %s 端口探测失败（会重试）：%s") % (key, _e))
         time.sleep(0.8)
 
 
@@ -5455,19 +5465,19 @@ def _log_state_change(key, prev, state, cfg, listen, ext_pid, tracked_p):
     便于以后用 Agent 复盘 运行/外部运行/冲突/停止 的切换。"""
     pid = (tracked_p.pid if (tracked_p is not None and tracked_p.poll() is None) else None)
     if state == "running_tracked":
-        log("[%s] 状态变化: 运行中（本管理器启动）pid=%s 端口=%d" % (key, pid, cfg["port"]))
+        log(T("[%s] 状态变化: 运行中（本管理器启动）pid=%s 端口=%d") % (key, pid, cfg["port"]))
     elif state == "running_external":
-        log("[%s] 状态变化: 运行中（外部/上一会话启动，本管理器未跟踪）pid=%s 端口=%d"
+        log(T("[%s] 状态变化: 运行中（外部/上一会话启动，本管理器未跟踪）pid=%s 端口=%d")
             % (key, ext_pid, cfg["port"]))
     elif state == "starting":
-        log("[%s] 状态变化: 启动中 pid=%s 端口=%d" % (key, pid, cfg["port"]))
+        log(T("[%s] 状态变化: 启动中 pid=%s 端口=%d") % (key, pid, cfg["port"]))
     elif state == "external_conflict":
         who = _pids_on_port(cfg["port"])
-        log("[%s] 状态变化: 端口 %d 被非 dsh 进程占用 pid=%s"
-            "\n     点「停止」可看到占用者是谁；管理器不会自动结束别人的程序"
-            % (key, cfg["port"], ",".join(str(x) for x in who) or "未知"))
+        log(T("[%s] 状态变化: 端口 %d 被非 dsh 进程占用 pid=%s"
+            "\n     点「停止」可看到占用者是谁；管理器不会自动结束别人的程序")
+            % (key, cfg["port"], ",".join(str(x) for x in who) or T("未知")))
     elif state == "stopped":
-        log("[%s] 状态变化: 已停止 端口=%d" % (key, cfg["port"]))
+        log(T("[%s] 状态变化: 已停止 端口=%d") % (key, cfg["port"]))
 
 def _refresh_one(key):
     """刷新**单个**槽的状态行。
@@ -5493,26 +5503,26 @@ def _refresh_one(key):
         # 改成先按「已停止 :端口」显示 —— 端口至少是可见的，
         # 0.8 秒内探测线程会用真实结果覆盖。
         if alive:
-            status_vars[key].set("启动中  pid=%s  :%d  …" % (p.pid, cfg["port"])
+            status_vars[key].set(T("启动中  pid=%s  :%d  …") % (p.pid, cfg["port"])
                                  + _health_mark(key))
         else:
-            status_vars[key].set("已停止  :%d" % cfg["port"] + _health_mark(key))
+            status_vars[key].set(T("已停止  :%d") % cfg["port"] + _health_mark(key))
         try: status_lbls[key].configure(foreground=_MUTED)
         except Exception: pass
         return
     listen, ext_pid = d.get("listen"), d.get("ext")
     if alive and listen:
-        state, s = "running_tracked", "运行中  pid=%s  :%d  ✓" % (p.pid, cfg["port"])
+        state, s = "running_tracked", T("运行中  pid=%s  :%d  ✓") % (p.pid, cfg["port"])
     elif alive:
-        state, s = "starting", "启动中  pid=%s  :%d  …" % (p.pid, cfg["port"])
+        state, s = "starting", T("启动中  pid=%s  :%d  …") % (p.pid, cfg["port"])
     elif listen and ext_pid is not None:
         # 关键修正：外部（或上一会话）启动的同版本 dsh 仍在跑 —— 直接显示「运行中」，
         # 不再标「外部程序打开」。只有端口被非 dsh 进程占了才报冲突。
-        state, s = "running_external", "运行中  pid=%s  :%d  ✓" % (ext_pid, cfg["port"])
+        state, s = "running_external", T("运行中  pid=%s  :%d  ✓") % (ext_pid, cfg["port"])
     elif listen:
-        state, s = "external_conflict", "端口被非 dsh 程序占用 :%d（点「停止」看是谁）" % cfg["port"]
+        state, s = "external_conflict", T("端口被非 dsh 程序占用 :%d（点「停止」看是谁）") % cfg["port"]
     else:
-        state, s = "stopped", "已停止  :%d" % cfg["port"]
+        state, s = "stopped", T("已停止  :%d") % cfg["port"]
         if procs[key] is not None:
             try:
                 procs[key].wait(timeout=0)     # 回收句柄，避免 Popen 一直挂着
@@ -5537,7 +5547,7 @@ def refresh(once=False):
         try:
             _refresh_one(key)
         except Exception as e:
-            log("[%s] 状态刷新出错（只跳过这一个槽）：%s" % (key, e))
+            log(T("[%s] 状态刷新出错（只跳过这一个槽）：%s") % (key, e))
     # 插件/配置漂移：每 7 次刷新（约 10 秒）比对一次，只读几个小文件
     _DRIFT_TICK["n"] += 1
     if _DRIFT_TICK["n"] % 7 == 0:
@@ -5649,7 +5659,7 @@ def _log_state_snapshot():
     便于以后用 Agent 复盘「管理器重启时 DSH 在不在跑、谁在跑」。
     2026-09-27 改为消费后台探测线程（_DETECT）的现成结果 —— 以前在这里逐槽
     直跑 netstat+CIM，窗口出现前白卡 6 秒；现在由调度方在探测 warmed 后再调。"""
-    log("=== 启动快照：各槽运行态 ===")
+    log(T("=== 启动快照：各槽运行态 ==="))
     for key in SLOT_KEYS:
         cfg = VC[key]
         d = _DETECT.get(key) or {}
@@ -5662,13 +5672,13 @@ def _log_state_snapshot():
         elif listen:
             who = "端口被非 dsh 进程占用"
         else:
-            who = "未运行"
-        log("[%s] 端口=%d 监听=%s 判定=%s" % (key, cfg["port"], listen, who))
-    log("=== 启动快照结束 ===")
+            who = T("未运行")
+        log(T("[%s] 端口=%d 监听=%s 判定=%s") % (key, cfg["port"], listen, who))
+    log(T("=== 启动快照结束 ==="))
     _log_orphan_shells()
 
 def on_close():
-    log("=== 管理器关闭 (pid=%d) ===" % os.getpid())
+    log(T("=== 管理器关闭 (pid=%d) ===") % os.getpid())
     # 显式保留所有运行中的 dsh：关闭管理器【不会】连带关闭它启动 / 跟踪的 dsh。
     # 原因：subprocess.Popen 默认不绑定进程组，pythonw 无控制台也不会向子进程发
     # Ctrl-C，子进程在父进程退出后继续存活。这里只做日志确认，便于以后排查。
@@ -5677,11 +5687,11 @@ def on_close():
         ext = _dsh_pid_on_port(key)
         tracked = procs.get(key)
         if proc_alive(tracked):
-            log("[%s] 关闭时保留运行中的 dsh（本管理器跟踪 pid=%s 端口=%d）" % (key, tracked.pid, cfg["port"]))
+            log(T("[%s] 关闭时保留运行中的 dsh（本管理器跟踪 pid=%s 端口=%d）") % (key, tracked.pid, cfg["port"]))
         elif ext is not None:
-            log("[%s] 关闭时保留运行中的 dsh（外部 pid=%s 端口=%d）" % (key, ext, cfg["port"]))
+            log(T("[%s] 关闭时保留运行中的 dsh（外部 pid=%s 端口=%d）") % (key, ext, cfg["port"]))
         else:
-            log("[%s] 关闭时无运行中的 dsh（端口=%d）" % (key, cfg["port"]))
+            log(T("[%s] 关闭时无运行中的 dsh（端口=%d）") % (key, cfg["port"]))
     try:
         if LOG_FH:
             LOG_FH.close()
@@ -5692,7 +5702,7 @@ def on_close():
 root.protocol("WM_DELETE_WINDOW", on_close)
 
 # 启动日志
-log("=== 管理器启动 pid=%d ===" % os.getpid())
+log(T("=== 管理器启动 pid=%d ===") % os.getpid())
 
 # 权限自检：用**真实能力探测**代替 IsUserAnAdmin() 代理判断
 # ---------------------------------------------------------------------------
@@ -5742,7 +5752,7 @@ def _probe_kill_capability():
     except Exception:
         cand = []
     if not cand:
-        # 没有由本管理器拉起的 dsh 在跑 → 无从实测，返回"未知"而不是"不可用"。
+        # 没有由本管理器拉起的 dsh 在跑 → 无从实测，返回「未知」而不是「不可用」。
         # 关键点：**不回退到父进程**（见上面说明）。
         return None
     try:
@@ -5766,7 +5776,7 @@ def _probe_kill_capability():
     return False
 
 def _cap_txt(v):
-    return {True: "可用", False: "不可用"}.get(v, "未知")
+    return {True: T("可用"), False: T("不可用")}.get(v, T("未知"))
 
 def _start_capability_check():
     def _worker():
@@ -5787,7 +5797,7 @@ def _start_capability_check():
             root.after(300, _poll); return
         _read_ok, _kill_ok = _CAPS["read"], _CAPS["kill"]
         # 只记日志，**不弹任何框**。理由见下。
-        log("[权限] 能力实测：读命令行=%s，结束进程=%s"
+        log(T("[权限] 能力实测：读命令行=%s，结束进程=%s")
             % (_cap_txt(_read_ok), _cap_txt(_kill_ok)))
         # ── 2026-10-31：移除启动时的"建议以管理员身份运行"弹框 ────────────
         # 本产品的定位是「不注册环境变量、轻量、严谨、靠谱」，用户不该在启动时
@@ -5800,11 +5810,11 @@ def _start_capability_check():
         # 所以：能力状态只进日志 + 状态栏，真遇到「停止没反应」时再在**那一刻**
         # 给出针对性提示（见 kill_one 的失败分支），不做启动期打扰。
         if _read_ok is False:
-            log("[权限] 读不到进程命令行 → 端口占用者可能显示不出程序名；"
-                "已降级为 Get-Process，不影响启停主流程")
+            log(T("[权限] 读不到进程命令行 → 端口占用者可能显示不出程序名；"
+                "已降级为 Get-Process，不影响启停主流程"))
         if _kill_ok is False:
-            log("[权限] 无法结束同用户进程（罕见：多半是安全软件拦截）→ "
-                "「停止」可能无效；此时会由停止动作本身报错，不再启动期打扰")
+            log(T("[权限] 无法结束同用户进程（罕见：多半是安全软件拦截）→ "
+                "「停止」可能无效；此时会由停止动作本身报错，不再启动期打扰"))
 
     root.after(300, _poll)
 
@@ -5814,13 +5824,13 @@ _start_capability_check()
 # "打开浏览器 -> ...?token=..." 之类）：启动时全量就地掩码一次。
 _n_scrubbed = _scrub_existing_log()
 if _n_scrubbed:
-    log("已就地掩码历史日志里的 %d 个 token（等长覆盖，文件长度不变）" % _n_scrubbed)
+    log(T("已就地掩码历史日志里的 %d 个 token（等长覆盖，文件长度不变）") % _n_scrubbed)
 log("install_base = %s" % INSTALL_BASE)
 log("NPM_GLOBAL = %s" % (NPM_GLOBAL or "(未探测到，<npm_global> 占位符不可用)"))
 for key in SLOT_KEYS:
     cfg = VC[key]
     log("[%s] label=%s" % (key, cfg["label"]))
-    log("[%s] 实装版本=%s" % (key, INSTALLED.get(key) or "未知（读 package.json 失败，可能未装好）"))
+    log(T("[%s] 实装版本=%s") % (key, INSTALLED.get(key) or "未知（读 package.json 失败，可能未装好）"))
     log("[%s] cmd  = %s" % (key, " ".join(_build_cmd(key))))
     log("[%s] DSH_HOME=%s  port=%d  browser=%s"
         % (key, cfg["dsh_home"] or "(默认 ~/.dsh)", cfg["port"], cfg["browser"]))
@@ -5829,7 +5839,7 @@ for key in SLOT_KEYS:
     # 「哪个槽和别的槽不一样」。启动失败时的弹框在 _start_slot 里另有一套。
     if OPS is not None and hasattr(OPS, "slot_shape_problems"):
         for _lv, _t in OPS.slot_shape_problems(cfg, INSTALL_BASE, HOME, BASE_DIR):
-            log("[%s] 槽结构%s：%s" % (key, _lv, _t))
+            log(T("[%s] 槽结构%s：%s") % (key, _lv, _t))
 # 启动快照改为延迟执行：等后台探测线程出第一批数据（一轮 ≈ 3-4 秒），
 # 纯写日志零开销；窗口在此之前早已显示。
 root.after(6000, _log_state_snapshot)
@@ -5888,25 +5898,25 @@ def _build_fresh_guide():
         _f = ttk.Frame(_w, style="Card.TFrame")
         _f.pack(fill="both", expand=True)
 
-        ttk.Label(_f, text="还没有安装 dsh",
+        ttk.Label(_f, text=T("还没有安装 dsh"),
                   font=("Microsoft YaHei UI", 14, "bold"), style="Card.TLabel"
                   ).pack(anchor="w", pady=(0, 8))
         ttk.Label(_f,
-                  text=("点下面的「安装 dsh」选一个版本号就会自动下载并配好隔离环境；\n"
+                  text=(T("点下面的「安装 dsh」选一个版本号就会自动下载并配好隔离环境；\n"
                         "如果你机器上已经装过 dsh，点「扫描并纳入」把它接进来管理。\n"
-                        "每个版本各自独立的数据目录、端口与 node 运行时，互不影响。"),
+                        "每个版本各自独立的数据目录、端口与 node 运行时，互不影响。")),
                   style="Card.TLabel", justify="left", wraplength=560
                   ).pack(anchor="w", pady=(0, 16))
 
         _b = ttk.Frame(_f, style="Card.TFrame")
         _b.pack(anchor="w")
-        ttk.Button(_b, text="安装 dsh", style="Brand.TButton",
+        ttk.Button(_b, text=T("安装 dsh"), style="Brand.TButton",
                    command=install_official_version).pack(side="left", padx=(0, 8))
-        ttk.Button(_b, text="扫描并纳入",
+        ttk.Button(_b, text=T("扫描并纳入"),
                    command=lambda: scan_and_offer_adopt()
                    ).pack(side="left")
     except Exception as e:
-        log("[引导] 零槽引导构建失败（不影响使用，可在「设置 → 版本管理」里安装）：%s" % e)
+        log(T("[引导] 零槽引导构建失败（不影响使用，可在「设置 → 版本管理」里安装）：%s") % e)
 
 
 def _ensure_slots_visible(new_keys):
@@ -6085,33 +6095,33 @@ def _ask_install_root():
     """
     res = {"ok": False}
     win = tk.Toplevel(root)
-    win.title("把 dsh 版本放在哪")
+    win.title(T("把 dsh 版本放在哪"))
     win.transient(root)
     win.resizable(False, False)
     _apply_icon(win)
-    ttk.Label(win, text="先把位置定下来",
+    ttk.Label(win, text=T("先把位置定下来"),
               font=("Microsoft YaHei UI", 10, "bold")
               ).pack(padx=20, pady=(16, 4), anchor="w")
     ttk.Label(win,
-              text="这是第一次安装/纳入 —— 位置一旦确定就不再改动。\n"
-                   "要换位置，得先把所有版本卸载干净（卸载会先备份用户数据）。",
+              text=T("这是第一次安装/纳入 —— 位置一旦确定就不再改动。\n"
+                   "要换位置，得先把所有版本卸载干净（卸载会先备份用户数据）。"),
               foreground=_MUTED, justify="left", wraplength=470
               ).pack(padx=20, pady=(0, 10), anchor="w")
 
     r = ttk.Frame(win)
     r.pack(padx=20, fill="x")
-    ttk.Label(r, text="安装根目录", width=11).pack(side="left")
+    ttk.Label(r, text=T("安装根目录"), width=11).pack(side="left")
     pv = tk.StringVar(value=os.path.normpath(INSTALL_BASE))
     ent = ttk.Entry(r, textvariable=pv, width=40, font=("Consolas", 9))
     ent.pack(side="left", padx=6, fill="x", expand=True)
 
     def _pick():
-        p = filedialog.askdirectory(title="选择 dsh 版本的存放位置", parent=win,
+        p = filedialog.askdirectory(title=T("选择 dsh 版本的存放位置"), parent=win,
                                     initialdir=pv.get() or HOME)
         if p:
             pv.set(os.path.normpath(p))
 
-    ttk.Button(r, text="浏览…", width=7, command=_pick).pack(side="left")
+    ttk.Button(r, text=T("浏览…"), width=7, command=_pick).pack(side="left")
 
     prev = ttk.Label(win, text="", foreground=_MUTED, justify="left",
                      wraplength=470)
@@ -6124,9 +6134,9 @@ def _ask_install_root():
         except Exception:
             pass
         # 2026-11-02：临时文件改为各槽自己的 .tmp，不再有集中目录
-        prev.config(text="版本装进：%s\n"
+        prev.config(text=T("版本装进：%s\n"
                          "卸载备份：%s\n"
-                         "临时文件：各槽目录下的 .tmp"
+                         "临时文件：各槽目录下的 .tmp")
                          % (os.path.join(b, "dsh-versions"),
                             os.path.join(b, "dsh备份")))
 
@@ -6136,7 +6146,7 @@ def _ask_install_root():
     def on_ok(_evt=None):
         b = (pv.get() or "").strip()
         if not b:
-            messagebox.showwarning("还没填目录", "请先选择 dsh 版本的存放位置。",
+            messagebox.showwarning(T("还没填目录"), T("请先选择 dsh 版本的存放位置。"),
                                    parent=win)
             return
         b = os.path.normpath(b)
@@ -6144,24 +6154,24 @@ def _ask_install_root():
             try:
                 os.makedirs(b, exist_ok=True)
             except Exception as e:
-                messagebox.showerror("无法创建目录", "%s\n\n%s" % (b, e), parent=win)
+                messagebox.showerror(T("无法创建目录"), "%s\n\n%s" % (b, e), parent=win)
                 return
         err = _save_top_field("install_base", _cfg_form_base(b))
         if err:
-            messagebox.showerror("保存失败", err, parent=win)
+            messagebox.showerror(T("保存失败"), err, parent=win)
             return
         global INSTALL_BASE
         INSTALL_BASE = b
         CFG["install_base"] = _cfg_form_base(b)
-        log("[设置] 安装根目录（首次确定）→ %s" % b)
+        log(T("[设置] 安装根目录（首次确定）→ %s") % b)
         res["ok"] = True
         win.destroy()
 
     btns = ttk.Frame(win)
     btns.pack(padx=20, pady=(12, 16))
-    ttk.Button(btns, text="就用这个位置", style="Green.TButton",
+    ttk.Button(btns, text=T("就用这个位置"), style="Green.TButton",
                command=on_ok).pack(side="left", padx=4)
-    ttk.Button(btns, text="取消", command=win.destroy).pack(side="left", padx=4)
+    ttk.Button(btns, text=T("取消"), command=win.destroy).pack(side="left", padx=4)
     ent.bind("<Return>", on_ok)
     win.bind("<Escape>", lambda e: win.destroy())
     ent.focus_set()
@@ -6180,12 +6190,12 @@ def _dir_group(parent, padx=20):
     多根管理，不如把位置锁在第一次：装之前问一次，代价最小；装完再问就变成搬家。
     临时目录根仍然可改（它只是 TEMP 指向哪里，改完会重写 bat，不影响程序本体）。
     """
-    df = ttk.LabelFrame(parent, text="目录", padding=(8, 6))
+    df = ttk.LabelFrame(parent, text=T("目录"), padding=(8, 6))
     df.pack(padx=padx, pady=(0, 10), fill="x")
     locked = bool(SLOT_KEYS)
 
     def _pick(var):
-        p = filedialog.askdirectory(title="选择目录", parent=df,
+        p = filedialog.askdirectory(title=T("选择目录"), parent=df,
                                     initialdir=var.get() or HOME)
         if p:
             var.set(os.path.normpath(p))
@@ -6201,7 +6211,7 @@ def _dir_group(parent, padx=20):
             # 只读而不是禁用：禁用会把文字变灰到看不清，而这里恰恰要用户看清它在哪
             ent.state(["readonly"])
         else:
-            ttk.Button(r, text="浏览…", width=7,
+            ttk.Button(r, text=T("浏览…"), width=7,
                        command=lambda v=var: _pick(v)).pack(side="left")
         return var
 
@@ -6210,7 +6220,7 @@ def _dir_group(parent, padx=20):
         # 2026-11-01：安装根锁定后不能"改"，但**可以整体移动**（换盘/整理）。
         # 移动 = 复制 + 校验 + 改配置 + 删旧位置，安全性由 dsh_move 保证。
         try:
-            ttk.Button(df, text="移动安装根目录…", command=move_install_root_dialog
+            ttk.Button(df, text=T("移动安装根目录…"), command=move_install_root_dialog
                        ).pack(anchor="w", pady=(2, 0))
         except Exception:
             pass
@@ -6225,8 +6235,8 @@ def _dir_group(parent, padx=20):
         # 2026-11-14 用户指出：这句话和上面的「移动安装根目录…」按钮自相矛盾 ——
         # 换位置**不需要**卸载任何版本，点那个按钮整体搬过去就行。
         _hint = ttk.Label(df,
-                          text="已确定。要换盘 / 换位置请用上方「移动安装根目录…」——"
-                               "会把所有版本连同数据一起搬过去，不用卸载。",
+                          text=T("已确定。要换盘 / 换位置请用上方「移动安装根目录…」——"
+                               "会把所有版本连同数据一起搬过去，不用卸载。"),
                           foreground=_MUTED, justify="left")
         _hint.pack(anchor="w", pady=(4, 0))
         _auto_wrap(_hint, pad=28)
@@ -6236,7 +6246,7 @@ def _dir_group(parent, padx=20):
     # 现在把"槽到底装在哪"作为**单独一行只读信息**显示，不再塞进长句。
     try:
         _slots_root = os.path.join(os.path.normpath(INSTALL_BASE), "dsh-versions")
-        ttk.Label(df, text="槽实际位置：%s\\<槽名>" % _slots_root,
+        ttk.Label(df, text=T("槽实际位置：%s\\<槽名>") % _slots_root,
                   foreground=_MUTED).pack(anchor="w", pady=(6, 0))
     except Exception:
         pass
@@ -6279,7 +6289,7 @@ def _apply_dir_settings(ib_var, tr_var):
         err = _save_top_field("install_base", _cfg_form_base(new_base))
         if err:
             return (False, err)
-        log("[设置] 安装根目录 → %s" % new_base)
+        log(T("[设置] 安装根目录 → %s") % new_base)
         return (True, "安装根目录已设为：\n%s\n\n"
                       "版本会装进 %s；卸载备份落在 %s。\n"
                       "必须重启管理器才生效。"
@@ -6312,7 +6322,7 @@ def _apply_dir_settings(ib_var, tr_var):
         if ch["key"] in VC:
             VC[ch["key"]]["temp_dir"] = ch["new_abs"]
     made, failed, _skipped = _rebuild_bats()
-    log("[设置] 临时目录根 → %s（%s；重写 %d 个 bat）"
+    log(T("[设置] 临时目录根 → %s（%s；重写 %d 个 bat）")
         % (new_temp, msg, len(made)))
 
     lines = ["临时目录已迁到：", "  " + new_temp, ""]
@@ -6335,34 +6345,34 @@ def _dirs_only_dialog():
     把唯一的入口堵死了。
     """
     win = tk.Toplevel(root)
-    win.title("目录设置")
+    win.title(T("目录设置"))
     win.transient(root)
     win.resizable(False, False)
     _apply_icon(win)
-    ttk.Label(win, text="目录设置",
+    ttk.Label(win, text=T("目录设置"),
               font=("Microsoft YaHei UI", 10, "bold")
               ).pack(padx=20, pady=(16, 2), anchor="w")
-    ttk.Label(win, text="还没有安装任何 dsh 版本 —— 正好先决定它装在哪。",
+    ttk.Label(win, text=T("还没有安装任何 dsh 版本 —— 正好先决定它装在哪。"),
               foreground=_MUTED).pack(padx=20, pady=(0, 10), anchor="w")
     ib_var, tr_var = _dir_group(win)
 
     def on_ok():
         ok, msg = _apply_dir_settings(ib_var, tr_var)
         if not ok:
-            messagebox.showerror("保存失败", msg, parent=win)
+            messagebox.showerror(T("保存失败"), msg, parent=win)
             return
         try:
             win.destroy()
         except Exception:
             pass
         if msg:
-            messagebox.showinfo("已保存", msg)
+            messagebox.showinfo(T("已保存"), msg)
 
     btns = ttk.Frame(win)
     btns.pack(padx=20, pady=(0, 16))
-    ttk.Button(btns, text="保存", style="Green.TButton",
+    ttk.Button(btns, text=T("保存"), style="Green.TButton",
                command=on_ok).pack(side="left", padx=4)
-    ttk.Button(btns, text="取消", command=win.destroy).pack(side="left", padx=4)
+    ttk.Button(btns, text=T("取消"), command=win.destroy).pack(side="left", padx=4)
     win.bind("<Escape>", lambda e: win.destroy())
     win.grab_set()
 
@@ -6579,13 +6589,13 @@ def _apply_theme_mode(mode, persist=True):
     try:
         _apply_palette()
     except Exception as e:
-        log("[主题] 应用失败：%s" % e)
+        log(T("[主题] 应用失败：%s") % e)
     if persist:
         try:
             _save_ui_field("theme", _THEME_CUR["mode"])
         except Exception:
             pass
-    log("[主题] 已切换为：%s" % {"system": "跟随系统", "light": "浅色",
+    log(T("[主题] 已切换为：%s") % {"system": "跟随系统", "light": "浅色",
                                  "dark": "深色"}.get(_THEME_CUR["mode"], mode))
 
 
@@ -6605,7 +6615,7 @@ def _save_ui_field(key, value):
         os.replace(tmp, CONFIG_PATH)
         return True
     except Exception as e:
-        log("[配置] 写入 ui.%s 失败：%s" % (key, e))
+        log(T("[配置] 写入 ui.%s 失败：%s") % (key, e))
         return False
 
 
@@ -6974,7 +6984,7 @@ def _open_project_page():
         try:
             os.startfile(PROJECT_URL)
         except Exception as e:
-            messagebox.showinfo("项目主页", "打不开浏览器，请手动访问：\n%s\n\n(%s)"
+            messagebox.showinfo(T("项目主页"), T("打不开浏览器，请手动访问：\n%s\n\n(%s)")
                                 % (PROJECT_URL, e))
 
 
@@ -6987,10 +6997,10 @@ def _open_user_guide():
             return
         except Exception:
             pass
-    messagebox.showinfo("详细使用说明",
-                        "找不到文档文件：\n%s\n\n"
+    messagebox.showinfo(T("详细使用说明"),
+                        T("找不到文档文件：\n%s\n\n"
                         "完整说明见程序目录下的 docs/ 文件夹，"
-                        "或项目主页的 README。" % p)
+                        "或项目主页的 README。") % p)
 
 
 def about_dialog():
@@ -7005,15 +7015,15 @@ def about_dialog():
     只有排障时才需要，放进「关于」正合适。
     """
     win = tk.Toplevel(root)
-    win.title("关于 DSH 版本管理器")
+    win.title(T("关于 DSH 版本管理器"))
     win.transient(root)
     win.resizable(False, False)
     _apply_icon(win)
 
-    ttk.Label(win, text="DSH 版本管理器（dsh-tm）",
+    ttk.Label(win, text=T("DSH 版本管理器（dsh-tm）"),
               font=("Microsoft YaHei UI", 13, "bold")).pack(padx=24, pady=(20, 2),
                                                            anchor="w")
-    ttk.Label(win, text="多版本隔离 · 独立进程 / 端口 / 数据 / 运行时 / 临时目录",
+    ttk.Label(win, text=T("多版本隔离 · 独立进程 / 端口 / 数据 / 运行时 / 临时目录"),
               foreground=_MUTED).pack(padx=24, anchor="w")
 
     body = ttk.Frame(win)
@@ -7045,30 +7055,30 @@ def about_dialog():
 
     ttk.Separator(win, orient="horizontal").pack(fill="x", padx=24, pady=(8, 0))
 
-    ttk.Label(win, text="使用说明", font=("Microsoft YaHei UI", 10, "bold")
+    ttk.Label(win, text=T("使用说明"), font=("Microsoft YaHei UI", 10, "bold")
               ).pack(padx=24, pady=(12, 4), anchor="w")
     ttk.Label(win,
               justify="left", wraplength=470, foreground=_INK,
-              text=("· 「安装官方版 dsh」→ 选版本号 → 自动下载并配好隔离环境\n"
+              text=(T("· 「安装官方版 dsh」→ 选版本号 → 自动下载并配好隔离环境\n"
                     "· 卡片上「启动 / 停止」管单个版本；「打开浏览器」带上登录 token\n"
                     "· 拖动卡片可调整左右顺序；「设置」里能隐藏不看的槽\n"
                     "· 「卸载 / 移出管理」：卸载会先备份用户数据再删；\n"
                     "  移出只改配置、磁盘一个字节不动（之后可在「已移出管理」接回）\n"
                     "· 「槽体检」只读检查，报告问题但不替你改\n"
-                    "· 命令行：python dsh-tm.py list | start --all | stop --all")
+                    "· 命令行：python dsh-tm.py list | start --all | stop --all"))
               ).pack(padx=24, anchor="w")
 
     btns = ttk.Frame(win)
     btns.pack(padx=24, pady=(14, 18), fill="x")
 
-    ttk.Button(btns, text="打开详细使用说明", command=_open_user_guide).pack(side="left")
-    ttk.Button(btns, text="检查运行环境", command=_show_env_report).pack(
+    ttk.Button(btns, text=T("打开详细使用说明"), command=_open_user_guide).pack(side="left")
+    ttk.Button(btns, text=T("检查运行环境"), command=_show_env_report).pack(
         side="left", padx=(8, 0))
     # 「槽体检」从主界面底部搬到这里（一年用不了几次的排障工具）
-    ttk.Button(btns, text="槽体检",
+    ttk.Button(btns, text=T("槽体检"),
                command=lambda: _run_health(deep=True, dialog=True)
                ).pack(side="left", padx=(8, 0))
-    ttk.Button(btns, text="关闭", command=win.destroy).pack(side="right")
+    ttk.Button(btns, text=T("关闭"), command=win.destroy).pack(side="right")
     win.bind("<Escape>", lambda e: win.destroy())
     win.grab_set()
 
@@ -7114,12 +7124,12 @@ def move_install_root_dialog():
     try:
         import dsh_move as MV
     except Exception as e:
-        messagebox.showerror("无法移动", "缺少 dsh_move.py 模块：%s" % e)
+        messagebox.showerror(T("无法移动"), T("缺少 dsh_move.py 模块：%s") % e)
         return
     if not SLOT_KEYS:
-        messagebox.showinfo("没有可移动的版本",
-                            "当前管理器没有管理任何 dsh 版本。\n\n"
-                            "装第一个版本时会让您选位置，那时选好即可。")
+        messagebox.showinfo(T("没有可移动的版本"),
+                            T("当前管理器没有管理任何 dsh 版本。\n\n"
+                            "装第一个版本时会让您选位置，那时选好即可。"))
         return
 
     # 运行中的槽不能搬（2026-11-14）：文件被占用时复制会失败，而且搬完那个
@@ -7134,33 +7144,33 @@ def move_install_root_dialog():
             pass
     if _running:
         messagebox.showwarning(
-            "有版本正在运行",
-            "这些版本还在运行：%s\n\n"
+            T("有版本正在运行"),
+            T("这些版本还在运行：%s\n\n"
             "请先点「全部停止」（或逐个停止）再移动 ——\n"
-            "运行中的程序占着文件，复制会失败；搬完它也还指着旧位置。"
+            "运行中的程序占着文件，复制会失败；搬完它也还指着旧位置。")
             % "、".join(_running))
         return
 
     win = tk.Toplevel(root)
-    win.title("移动安装根目录")
+    win.title(T("移动安装根目录"))
     win.transient(root)
     win.resizable(False, False)
     _apply_icon(win)
 
-    ttk.Label(win, text="移动安装根目录",
+    ttk.Label(win, text=T("移动安装根目录"),
               font=("Microsoft YaHei UI", 10, "bold")
               ).pack(padx=20, pady=(16, 4), anchor="w")
     ttk.Label(win,
-              text=("把已装的所有版本整体搬到另一个位置。\n"
+              text=(T("把已装的所有版本整体搬到另一个位置。\n"
                     "过程：复制 → 校验（文件数 + 字节数）→ 改配置 → 删旧位置。\n"
                     "复制或校验失败会保留旧位置、不动配置；\n"
-                     "旧目录清理失败时会提示你手动清理。"),
+                     "旧目录清理失败时会提示你手动清理。")),
               foreground=_MUTED, justify="left", wraplength=470
               ).pack(padx=20, pady=(0, 10), anchor="w")
 
     cur = ttk.Frame(win)
     cur.pack(padx=20, fill="x")
-    ttk.Label(cur, text="当前位置", width=10).pack(side="left")
+    ttk.Label(cur, text=T("当前位置"), width=10).pack(side="left")
     ttk.Label(cur, text=os.path.normpath(INSTALL_BASE),
               foreground=_MUTED).pack(side="left")
 
@@ -7168,29 +7178,29 @@ def move_install_root_dialog():
 
     row = ttk.Frame(win)
     row.pack(padx=20, pady=(8, 0), fill="x")
-    ttk.Label(row, text="新位置", width=10).pack(side="left")
+    ttk.Label(row, text=T("新位置"), width=10).pack(side="left")
     ent = ttk.Entry(row, textvariable=newv, width=42, font=("Consolas", 9))
     ent.pack(side="left", padx=(0, 6), fill="x", expand=True)
 
     def _pick():
-        p = filedialog.askdirectory(title="选择新的安装根目录", parent=win,
+        p = filedialog.askdirectory(title=T("选择新的安装根目录"), parent=win,
                                      initialdir=os.path.normpath(INSTALL_BASE))
         if p:
             newv.set(os.path.normpath(p))
 
-    ttk.Button(row, text="浏览…", width=7, command=_pick).pack(side="left")
+    ttk.Button(row, text=T("浏览…"), width=7, command=_pick).pack(side="left")
 
     ttk.Label(win,
-              text=("· 新位置下会创建 dsh-versions\\ 存放各版本槽\n"
+              text=(T("· 新位置下会创建 dsh-versions\\ 存放各版本槽\n"
                     "· 磁盘空间要够（每个版本约 0.7～1.3 GB）\n"
-                    "· 移动期间请勿启动或停止任何版本"),
+                    "· 移动期间请勿启动或停止任何版本")),
               foreground="#8A5A00", justify="left", wraplength=470
               ).pack(padx=20, pady=(10, 0), anchor="w")
 
     def on_ok():
         target = (newv.get() or "").strip()
         if not target:
-            messagebox.showwarning("还没选位置", "请先选择新的安装根目录。")
+            messagebox.showwarning(T("还没选位置"), T("请先选择新的安装根目录。"))
             return
         target = os.path.normpath(target)
         slot_names = []
@@ -7200,7 +7210,7 @@ def move_install_root_dialog():
                 slot_names.append(nm)
         plan = MV.plan_move(INSTALL_BASE, target, slot_names)
         if not plan["ok"]:
-            messagebox.showerror("无法移动", plan["error"])
+            messagebox.showerror(T("无法移动"), plan["error"])
             return
         body = "\n".join("  · " + s for s in plan["steps"])
         _need = plan.get("need_bytes") or 0
@@ -7210,9 +7220,9 @@ def move_install_root_dialog():
             _space = ("\n空间：需要约 %.2f GB，目标盘可用 %.2f GB。"
                       % (_need / 1073741824.0, _free / 1073741824.0))
         if not messagebox.askyesno(
-                "确认移动",
-                "即将把 %d 个版本搬到：\n%s\n\n%s%s\n\n"
-                "旧位置在全部校验通过后才会被删除。\n\n继续吗？"
+                T("确认移动"),
+                T("即将把 %d 个版本搬到：\n%s\n\n%s%s\n\n"
+                "旧位置在全部校验通过后才会被删除。\n\n继续吗？")
                 % (len(plan["slots"]), target, body, _space)):
             return
         try:
@@ -7223,37 +7233,37 @@ def move_install_root_dialog():
 
     btns = ttk.Frame(win)
     btns.pack(padx=20, pady=(16, 16), fill="x")
-    ttk.Button(btns, text="开始移动", style="Green.TButton",
+    ttk.Button(btns, text=T("开始移动"), style="Green.TButton",
                command=on_ok).pack(side="left")
-    ttk.Button(btns, text="取消", command=win.destroy).pack(side="left", padx=(8, 0))
+    ttk.Button(btns, text=T("取消"), command=win.destroy).pack(side="left", padx=(8, 0))
     win.bind("<Escape>", lambda e: win.destroy())
     win.grab_set()
 
 
 def _do_move_root(MV, plan):
     """后台执行搬迁，进度窗 + 完成后提示重启。"""
-    log("[移动] 开始：%s → %s（%d 个槽）"
+    log(T("[移动] 开始：%s → %s（%d 个槽）")
         % (plan["src_base"], plan["dst_base"], len(plan["slots"])))
 
     def done(ok, message):
         _actions_enabled(True)
         if ok:
-            log("[移动] 完成：%s" % str(message).replace("\n", " | "))
+            log(T("[移动] 完成：%s") % str(message).replace("\n", " | "))
             messagebox.showinfo(
-                "移动完成",
-                "%s\n\n管理器已切换到新位置。" % message)
+                T("移动完成"),
+                T("%s\n\n管理器已切换到新位置。") % message)
             _restart_or_tell("安装位置")
             # 三件 bat 里写的是**绝对路径**，搬完必须重写 —— 否则双击 dsh.bat
             # 仍然指向旧位置（2026-11-14 补：之前搬完没重写，只有管理器里能启动）。
             try:
                 made, failed, skipped = _rebuild_bats()
-                log("[移动] 已按新位置重写 %d 个 bat（失败 %d，跳过 %d）"
+                log(T("[移动] 已按新位置重写 %d 个 bat（失败 %d，跳过 %d）")
                     % (len(made), len(failed), len(skipped)))
             except Exception as e:
-                log("[移动] 重写 bat 失败（可点「设置 → 维护 → 生成 bat」）：%s" % e)
+                log(T("[移动] 重写 bat 失败（可点「设置 → 维护 → 生成 bat」）：%s") % e)
         else:
-            log("[移动] 失败：%s" % str(message).replace("\n", " | "))
-            messagebox.showerror("移动失败", str(message))
+            log(T("[移动] 失败：%s") % str(message).replace("\n", " | "))
+            messagebox.showerror(T("移动失败"), str(message))
 
     prog = _GuiProgress("移动安装根目录", done)
 
@@ -7298,13 +7308,13 @@ def _clear_logs_dialog(parent=None):
     """清空日志文件（先确认）。不动任何已安装版本、不动 config。"""
     sz, lines = _log_stats()
     if sz <= 0:
-        messagebox.showinfo("日志已为空", "日志文件本来就是空的。",
+        messagebox.showinfo(T("日志已为空"), T("日志文件本来就是空的。"),
                             parent=parent)
         return
     if not messagebox.askyesno(
-            "清空日志",
-            "当前日志：%s（%d 行）\n位置：%s\n\n"
-            "清空后无法恢复，但不影响任何已安装版本、配置和进程。\n\n确定清空吗？"
+            T("清空日志"),
+            T("当前日志：%s（%d 行）\n位置：%s\n\n"
+            "清空后无法恢复，但不影响任何已安装版本、配置和进程。\n\n确定清空吗？")
             % (_fmt_size(sz), lines, LOG_FILE), parent=parent):
         return
     err = ""
@@ -7326,9 +7336,9 @@ def _clear_logs_dialog(parent=None):
     except Exception as e:
         err = str(e)
     if err:
-        messagebox.showerror("清空失败", err, parent=parent)
+        messagebox.showerror(T("清空失败"), err, parent=parent)
         return
-    log("[清理] 日志已清空（用户手动操作）")
+    log(T("[清理] 日志已清空（用户手动操作）"))
 
 
 def _open_log_folder(parent=None):
@@ -7336,9 +7346,9 @@ def _open_log_folder(parent=None):
         if os.name == "nt":
             os.startfile(os.path.dirname(LOG_FILE))
         else:
-            messagebox.showinfo("日志位置", LOG_FILE, parent=parent)
+            messagebox.showinfo(T("日志位置"), LOG_FILE, parent=parent)
     except Exception as e:
-        messagebox.showinfo("日志位置", "%s\n\n(%s)" % (LOG_FILE, e), parent=parent)
+        messagebox.showinfo(T("日志位置"), "%s\n\n(%s)" % (LOG_FILE, e), parent=parent)
 
 
 def _auto_wrap(lbl, pad=0, min_w=120):
@@ -7464,13 +7474,13 @@ def _dir_group_single(parent):
     已装的旧槽保持原 temp_dir 不动（改它要停进程、重写 bat，风险大于收益），
     只对**新装/新纳入**的槽应用新规则。
     """
-    df = ttk.LabelFrame(parent, text="目录", padding=(12, 10))
+    df = ttk.LabelFrame(parent, text=T("目录"), padding=(12, 10))
     df.pack(padx=16, fill="x", pady=(0, 10))
     locked = bool(SLOT_KEYS)
 
     row = ttk.Frame(df)
     row.pack(fill="x")
-    ttk.Label(row, text="安装根", width=8).pack(side="left")
+    ttk.Label(row, text=T("安装根"), width=8).pack(side="left")
     # 2026-11-02 修 bug（用户实测：选了新位置后根目录没变化）：
     # 这里原来是固定文本，选完新位置后**不会刷新**，看起来像没生效。
     # 改成 StringVar，选择/移动后立刻更新。
@@ -7486,33 +7496,33 @@ def _dir_group_single(parent):
                 _path_var.set(os.path.normpath(INSTALL_BASE))
             except Exception:
                 pass
-            log("[设置] 安装根目录已改为：%s（原：%s）" % (INSTALL_BASE, before))
+            log(T("[设置] 安装根目录已改为：%s（原：%s）") % (INSTALL_BASE, before))
             try:
                 messagebox.showinfo(
-                    "安装位置已更新",
-                    "新的安装根目录：\n%s\n\n"
+                    T("安装位置已更新"),
+                    T("新的安装根目录：\n%s\n\n"
                     "之后安装/纳入的版本会放这里。\n"
-                    "（已经装好的版本不受影响；如需整体搬家，用「移动安装根目录…」）"
+                    "（已经装好的版本不受影响；如需整体搬家，用「移动安装根目录…」）")
                     % os.path.normpath(INSTALL_BASE))
             except Exception:
                 pass
 
     if locked:
-        ttk.Button(df, text="移动安装根目录…", command=move_install_root_dialog
+        ttk.Button(df, text=T("移动安装根目录…"), command=move_install_root_dialog
                    ).pack(anchor="w", pady=(8, 0))
         _hint = ttk.Label(df,
-                          text="换盘/换位置不用卸载：点上面这个按钮，所有版本连同数据"
-                               "一起搬过去（复制 → 校验 → 改配置 → 删旧位置）。",
+                          text=T("换盘/换位置不用卸载：点上面这个按钮，所有版本连同数据"
+                               "一起搬过去（复制 → 校验 → 改配置 → 删旧位置）。"),
                           foreground=_MUTED, justify="left")
         _hint.pack(anchor="w", pady=(4, 0))
         _auto_wrap(_hint, pad=28)
-        _where = ttk.Label(df, text="版本装在：<安装根>\\dsh-versions\\<槽>；"
-                                    "临时文件在各槽的 .tmp 下",
+        _where = ttk.Label(df, text=T("版本装在：<安装根>\\dsh-versions\\<槽>；"
+                                    "临时文件在各槽的 .tmp 下"),
                            foreground=_MUTED, justify="left")
         _where.pack(anchor="w", pady=(6, 0))
         _auto_wrap(_where, pad=28)
     else:
-        ttk.Button(df, text="选择安装位置…", command=_choose
+        ttk.Button(df, text=T("选择安装位置…"), command=_choose
                    ).pack(anchor="w", pady=(8, 0))
 
 
@@ -7544,7 +7554,7 @@ def settings_hub_dialog():
                  if e.widget is win else None, add="+")
     except Exception:
         pass
-    win.title("设置")
+    win.title(T("设置"))
     win.resizable(True, True)
     _apply_icon(win)
     _make_side_panel(win, width=380)
@@ -7562,7 +7572,7 @@ def settings_hub_dialog():
     # 移进设置」，但设置页一直没补上这三个入口 —— 装完第一个版本后就再也
     # 装不了第二个、也卸不掉（FRESH_START 是启动快照，引导卡只在零槽出现）。
     # 这里补齐；零槽时同样可用，引导卡只是它的快捷方式。
-    ops = ttk.LabelFrame(host, text="版本管理", padding=(12, 10))
+    ops = ttk.LabelFrame(host, text=T("版本管理"), padding=(12, 10))
     ops.pack(padx=16, pady=(14, 10), fill="x")
     for _c in range(2):
         ops.columnconfigure(_c, weight=1)
@@ -7582,10 +7592,10 @@ def settings_hub_dialog():
     _obtn(1, 0, "卸载 / 移出管理", uninstall_versions_dialog, span=2)
 
     # ── 界面 ──────────────────────────────────────────────
-    look = ttk.LabelFrame(host, text="界面", padding=(12, 10))
+    look = ttk.LabelFrame(host, text=T("界面"), padding=(12, 10))
     look.pack(padx=16, pady=(14, 10), fill="x")
 
-    ttk.Button(look, text="显示哪些槽 / 顺序 / 浏览器…",
+    ttk.Button(look, text=T("显示哪些槽 / 顺序 / 浏览器…"),
                command=_settings_display_dialog).pack(fill="x", pady=(0, 8))
 
     # 2026-11-14 用户反馈：「主题的几个选项看着不清楚，到底选的是哪个？」
@@ -7612,14 +7622,14 @@ def settings_hub_dialog():
 
     trow = ttk.Frame(look)
     trow.pack(fill="x", pady=(2, 0))
-    ttk.Label(trow, text="主题").pack(anchor="w")
+    ttk.Label(trow, text=T("主题")).pack(anchor="w")
     _theme_row = ttk.Frame(trow)
     _theme_row.pack(fill="x", pady=(4, 0))
     for _c in range(3):
         _theme_row.columnconfigure(_c, weight=1, uniform="theme")
-    for _i, (_val, _lbl) in enumerate((("system", "跟随系统"),
-                                       ("light", "浅色"),
-                                       ("dark", "深色"))):
+    for _i, (_val, _lbl) in enumerate((("system", T("跟随系统")),
+                                       ("light", T("浅色")),
+                                       ("dark", T("深色")))):
         _tb = ttk.Button(_theme_row, text=_lbl,
                          command=lambda v=_val: _pick_theme(v))
         _tb.grid(row=0, column=_i, sticky="ew",
@@ -7627,14 +7637,63 @@ def settings_hub_dialog():
         _seg_btns[_val] = _tb
     _refresh_theme_seg()
 
+    # ── 界面语言（2026-11-14）──────────────────────────────
+    # 控件文案在**创建时**求值（`text=T("启动")`），所以切换语言没法原地刷新，
+    # 必须重启。这里不偷偷重启 —— 先问一句，用户可能正开着别的事。
+    _lang_row = ttk.Frame(look)
+    _lang_row.pack(fill="x", pady=(10, 0))
+    ttk.Label(_lang_row, text=T("界面语言")).pack(anchor="w")
+    _lbtns = ttk.Frame(_lang_row)
+    _lbtns.pack(fill="x", pady=(4, 0))
+    for _c in range(2):
+        _lbtns.columnconfigure(_c, weight=1, uniform="lang")
+    _lang_var = tk.StringVar(value=I18N.lang())
+    _lbtns_map = {}
+
+    def _refresh_lang_seg():
+        for _v, _b in _lbtns_map.items():
+            try:
+                _b.configure(style=("SegOn.TButton" if _v == _lang_var.get()
+                                    else "SegOff.TButton"))
+            except Exception:
+                pass
+
+    def _pick_lang(_v):
+        if _v == I18N.lang():
+            return
+        _lang_var.set(_v)
+        _refresh_lang_seg()
+        _save_ui_field("lang", _v)
+        _nm = "English" if _v == "en" else "中文"
+        if messagebox.askyesno(
+                T("界面语言"),
+                T("界面语言已改为 %s。控件文案在创建时就定了，需要重启管理器才会生效。\n\n现在重启吗？") % _nm):
+            ok, _why = _relaunch_self()
+            if ok:
+                try:
+                    root.destroy()
+                except Exception:
+                    pass
+            else:
+                messagebox.showwarning(
+                    T("界面语言"),
+                    T("语言已保存，但自动重启失败（%s）。请手动关闭本窗口再打开管理器。") % _why)
+
+    for _i, (_val, _lbl) in enumerate((("zh", "中文"), ("en", "English"))):
+        _lb = ttk.Button(_lbtns, text=_lbl,
+                         command=lambda v=_val: _pick_lang(v))
+        _lb.grid(row=0, column=_i, sticky="ew", padx=(0 if _i == 0 else 6, 0))
+        _lbtns_map[_val] = _lb
+    _refresh_lang_seg()
+
     # ── 目录（只剩一个安装根）──────────────────────────────
     try:
         _dir_group_single(host)
     except Exception as e:
-        log("[设置] 目录分组构建失败：%s" % e)
+        log(T("[设置] 目录分组构建失败：%s") % e)
 
     # ── 维护 ──────────────────────────────────────────────
-    mnt = ttk.LabelFrame(host, text="维护", padding=(12, 10))
+    mnt = ttk.LabelFrame(host, text=T("维护"), padding=(12, 10))
     mnt.pack(padx=16, fill="x", pady=(0, 10))
     for _c in range(2):
         mnt.columnconfigure(_c, weight=1)
@@ -7654,32 +7713,32 @@ def settings_hub_dialog():
     _mbtn(1, 1, "使用说明", _open_user_guide)
 
     # ── 日志 ──────────────────────────────────────────────
-    lg = ttk.LabelFrame(host, text="日志", padding=(12, 10))
+    lg = ttk.LabelFrame(host, text=T("日志"), padding=(12, 10))
     lg.pack(padx=16, fill="x", pady=(0, 14))
     _lsz, _llines = _log_stats()
-    _linfo = ttk.Label(lg, text="%s（%d 行）" % (_fmt_size(_lsz), _llines),
+    _linfo = ttk.Label(lg, text=T("%s（%d 行）") % (_fmt_size(_lsz), _llines),
                        foreground=_MUTED)
     _linfo.pack(anchor="w", pady=(0, 8))
 
     def _refresh_log_info():
         sz, ln = _log_stats()
         try:
-            _linfo.configure(text="%s（%d 行）" % (_fmt_size(sz), ln))
+            _linfo.configure(text=T("%s（%d 行）") % (_fmt_size(sz), ln))
         except Exception:
             pass
 
     _lrow2 = ttk.Frame(lg)
     _lrow2.pack(fill="x")
-    ttk.Button(_lrow2, text="打开文件夹", command=_open_log_folder
+    ttk.Button(_lrow2, text=T("打开文件夹"), command=_open_log_folder
                ).pack(side="left", expand=True, fill="x", padx=(0, 3))
-    ttk.Button(_lrow2, text="清空…",
+    ttk.Button(_lrow2, text=T("清空…"),
                command=lambda: (_clear_logs_dialog(win), _refresh_log_info())
                ).pack(side="left", expand=True, fill="x", padx=(3, 0))
 
     # ── 关于项目（最下面）────────────────────────────────
     proj = ttk.Frame(host)
     proj.pack(padx=16, fill="x", pady=(4, 16))
-    ttk.Button(proj, text="★ 在 GitHub 上收藏本项目",
+    ttk.Button(proj, text=T("★ 在 GitHub 上收藏本项目"),
                command=_open_project_page).pack(fill="x")
 
     win.bind("<Escape>", lambda e: win.destroy())
@@ -7706,8 +7765,8 @@ def settings_dialog():
     try:
         settings_hub_dialog()
     except Exception as e:
-        log("[设置] 打开设置窗口失败：%s" % e)
-        messagebox.showerror("设置", "打开设置窗口失败：%s" % e)
+        log(T("[设置] 打开设置窗口失败：%s") % e)
+        messagebox.showerror(T("设置"), T("打开设置窗口失败：%s") % e)
 
 def _settings_display_dialog():
     """设置：显示哪几个槽 / 顺序 / 浏览器 / 目录（安装根 + 临时目录根）。
@@ -7722,10 +7781,10 @@ def _settings_display_dialog():
     # 零槽时本来就没有槽可显示，正确做法是**如实说明**，而不是弹一个无关的窗。
     if not SLOT_KEYS:
         messagebox.showinfo(
-            "还没有可显示的槽",
-            "当前没有任何版本槽，所以没有可勾选/排序的对象。\n\n"
+            T("还没有可显示的槽"),
+            T("当前没有任何版本槽，所以没有可勾选/排序的对象。\n\n"
             "先装一个版本（设置 → 版本管理 → 安装官方版 dsh），之后这里就能调整\n"
-            "显示哪几个槽、它们的左右顺序。")
+            "显示哪几个槽、它们的左右顺序。"))
         return
 
     order = _ui_order()                                   # 工作副本（含全部槽）
@@ -7734,16 +7793,16 @@ def _settings_display_dialog():
     maxv = _ui_max_visible()
 
     win = tk.Toplevel(root)
-    win.title("设置")
+    win.title(T("设置"))
     win.transient(root)
     win.resizable(False, False)
     _apply_icon(win)
 
-    ttk.Label(win, text="设置",
+    ttk.Label(win, text=T("设置"),
               font=("Microsoft YaHei UI", 10, "bold")).pack(padx=20, pady=(16, 8),
                                                            anchor="w")
 
-    box = ttk.LabelFrame(win, text="版本槽（勾选=显示 · 拖动=排序）",
+    box = ttk.LabelFrame(win, text=T("版本槽（勾选=显示 · 拖动=排序）"),
                          padding=(8, 6))
     box.pack(padx=20, fill="both", expand=True)
 
@@ -7756,7 +7815,7 @@ def _settings_display_dialog():
 
     def _row_text(k):
         cfg = VC[k]
-        ver = INSTALLED.get(k) or "未知"
+        ver = INSTALLED.get(k) or T("未知")
         mark = "[✓]" if k in shown else "[  ]"
         return "%s %-3s  %-8s :%-5d %s" % (mark, k, cfg["label"], cfg["port"], ver)
 
@@ -7781,8 +7840,8 @@ def _settings_display_dialog():
         if k in shown:
             # 一个都不显示 = 界面空白，用户会以为程序坏了。宁可拦住。
             if len(shown) <= 1:
-                messagebox.showwarning("至少留一个",
-                                       "至少要显示一个版本槽，否则界面就空了。")
+                messagebox.showwarning(T("至少留一个"),
+                                       T("至少要显示一个版本槽，否则界面就空了。"))
                 return
             shown.discard(k)
         else:
@@ -7799,11 +7858,11 @@ def _settings_display_dialog():
         order[i], order[j] = order[j], order[i]
         _redraw(j)
 
-    ttk.Button(side, text="上移 ↑", width=9,
+    ttk.Button(side, text=T("上移 ↑"), width=9,
                command=lambda: _move(-1)).pack(pady=2)
-    ttk.Button(side, text="下移 ↓", width=9,
+    ttk.Button(side, text=T("下移 ↓"), width=9,
                command=lambda: _move(1)).pack(pady=2)
-    ttk.Button(side, text="显示/隐藏", width=9,
+    ttk.Button(side, text=T("显示/隐藏"), width=9,
                command=_toggle).pack(pady=(12, 2))
     lb.bind("<Double-Button-1>", _toggle)
     lb.bind("<space>", _toggle)
@@ -7838,13 +7897,13 @@ def _settings_display_dialog():
 
     opt = ttk.Frame(win)
     opt.pack(padx=20, pady=(12, 4), fill="x")
-    ttk.Label(opt, text="界面最多同时显示").pack(side="left")
+    ttk.Label(opt, text=T("界面最多同时显示")).pack(side="left")
     mv = tk.StringVar(value=str(maxv))
     tk.Spinbox(opt, from_=1, to=MAX_SLOTS, width=4, textvariable=mv,
                justify="center").pack(side="left", padx=6)
-    ttk.Label(opt, text="个槽", foreground=_MUTED).pack(side="left")
-    ttk.Label(win, text="上限 %d。勾选数超过它时只显示靠前的几个 —— "
-                        "想只看某几个，把不要的取消勾选即可。" % MAX_SLOTS,
+    ttk.Label(opt, text=T("个槽"), foreground=_MUTED).pack(side="left")
+    ttk.Label(win, text=T("上限 %d。勾选数超过它时只显示靠前的几个 —— "
+                        "想只看某几个，把不要的取消勾选即可。") % MAX_SLOTS,
               foreground=_MUTED, wraplength=470, justify="left"
               ).pack(padx=20, pady=(0, 12), anchor="w")
 
@@ -7856,11 +7915,11 @@ def _settings_display_dialog():
     # 为什么放在这里而不是卡片上：卡片是「动作」的地方（启动/停止/打开），
     # 偏好属于设置。卡片上「打开 X」按钮的文案会跟着变，一眼能看出当前用哪个。
     # 默认是「系统默认浏览器」—— 每个人装的浏览器不一样，替用户挑一个没道理。
-    bf = ttk.LabelFrame(win, text="选中的槽用哪个浏览器打开", padding=(8, 6))
+    bf = ttk.LabelFrame(win, text=T("选中的槽用哪个浏览器打开"), padding=(8, 6))
     bf.pack(padx=20, pady=(0, 10), fill="x")
     brow = ttk.Frame(bf)
     brow.pack(fill="x")
-    ttk.Label(brow, text="当前槽：").pack(side="left")
+    ttk.Label(brow, text=T("当前槽：")).pack(side="left")
     bslot = ttk.Label(brow, text="-", width=5)
     bslot.pack(side="left")
     bchoice = {k: (VC[k]["browser"] or "default") for k in order}
@@ -7918,7 +7977,7 @@ def _settings_display_dialog():
         sel = bcb.get()
         if sel == _B_OTHER:
             p = filedialog.askopenfilename(
-                title="选择浏览器程序", parent=win,
+                title=T("选择浏览器程序"), parent=win,
                 filetypes=[("可执行程序", "*.exe"), ("所有文件", "*.*")])
             if not p:
                 _b_sync()                       # 取消 → 回到原值
@@ -7932,8 +7991,8 @@ def _settings_display_dialog():
 
     lb.bind("<<ListboxSelect>>", _b_sync, add="+")
     bcb.bind("<<ComboboxSelected>>", _b_pick, add="+")
-    ttk.Label(bf, text="「系统默认浏览器」= 你平时双击链接时用的那个。"
-                       "改完点「保存」生效；卡片上的按钮会变成「打开 Chrome」这种。",
+    ttk.Label(bf, text=T("「系统默认浏览器」= 你平时双击链接时用的那个。"
+                       "改完点「保存」生效；卡片上的按钮会变成「打开 Chrome」这种。"),
               foreground=_MUTED, wraplength=460, justify="left"
               ).pack(anchor="w", pady=(6, 0))
     _b_sync()
@@ -7942,7 +8001,7 @@ def _settings_display_dialog():
         # 目录先落盘：它动的是磁盘真相，失败就不该继续保存其它偏好
         ok, dmsg = _apply_dir_settings(ib_var, tr_var)
         if not ok:
-            messagebox.showerror("目录设置失败", dmsg)
+            messagebox.showerror(T("目录设置失败"), dmsg)
             return
         try:
             n = int(mv.get())
@@ -7951,7 +8010,7 @@ def _settings_display_dialog():
         n = max(1, min(MAX_SLOTS, n))
         vis = [k for k in order if k in shown]
         if not vis:
-            messagebox.showwarning("至少留一个", "请至少勾选一个要显示的版本槽。")
+            messagebox.showwarning(T("至少留一个"), T("请至少勾选一个要显示的版本槽。"))
             return
         raw = {"max_visible": n, "order": list(order), "visible": vis}
         # 收口：丢未知槽、钳上限、保证至少一个可见（逻辑在 dsh_ui_prefs，可离线测）
@@ -7959,7 +8018,7 @@ def _settings_display_dialog():
                  if UIP else raw)
         err = _save_ui_prefs(prefs)
         if err:
-            messagebox.showerror("保存失败", err)
+            messagebox.showerror(T("保存失败"), err)
             return
         # 内存里的偏好同步更新，_display_keys() 立刻按新设置算
         UI_CFG.clear()
@@ -7973,7 +8032,7 @@ def _settings_display_dialog():
                 continue
             err = _save_version_field(k, "browser", new_b)
             if err:
-                messagebox.showerror("保存浏览器设置失败", err)
+                messagebox.showerror(T("保存浏览器设置失败"), err)
                 return
             VC[k]["browser"] = new_b
             bchanged.append("%s→%s" % (k, _browser_label(new_b)))
@@ -7985,24 +8044,24 @@ def _settings_display_dialog():
         _build_cards()
         vis = prefs["visible"]
         n = prefs["max_visible"]
-        log("[设置] 界面显示：%s（最多 %d 个）" % ("、".join(vis), n))
+        log(T("[设置] 界面显示：%s（最多 %d 个）") % ("、".join(vis), n))
         if bchanged:
-            log("[设置] 浏览器：%s" % "、".join(bchanged))
+            log(T("[设置] 浏览器：%s") % "、".join(bchanged))
         if len(vis) > n:
-            messagebox.showinfo("已保存",
-                                "已保存。勾选了 %d 个，但「最多显示 %d 个」限制下"
-                                "只显示前 %d 个：\n\n%s"
+            messagebox.showinfo(T("已保存"),
+                                T("已保存。勾选了 %d 个，但「最多显示 %d 个」限制下"
+                                "只显示前 %d 个：\n\n%s")
                                 % (len(vis), n, n, "、".join(vis[:n])))
         # 目录改动的说明放最后弹：它往往要求用户「重启」或「手工删旧目录」，
         # 盖在别的提示上面容易被忽略。
         if dmsg:
-            messagebox.showinfo("目录已更新", dmsg)
+            messagebox.showinfo(T("目录已更新"), dmsg)
 
     btns = ttk.Frame(win)
     btns.pack(padx=20, pady=(0, 16))
-    ttk.Button(btns, text="保存", style="Green.TButton",
+    ttk.Button(btns, text=T("保存"), style="Green.TButton",
                command=on_ok).pack(side="left", padx=4)
-    ttk.Button(btns, text="取消", command=win.destroy).pack(side="left", padx=4)
+    ttk.Button(btns, text=T("取消"), command=win.destroy).pack(side="left", padx=4)
     win.bind("<Escape>", lambda e: win.destroy())
     win.grab_set()
 
@@ -8012,14 +8071,14 @@ def _settings_display_dialog():
 # （这个坑本项目踩过两次，C3/C8 组断言守着。）
 # 2026-11-01：标题栏只留「设置」一个入口。
 # 「关于」「★ 在 GitHub 收藏」都收进设置页（用户要求：初始界面只有槽 + 日志 + 全启停）。
-ttk.Button(_hdr, text="设置", command=settings_dialog).pack(side="right", padx=(0, 6))
+ttk.Button(_hdr, text=T("设置"), command=settings_dialog).pack(side="right", padx=(0, 6))
 # 2026-11-03 用户要求：「把在 github 上收藏还是放进设置界面，放最下面」
 # 两个全启停按钮：放在「设置」左侧（pack side=right 时后 pack 的在更左边）
-_b_stopall = ttk.Button(_hdr, text="全部停止", style="Red.TButton",
+_b_stopall = ttk.Button(_hdr, text=T("全部停止"), style="Red.TButton",
                         command=stop_all_slots)
 _b_stopall.pack(side="right", padx=(0, 6))
 BUSY["btns"].append(_b_stopall)
-_b_startall = ttk.Button(_hdr, text="全部启动", style="Green.TButton",
+_b_startall = ttk.Button(_hdr, text=T("全部启动"), style="Green.TButton",
                          command=start_all_slots)
 _b_startall.pack(side="right", padx=(0, 6))
 BUSY["btns"].append(_b_startall)
@@ -8057,15 +8116,15 @@ if not FRESH_START:
         if _missing:
             _err = _ensure_slots_visible(_missing)
             if not _err:
-                log("[配置] 已补全界面显示列表：%s（此前不在 ui.visible 里）"
+                log(T("[配置] 已补全界面显示列表：%s（此前不在 ui.visible 里）")
                     % "、".join(_missing))
             else:
-                log("[配置] 补全界面显示列表失败：%s" % _err)
+                log(T("[配置] 补全界面显示列表失败：%s") % _err)
     except Exception as _e:
-        log("[配置] 启动自愈 ui.visible 时出错（忽略）：%s" % _e)
+        log(T("[配置] 启动自愈 ui.visible 时出错（忽略）：%s") % _e)
 
 if FRESH_START:
-    log("[引导] 零槽启动：还没有任何版本槽，显示安装引导")
+    log(T("[引导] 零槽启动：还没有任何版本槽，显示安装引导"))
     # 零槽时自动把环境体检结果摆出来，用户装之前就知道缺什么
     root.after(600, lambda: _log_fresh_env())
 
@@ -8083,11 +8142,11 @@ def _log_fresh_env():
         raw = open(tmp, "rb").read().decode("utf-8", "replace")
         for ln in raw.splitlines():
             if ln.strip().startswith(("[OK]", "[注意]", "[缺失]")):
-                log("[环境] " + ln.strip())
-        log("[环境] 完整报告见 dsh-manager.log；要自己再跑一遍："
-            "python scripts\\check-env.py（换新机器 / 排查管理器起不来时用）")
+                log(T("[环境] ") + ln.strip())
+        log(T("[环境] 完整报告见 dsh-manager.log；要自己再跑一遍："
+            "python scripts\\check-env.py（换新机器 / 排查管理器起不来时用）"))
     except Exception as e:
-        log("[环境] 自动体检失败：%s" % e)
+        log(T("[环境] 自动体检失败：%s") % e)
 
 # ── 主题（2026-11-01）───────────────────────────────────────────────
 # 必须放在文件末尾：_apply_palette() 定义在下方，而这里要**调用**它；
@@ -8095,8 +8154,8 @@ def _log_fresh_env():
 # （2026-11-01 实测踩到：放在控件创建处调用 → name '_apply_palette' is not defined）
 try:
     _apply_palette()
-    log("[主题] 生效：%s（模式=%s）" % (_resolved_theme(), _theme_mode()))
+    log(T("[主题] 生效：%s（模式=%s）") % (_resolved_theme(), _theme_mode()))
 except Exception as _e:
-    log("[主题] 应用失败（回退默认配色）：%s" % _e)
+    log(T("[主题] 应用失败（回退默认配色）：%s") % _e)
 
 root.mainloop()

@@ -409,7 +409,7 @@ chk("C5b 标题不再重复端口（下面状态行就有 :4080，标题省出�
 chk("C5c 标题仍保留实装版本（右边那串就是真值，不再加「实装」二字）",
     bool(m) and "vtxt" in _ret and "实装" not in _ret, _ret[:80])
 chk("C5d 浏览器名仍出现在按钮上（信息没丢）",
-    re.search(r'text="打开 %s" % _browser_label', src) is not None)
+    re.search(r'text=T\("打开 %s"\) % _browser_label', src) is not None)
 chk("C3i 启动时**不**自动扫描（只在用户点按钮时扫）",
     # 2026-11-13 用户要求：「点击扫描已装 dsh 并纳入时就进行扫描，其他不需要提示」。
     # 自动扫描 + 「以后不再提示」名单是一整套，去掉扫描就没有名单存在的理由。
@@ -425,7 +425,7 @@ m = re.search(r"askyesno\(\s*\"发现已安装的 dsh\"", src)
 # 不点「纳入勾选的」就不会动任何东西（副作用动作必须显式确认）。
 chk("C3l 纳入走勾选列表且需显式确认（只有「纳入勾选的 / 取消」两个出口）",
     "def _adopt_picker_dialog" in src and "纳入勾选的" in src
-    and 'text="取消", command=on_cancel' in src)
+    and 'text=T("取消"), command=on_cancel' in src)
 chk("C3l2 体检不通过的安装禁止勾选",
     # 2026-11-01：勾选态从原生 Checkbutton 改成可点击 Label（✅/空），
     # 禁用逻辑同步改成「点不动 + 变灰」。
@@ -636,7 +636,7 @@ chk("C8e 零槽引导提供安装与纳入两个入口",
     "install_official_version" in _fn_body("_build_fresh_guide")
     and "scan_and_offer_adopt()" in _fn_body("_build_fresh_guide"))
 chk("C8e2 零槽时不再有「快速开始」大卡片（与底部按钮重复）",
-    'text="快速开始"' not in src)
+    'text=T("快速开始")' not in src)
 chk("C8f 示例配置是零槽",
     '"versions": {}' in io.open(
         os.path.join(_REPO, "config", "config.example.json"),
@@ -645,8 +645,8 @@ chk("C8g 界面内置环境体检入口", "def _show_env_report()" in src)
 # 2026-10-31：标题栏那个按钮撤了（它查的是管理器自己的前置条件，管理器都开起来了
 # 基本必然通过；node/槽完整性/端口这些「槽体检」覆盖得更准）。入口只留在零槽引导卡。
 chk("C8h 标题栏不再有「检查运行环境」（日常用户用不着，是维护者工具）",
-    'text="检查运行环境"' in src
-    and "_hdr, text=\"检查运行环境\"" not in src)
+    'text=T("检查运行环境")' in src
+    and "_hdr, text=T(\"检查运行环境\")" not in src)
 chk("C8h2 零槽引导卡仍留一个入口（那是唯一「我这机器行不行」的场合）",
     src.count("检查运行环境") >= 1 and "_show_env_report" in src)
 
@@ -696,7 +696,7 @@ chk("C3y11 下一个槽键读 config.json（不是内存快照）",
 print("== C3z4 界面设置 ==")
 chk("C3z5a settings_dialog 已定义", "def settings_dialog()" in src)
 _d = line_of("def settings_dialog")
-_b = line_of('ttk.Button(_hdr, text="设置"')
+_b = line_of('ttk.Button(_hdr, text=T("设置")')
 chk("C3z5b 「设置」按钮在 settings_dialog / settings_hub_dialog 之后创建",
     # 2026-11-01：主界面按钮改指向统一入口 settings_dialog（它内部再调 hub）
     _d > 0 and _b > _d, "def@%d 按钮@%d" % (_d, _b))
@@ -870,10 +870,10 @@ chk("C3z8e 状态行末尾拼体检标记", "+ _health_mark(key)" in _fn_body("_
 chk("C3z8f refresh 支持 once=True（体检后只刷一次，不另起定时链）",
     "if not once:" in _fn_body("refresh") and "def refresh(once=False):" in src)
 chk("C3z8g 「槽体检」按钮在 _run_health 定义之后创建（提前创建就是 NameError）",
-    src.index('text="槽体检"') > src.index("def _run_health("))
+    src.index('text=T("槽体检")') > src.index("def _run_health("))
 chk("C3z8h 体检窗口默认只报告；修复是**显式按钮**（2026-11-14 用户要求）",
     "复制到剪贴板" in _fn_body("_health_dialog")
-    and 'text="修复…"' in _fn_body("_health_dialog")
+    and 'text=T("修复…")' in _fn_body("_health_dialog")
     and "repair_slot" in _fn_body("_health_dialog")
     and "askyesno" in _fn_body("_health_dialog"))
 chk("C3z8i 卸载提示写明「自己放进槽目录的文件也会一起删」",
@@ -890,7 +890,7 @@ chk("C3z9b 启动时拍基线（否则第一次变化没有可比对象）",
 chk("C3z9c refresh 里每 7 次（约 10 秒）比对一次，不是每 1.5 秒",
     '_DRIFT_TICK["n"] % 7 == 0' in _fn_body("refresh"))
 chk("C3z9d 变化写进日志，前缀统一 [变更]",
-    'log("[变更] %s %s"' in _fn_body("_check_drift"))
+    'log(T("[变更] %s %s"' in _fn_body("_check_drift"))
 chk("C3z9e 变化太多时截断（20 条），不刷屏",
     "changes[:20]" in _fn_body("_check_drift"))
 chk("C3z9f 体检窗口顺带列插件清单（调试时最常问「这槽装了啥」）",
@@ -939,7 +939,7 @@ chk("C3z11f2 原子写集中在 _write_config_data（os.replace + 临时文件 +
     and "os.replace(tmp, CONFIG_PATH)" in _fn_body("_write_config_data")
     and "os.remove(tmp)" in _fn_body("_write_config_data"))
 chk("C3z11g default 的按钮文案是「浏览器」不是「默认浏览器」（240px 卡片放不下六个字）",
-    'return "浏览器" if b == "default" else' in src)
+    'return T("浏览器") if b == "default" else' in src)
 
 # ── 标题行留白（2026-10-31 用户反馈「版本号那一行有点窄」）──────────────
 print("== C3z12 卡片标题行留白 ==")
@@ -959,20 +959,20 @@ chk("C3z13b 空白区仍是 fleur",
 # 其余动作（安装 / 纳入 / 卸载 / 生成 bat / 关于 / 收藏）全部收进「设置」。
 chk("C3z13c 全启停按钮在标题栏、位于「设置」左侧",
     # 2026-11-01 第三轮：底部按钮条移到标题栏（pack side=right 后 pack 的在更左）
-    '_hdr, text="全部启动"' in src and '_hdr, text="全部停止"' in src
-    and src.index('_hdr, text="设置"') < src.index('_hdr, text="全部停止"'))
+    '_hdr, text=T("全部启动")' in src and '_hdr, text=T("全部停止")' in src
+    and src.index('_hdr, text=T("设置")') < src.index('_hdr, text=T("全部停止")'))
 chk("C3z13c2 主界面不再有第二排按钮（安装/纳入/卸载已收进设置）",
     "_act2 = ttk.Frame(root)" not in src)
 chk("C3z13c3 设置页只留界面/目录/维护/日志四组",
     # 2026-11-02 重构：设置页不再堆安装/纳入/卸载，只保留不常用的配置项
-    'text="界面"' in src and 'text="维护"' in src and 'text="日志"' in src
+    'text=T("界面")' in src and 'text=T("维护")' in src and 'text=T("日志")' in src
     and "_dir_group_single" in src)
 chk("C3z13d 标题栏只剩「设置」一个按钮",
-    '_hdr, text="槽体检"' not in src
-    and '_hdr, text="关于"' not in src
-    and '_hdr, text="设置"' in src)
+    '_hdr, text=T("槽体检")' not in src
+    and '_hdr, text=T("关于")' not in src
+    and '_hdr, text=T("设置")' in src)
 chk("C3z13e 槽体检按钮仍在 _run_health 定义之后创建（否则 NameError）",
-    src.index('text="槽体检"') > src.index("def _run_health("))
+    src.index('text=T("槽体检")') > src.index("def _run_health("))
 chk("C3z13f2 底部行只剩两列（全部停止 / 生成 bat）",
     "_act.columnconfigure(2" not in src)
 chk("C3z13g 日志按行着色：出错标红、[变更] 标青",
@@ -1181,7 +1181,7 @@ chk("C3z17p 扫不到时不再指路已删除的「已移出管理」列表",
     and "没扫到管理范围外的 dsh" in _adopt_full)
 chk("C3z17q 失效记录只进日志，弹窗里一个字都不提",
     "_stale_n = len(_stale_detached_records())" in _adopt_full
-    and 'log("[检测] 忽略' in _adopt_full
+    and 'log(T("[检测] 忽略' in _adopt_full
     and "另外，磁盘上还有" not in _adopt_full
     and "已移出管理」列表" not in _adopt_full)
 chk("C3z17s 扫不到时只弹一个说明框，不再连环追问",
@@ -1198,7 +1198,7 @@ chk("C3z17r detached 记录里的 root 写成反斜杠（<base> 烘开后与其�
 # 装完第一个版本后再也装不了第二个、也卸不掉，而所有回归一路全绿（它们只
 # 断言源码里还有 `command=install_official_version` 这个字符串）。
 _hub = _fn_body("settings_hub_dialog")
-chk("C3z18a 设置页有「版本管理」分组", 'text="版本管理"' in _hub)
+chk("C3z18a 设置页有「版本管理」分组", 'text=T("版本管理")' in _hub)
 chk("C3z18b 版本管理挂了「安装官方版 dsh」", "install_official_version" in _hub)
 chk("C3z18c 版本管理挂了「扫描并纳入」",
     "scan_and_offer_adopt()" in _hub)
@@ -1225,7 +1225,7 @@ chk("C3z19c 补候选的三道闸：目录在 + 有 bin.js + 不在 versions 里
     and "for r in _live_detached_records():" in _adopt)
 chk("C3z19d 没扫到时失效记录只进日志（不弹名字）",
     "_stale_n = len(_stale_detached_records())" in _adopt
-    and 'log("[检测] 忽略' in _adopt
+    and 'log(T("[检测] 忽略' in _adopt
     and "_det = _live_detached_records()" not in _adopt)
 chk("C3z19d2 扫描弹窗彻底不显示失效记录的名字（二次反馈）",
     "另有 %d 条已移出记录" not in _adopt
@@ -1483,7 +1483,7 @@ chk("C3z26b 列表区高度由行数定，画布不写死宽度（写死会和�
     and "width=484" not in _pk2
     and 'fill="both", expand=True' in _pk2)
 chk("C3z26c 每行标出「原地接回 / 复制一份」，不能纳入的标红",
-    'text=r["action"]' in _pk2 and 'text="不能纳入"' in _pk2)
+    'text=r["action"]' in _pk2 and 'text=T("不能纳入")' in _pk2)
 # ── C3z27：接回做体检；修复必须由用户点（2026-11-14）────────────────────
 _rep_body = _uops.split("def repair_slot(")[1].split("\ndef ")[0]
 chk("C3z27a 接回走和复制纳入同一套体检（不再只看 bin.js）",
@@ -1527,7 +1527,7 @@ chk("C3z22b 进度回调先写日志、再更新标签",
     < src.index('root.after(0, lambda: self.lbl.configure'))
 chk("C3z22c 探测数据未到时也显示端口（不再写「检测中…」）",
     'status_vars[key].set("检测中…"' not in src
-    and '已停止  :%d" % cfg["port"]' in _fn_body("_refresh_one"))
+    and 'T("已停止  :%d") % cfg["port"]' in _fn_body("_refresh_one"))
 chk("C3z22d 单槽刷新有异常隔离（一个槽坏了不影响其它槽显示端口）",
     # 2026-11-13：v4 没有端口号的真因 —— _scan_pos 缺它的键，_scan_slot 抛
     # KeyError，而 refresh 的循环没有隔离，v4 及之后的槽全部停在「—」。
