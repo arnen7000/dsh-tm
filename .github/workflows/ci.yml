@@ -49,3 +49,20 @@ jobs:
             }
             exit 1
           }
+
+      # 总检挂了就补跑一次失败的回归，把**完整输出**摆出来。
+      # check-all 只打一行「x 离线回归未通过（某脚本，退出码 1）」，看不到具体是
+      # 哪条断言挂了 —— 而 CI 和本地唯一的差别是 Windows Server + Python 3.11，
+      # 没有完整输出根本无从判断（2026-11-14：为了这一行折腾了 5 次推送）。
+      - name: 失败诊断（仅失败时）
+        if: failure()
+        shell: pwsh
+        run: |
+          foreach ($t in @('test-slot-ops.py', 'test-manager-logic.py')) {
+            $p = Join-Path 'scripts' $t
+            if (-not (Test-Path $p)) { continue }
+            Write-Host "=== 完整输出：$t ==="
+            $o = & python $p *>&1
+            $o | ForEach-Object { Write-Host "$_" }
+            Write-Host "=== $t 退出码：$LASTEXITCODE ==="
+          }
