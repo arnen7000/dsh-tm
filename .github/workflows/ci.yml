@@ -21,7 +21,23 @@ jobs:
         run: Copy-Item config/config.example.json config.json
 
       # 项目自己的发布门禁：Python 语法、编码策略、敏感文件、token、
-      # Markdown 相对链接、13 套离线回归 + 卫生闸。
+      # Markdown 相对链接、15 套离线回归 + 卫生闸。
+      #
+      # 失败时把每条 `x ...` **单独输出成 annotation**（网页顶部那几条红字）——
+      # 否则所有内容挤在一个 step 的长日志里，网页和 API 都很难定位到底哪项挂了
+      # （2026-11-14：CI 连红 19 次，就是卡在"看不到是哪个检查失败"）。
       - name: 发布前总检
         shell: pwsh
-        run: ./scripts/check-all.ps1
+        run: |
+          ./scripts/check-all.ps1 2>&1 | Tee-Object -FilePath check-all.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            $bad = @(Get-Content check-all.log | Where-Object { $_ -match '^\s+x\s' })
+            if ($bad.Count -eq 0) {
+              Write-Host "::error::check-all 退出码 $code，但没捕获到 x 开头的失败行"
+            }
+            foreach ($b in $bad) {
+              Write-Host "::error::$($b.Trim())"
+            }
+            exit 1
+          }
