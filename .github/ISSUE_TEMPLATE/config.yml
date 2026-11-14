@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "Security issue / 安全问题（凭据泄露、误删用户数据）"
+    url: https://github.com/arnen7000/dsh-tm/blob/main/SECURITY.md
+    about: "Report privately, not as a public issue / 请勿开公开 issue，按 SECURITY.md 里的方式私密报告"
+  - name: "Usage and troubleshooting / 使用问题与故障排查"
+    url: https://github.com/arnen7000/dsh-tm/blob/main/docs/%E5%B8%B8%E8%A7%81%E9%97%AE%E9%A2%98.md
+    about: "Read the FAQ and the Troubleshooting section of the README first / 先看常见问题与 README 的「故障排查」一节"

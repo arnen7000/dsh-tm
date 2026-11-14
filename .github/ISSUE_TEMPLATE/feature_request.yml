@@ -1,0 +1,64 @@
+name: "Feature request / 提一个建议"
+description: "New feature, interaction improvement, docs / 新功能、交互改进、文档补充"
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, please check "Notes and limitations" in the
+        [README](https://github.com/arnen7000/dsh-tm#readme) and the
+        [FAQ](https://github.com/arnen7000/dsh-tm/blob/main/docs/%E5%B8%B8%E8%A7%81%E9%97%AE%E9%A2%98.md).
+        Some "missing features" are deliberate — e.g. the manager will not auto-repair files
+        for you, and the install progress window has no close button.
+
+        提建议前建议先看一眼 [README](https://github.com/arnen7000/dsh-tm#readme) 的
+        「注意事项与限制」和
+        [常见问题](https://github.com/arnen7000/dsh-tm/blob/main/docs/%E5%B8%B8%E8%A7%81%E9%97%AE%E9%A2%98.md)。
+        有些"看起来缺的功能"是刻意不做的 —— 比如不替用户自动修复文件、不给进度窗加关闭按钮。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: "What is the actual pain / 你遇到的是什么麻烦"
+      description: "Describe the scenario first, then the solution — jumping straight to a solution often misses a simpler one / 先说场景，再说方案，直接说方案容易错过更简单的解法"
+      placeholder: |
+        I have 6 slots but only ever look at 3 of them. Right now I have to
+        toggle them in Settings every time. I wish I could collapse a card
+        directly from the main window.
+
+        我有 6 个版本，每次只想看其中 3 个，现在要在设置里勾选，来回切太麻烦，
+        希望卡片上能直接"折叠"某个槽。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: "How you would solve it / 你希望怎么解决"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: "Which part / 涉及哪块"
+      multiple: true
+      options:
+        - "Install / adopt / 安装、纳入"
+        - "Start / stop / 启动、停止"
+        - "Uninstall / detach / 卸载、移出"
+        - "Move install root / 移动安装根"
+        - "Slot health check / repair / 槽体检、修复"
+        - "UI and theme / 界面与主题"
+        - "Docs / 文档"
+        - "Other / 其它"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: "Before submitting / 提交前确认"
+      options:
+        - label: "I searched existing issues first / 我已搜索过现有 issue，没有重复"
+          required: true
