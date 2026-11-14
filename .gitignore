@@ -54,6 +54,13 @@ Thumbs.db
 # 含本机绝对路径、排障细节与对话记录。对使用者没有意义，也不该出现在公网。
 # 文件本身保留在本地，只是不随仓库发布。
 docs/本机部署现状.md
+# 这四份是「给自己 / 给接手的 agent」用的过程文档，不属于使用者需要的最小集合：
+# 需求验收清单、路线图、手工隔离安装 runbook、AI 代装提示词。
+# 文件保留在本地，只是不随仓库发布（2026-11-14 按「最小必要」收敛）。
+docs/开发需求说明书.md
+docs/路线图与扩展愿景.md
+docs/isolated-install-runbook.md
+docs/AI代装提示词-隔离版dsh.md
 docs/审计与功能测试报告-*.md
 docs/变更记录.md
 docs/DeepSeek-Harness使用手册-旧版-*.md

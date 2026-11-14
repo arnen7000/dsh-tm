@@ -1,0 +1,27 @@
+name: check-all
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # config.json 含本机路径，被 .gitignore 排除；CI 用零槽模板起一份。
+      - name: 准备零槽配置
+        shell: pwsh
+        run: Copy-Item config/config.example.json config.json
+
+      # 项目自己的发布门禁：Python 语法、编码策略、敏感文件、token、
+      # Markdown 相对链接、13 套离线回归 + 卫生闸。
+      - name: 发布前总检
+        shell: pwsh
+        run: ./scripts/check-all.ps1
