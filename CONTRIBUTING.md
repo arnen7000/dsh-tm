@@ -1,7 +1,7 @@
 # 参与开发
 
 这是一个 Windows 桌面小工具（Tkinter + 纯 Python），没有第三方依赖。改动之前请先读
-[`docs/架构与维护说明.md`](docs/架构与维护说明.md)（组件地图与隔离轴）和
+下面的代码地图和
 [`docs/工程经验总结.md`](docs/工程经验总结.md)（为什么有些地方看起来"绕"）。
 
 ## 环境
@@ -97,4 +97,4 @@ git config core.hooksPath .githooks
 
 - 换机器只要 `git clone` + 装 Python（带 tkinter）；`config.json` 会自动生成，不需要从别处拷。
 - **不要**把 `config.json` 或 `dsh备份` 在机器之间同步 —— 里面是本机绝对路径和明文凭据。
-- 发布前请走一遍 [`docs/发布与更新流程.md`](docs/发布与更新流程.md) 的清单（隐私扫描 → 最小必要 → 版本号 → 实测）。
+- 发布前：改 `VERSION` → 写 `CHANGELOG.md` → 打 tag（`v` 前缀）→ 跑一遍 `check-all.ps1` → 实测一次真实安装。

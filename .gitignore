@@ -58,6 +58,8 @@ docs/本机部署现状.md
 # 需求验收清单、路线图、手工隔离安装 runbook、AI 代装提示词。
 # 文件保留在本地，只是不随仓库发布（2026-11-14 按「最小必要」收敛）。
 docs/开发需求说明书.md
+docs/架构与维护说明.md
+docs/发布与更新流程.md
 docs/路线图与扩展愿景.md
 docs/isolated-install-runbook.md
 docs/AI代装提示词-隔离版dsh.md

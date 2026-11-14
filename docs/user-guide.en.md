@@ -191,8 +191,6 @@ this file; other documents under `docs/` are Chinese only for now.
 | Document | Language |
 |---|---|
 | [README](../README.md) | Chinese |
-| [Architecture and maintenance](架构与维护说明.md) | Chinese |
 | [FAQ](常见问题.md) | Chinese |
-| [Release and update process](发布与更新流程.md) | Chinese |
 | [Security policy](../SECURITY.md) | English |
 | [Contributing](../CONTRIBUTING.md) | English + Chinese |
