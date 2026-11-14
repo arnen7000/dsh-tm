@@ -34,6 +34,11 @@ if not os.path.exists(SRC):
     sys.exit(1)
 
 src = open(SRC, encoding="utf-8").read()
+src_i18n = open(os.path.join(HERE, os.pardir, "dsh_i18n.py"), encoding="utf-8").read()
+# 抽出来 exec 的函数体里有 T()（i18n），命名空间必须带上它。
+if os.path.join(HERE, os.pardir) not in sys.path:
+    sys.path.insert(0, os.path.join(HERE, os.pardir))
+from dsh_i18n import T as _T   # noqa: E402
 tree = ast.parse(src)
 
 FAILS = []
@@ -55,7 +60,7 @@ def harvest(names, assign_names=(), ns_extra=None):
                 keep.append(n)
         elif isinstance(n, ast.FunctionDef) and n.name in names:
             keep.append(n)
-    ns = {"re": re, "os": os, "time": time}
+    ns = {"re": re, "os": os, "time": time, "T": _T}
     if ns_extra:
         ns.update(ns_extra)
     exec(compile(ast.Module(body=keep, type_ignores=[]), "<dsh_manager>", "exec"), ns)
@@ -1411,6 +1416,27 @@ chk("C3z33f 卡片创建时把启动/停止单独登记进 card_run",
     'BUSY["card_run"].extend([_b_start, _b_stop])' in src)
 chk("C3z33g 重画卡片要清空 card_run（否则残留已销毁的按钮）",
     'BUSY["card_run"] = []' in _fn_body("_clear_cards"))
+# ── C3z34：切换界面语言不该要求重启（2026-11-14 用户反馈）────────────────
+# 控件文案是创建时求值的，但可以遍历控件树把 text 反查回中文 key 再翻译 ——
+# zh→en、en→zh 双向就地切，不重启、不丢当前界面状态。
+# `_pick_lang` 是 settings_hub_dialog 里的**嵌套函数**，`_fn_body` 只认顶层 def，
+# 所以按位置切到下一个同级语句（语言按钮的 for 循环）为止。
+_pl_i = src.index("    def _pick_lang(_v):")
+_pl = src[_pl_i:src.index('    for _i, (_val, _lbl) in enumerate((("zh", T("中文"))', _pl_i)]
+_pl_code = "\n".join(l for l in _pl.splitlines() if not l.lstrip().startswith("#"))
+chk("C3z34a 切语言就地重译控件，不再要求重启",
+    "I18N.retranslate(root)" in _pl_code
+    and "_relaunch_self()" not in _pl_code
+    and "askyesno" not in _pl_code)
+chk("C3z34b 卡片状态行是 textvariable，靠重建卡片换语言",
+    "_clear_cards()" in _pl_code and "_build_cards()" in _pl_code)
+chk("C3z34c 窗口标题不是控件 text，单独设一次",
+    'root, "DSH 版本管理器"' in _pl_code and 'win, "设置"' in _pl_code)
+chk("C3z34d 翻译层提供 retranslate / to_key（反查原始中文 key）",
+    "def retranslate(" in src_i18n and "def to_key(" in src_i18n)
+chk("C3z34e 自定义按钮函数内部翻译（文案以位置参数传入，白名单抓不到）",
+    "ttk.Button(ops, text=T(text)" in src and "ttk.Button(mnt, text=T(text)" in src)
+
 chk("C3z33h 非模态窗口恢复时不抢 grab",
     "if not self.modal:" in _gp and "return" in _gp.split("if not self.modal:")[1][:80])
 

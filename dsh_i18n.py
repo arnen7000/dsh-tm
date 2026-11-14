@@ -85,3 +85,67 @@ def T(s):
 def coverage():
     """返回 (已翻译条数, 是否已加载)，给「关于」/ 设置页显示进度用。"""
     return (len(_EN), _LOADED["en"])
+
+
+# ── 就地重译（2026-11-14：用户要求「切换语言不该要求重启」）──────────────
+# 控件文案是在创建时求值的（`text=T("启动")`），所以切语言后已经建好的控件
+# 不会自己变。这里不重建界面，而是**遍历控件树，把每个 text 反查回中文 key
+# 再按新语言翻译** —— zh→en、en→zh 双向都能就地切。
+#
+# 为什么能反查：中文原文就是 key，英文表是 中文→英文。反过来建一张
+# 英文→中文 的表，就能从当前显示的英文还原出原始中文 key。
+_REV = {"map": None}
+
+
+def _reverse():
+    """英文译文 -> 中文 key。懒构建（只有切回中文才用得上）。"""
+    if _REV["map"] is None:
+        if not _LOADED["en"]:
+            load_en()
+        m = {}
+        for k, v in _EN.items():
+            m.setdefault(v, k)      # 同一译文对应多个 key 时取第一个，够用
+        _REV["map"] = m
+    return _REV["map"]
+
+
+def to_key(cur):
+    """把当前显示文本还原成中文 key。还原不了返回 None（动态文本就属于这种）。"""
+    if not isinstance(cur, str) or not cur:
+        return None
+    if not _LOADED["en"]:
+        load_en()
+    if cur in _EN:                  # 本身就是中文原文
+        return cur
+    return _reverse().get(cur)      # 是英文译文，反查
+
+
+def retranslate(widget):
+    """把 widget 及其全部子控件的 text 按当前语言重设，返回改动的控件数。
+
+    只动 `text` 选项；`textvariable` 绑定的动态文本（状态行、路径）不碰 ——
+    那些由各自的刷新逻辑重算。反查不到的（日志内容、拼接出来的句子）也跳过。
+    """
+    n = 0
+    stack = [widget]
+    while stack:
+        w = stack.pop()
+        try:
+            stack.extend(w.winfo_children())
+        except Exception:
+            pass
+        try:
+            cur = w.cget("text")
+        except Exception:
+            continue
+        k = to_key(cur)
+        if k is None:
+            continue
+        new = T(k)
+        if new != cur:
+            try:
+                w.configure(text=new)
+                n += 1
+            except Exception:
+                pass
+    return n

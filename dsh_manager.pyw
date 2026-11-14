@@ -10,6 +10,13 @@
 #
 # 用法：复制 config/config.example.json -> config.json，改路径后 `py dsh_manager.pyw`
 #
+# ── i18n 必须先于 tkinter 检查 ────────────────────────────────────────
+# 下面「tkinter 缺失」的提示语本身也要翻译（用户可能只看得懂英文），
+# 所以 T() 在这里就得可用。放在普通 import 区（87 行）会让 70 行报
+# `NameError: name 'T' is not defined` —— 2026-11-14 被 test-tk-selfheal 抓到。
+import dsh_i18n as I18N
+from dsh_i18n import T
+
 # ── tkinter 必须能import：这是本程序唯一的硬性第三方前提 ──────────────
 # 为什么放在最前面显式检查：tkinter 是 CPython 自带模块，但**并非所有发行版都带**
 # —— Debian/Ubuntu 需另装 python3-tk，部分精简版 Python、某些 Store 版也缺。
@@ -69,23 +76,21 @@ except ImportError as _e:
     if _tk_selfheal():
         _sys.exit(0)            # GUI 还没创建，直接退出无副作用
 
-    _msg = ("dsh 版本管理器需要 Python 的 tkinter 模块，但它不可用。\n\n"
+    _msg = (T("dsh 版本管理器需要 Python 的 tkinter 模块，但它不可用。\n\n"
             "原因：%s\n\n"
             "解决办法（任选其一）：\n"
             "  1) 双击桌面快捷方式 / start-manager.bat（它们会用包内自带的解释器）\n"
             "  2) Windows：重新安装 python.org 官方版 Python（勾选 tcl/tk 组件）\n"
             "  3) Debian/Ubuntu：sudo apt install python3-tk\n\n"
-            "本程序需要 Python 3.8 或更高版本。" % _e)
+            "本程序需要 Python 3.8 或更高版本。") % _e)
     try:
         import ctypes as _ct
-        _ct.windll.user32.MessageBoxW(0, _msg, "dsh 版本管理器", 0x10)
+        _ct.windll.user32.MessageBoxW(0, _msg, T("dsh 版本管理器"), 0x10)
     except Exception:
         pass
     _sys.stderr.write(_msg + "\n")
     _sys.exit(1)
 import subprocess, os, time, socket, json, sys, shutil, threading, re, csv, io
-import dsh_i18n as I18N
-from dsh_i18n import T
 
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
@@ -212,11 +217,11 @@ except FileNotFoundError:
             shutil.copyfile(EXAMPLE_PATH, CONFIG_PATH)
             with open(CONFIG_PATH, "r", encoding="utf-8-sig") as _f:
                 CFG = json.load(_f)
-            print("[info] 未找到 config.json，已用 config/config.example.json 自动生成默认配置。")
+            print(T("[info] 未找到 config.json，已用 config/config.example.json 自动生成默认配置。"))
         except Exception as e:
-            _fatal("找不到配置文件：\n%s\n\n且无法从示例自动生成：%s" % (CONFIG_PATH, e))
+            _fatal(T("找不到配置文件：\n%s\n\n且无法从示例自动生成：%s") % (CONFIG_PATH, e))
     else:
-        _fatal("找不到配置文件：\n%s\n\n且示例 config/config.example.json 也不存在（仓库可能不完整）。" % CONFIG_PATH)
+        _fatal(T("找不到配置文件：\n%s\n\n且示例 config/config.example.json 也不存在（仓库可能不完整）。") % CONFIG_PATH)
 except Exception as e:
     # 解析失败也自愈：备份坏文件、再从示例重建。
     # 否则 config.json 一旦被写成半截，管理器就再也打不开了。
@@ -224,17 +229,17 @@ except Exception as e:
     try:
         shutil.move(CONFIG_PATH, _bad)
     except Exception:
-        _bad = "(备份失败)"
+        _bad = T("(备份失败)")
     if os.path.exists(EXAMPLE_PATH):
         try:
             shutil.copyfile(EXAMPLE_PATH, CONFIG_PATH)
             with open(CONFIG_PATH, "r", encoding="utf-8-sig") as _f:
                 CFG = json.load(_f)
-            _msg = ("config.json 解析失败：%s\n\n"
+            _msg = (T("config.json 解析失败：%s\n\n"
                     "原文件已备份为：\n%s\n\n"
                     "现在用的是【示例模板】路径（不是你的真实配置）——\n"
                     "请把 config.json 里的版本号/路径/端口改回来，"
-                    "或参考上面的备份文件。"
+                    "或参考上面的备份文件。")
                     % (e, _bad))
             print("[warn] " + _msg.replace("\n\n", " | "))
             _boot_log("[warn] " + _msg.replace("\n\n", " | "))
@@ -246,14 +251,14 @@ except Exception as e:
             except Exception:
                 pass
         except Exception as e2:
-            _boot_log("[fatal] 配置文件解析失败：%s（无法从示例重建：%s，备份在 %s）" % (e, e2, _bad))
-            _fatal("配置文件解析失败：%s\n且无法从示例重建：%s\n坏文件备份在：%s"
+            _boot_log(T("[fatal] 配置文件解析失败：%s（无法从示例重建：%s，备份在 %s）") % (e, e2, _bad))
+            _fatal(T("配置文件解析失败：%s\n且无法从示例重建：%s\n坏文件备份在：%s")
                    % (e, e2, _bad))
     else:
-        _boot_log("[fatal] 配置文件解析失败：%s（坏文件已备份为 %s，"
-                  "且找不到 config/config.example.json，无法自动重建）" % (e, _bad))
-        _fatal("配置文件解析失败：%s\n坏文件已备份为 %s\n"
-               "且找不到 config/config.example.json，无法自动重建。" % (e, _bad))
+        _boot_log(T("[fatal] 配置文件解析失败：%s（坏文件已备份为 %s，"
+                  "且找不到 config/config.example.json，无法自动重建）") % (e, _bad))
+        _fatal(T("配置文件解析失败：%s\n坏文件已备份为 %s\n"
+               "且找不到 config/config.example.json，无法自动重建。") % (e, _bad))
 
 HOME = os.path.expanduser("~")
 # <self> = 本文件（dsh_manager.pyw）所在目录 = 整个管理器/离线包根目录。
@@ -337,8 +342,8 @@ if len(VERSIONS) > MAX_SLOTS:
     # 界面按"每槽两列"自动排布（N 槽 → 2N 列），上限之外的不支持。
     # 上限 3 → 4（2026-10-06）→ 5（2026-10-30，设计要求），都是为了「一键装官方版」
     # 的多次追加安装场景（已有 v1 → 装 v2/v3/v4/v5）。
-    _fatal("config.json 的 versions 最多支持 %d 个槽（当前 %d 个：%s）。\n"
-           "想同时用更多版本，请让管理器只管 %d 个，其余用外部启动器。"
+    _fatal(T("config.json 的 versions 最多支持 %d 个槽（当前 %d 个：%s）。\n"
+           "想同时用更多版本，请让管理器只管 %d 个，其余用外部启动器。")
            % (MAX_SLOTS, len(VERSIONS), ", ".join(VERSIONS.keys()), MAX_SLOTS))
 
 SLOT_KEYS = list(VERSIONS.keys())   # 顺序保留：第 0 个在最左，依次向右
@@ -485,10 +490,10 @@ def _check_port_consistency():
             i = args.index("--port")
             got = int(args[i + 1])
         except (ValueError, IndexError):
-            bad.append((key, "extra_args 里没有 --port（实际监听端口无法确定）"))
+            bad.append((key, T("extra_args 里没有 --port（实际监听端口无法确定）")))
             continue
         if got != want:
-            bad.append((key, "port=%d 但 extra_args --port=%d（实际会起在 %d）"
+            bad.append((key, T("port=%d 但 extra_args --port=%d（实际会起在 %d）")
                         % (want, got, got)))
     return bad
 
@@ -498,10 +503,10 @@ SIG = {k: _make_sig(cfg) for k, cfg in VC.items()}
 # 两者不一致时界面会永远显示「已停止」而日志看不出异常，所以在这里直接挡住。
 PORT_MISMATCH = _check_port_consistency()
 if PORT_MISMATCH:
-    _fatal("config.json 里 port 与 extra_args 的 --port 不一致：\n\n%s\n\n"
+    _fatal(T("config.json 里 port 与 extra_args 的 --port 不一致：\n\n%s\n\n"
            "port 只用于端口预检和状态显示，真正决定监听端口的是 extra_args 里的 --port。\n"
            "两者不一致会导致预检查的端口和实际启动的端口不同，界面状态永远不更新。\n"
-           "请把两处改成同一个端口（可参考 config/config.example.json）。"
+           "请把两处改成同一个端口（可参考 config/config.example.json）。")
            % "\n".join("  · %s：%s" % (k, m) for k, m in PORT_MISMATCH))
 
 def _sig_any(cmdline):
@@ -667,7 +672,7 @@ def _clean_stale_lock(key):
     elif not _pid_alive(pid):
         stale, why = True, "持有者已死"
     elif not _holder_is_this_slot(key, pid):
-        stale, why = True, "pid=%d 存活但不是本槽 dsh（PID 复用）" % pid
+        stale, why = True, T("pid=%d 存活但不是本槽 dsh（PID 复用）") % pid
     else:
         stale, why = False, ""
     if stale:
@@ -882,16 +887,16 @@ def _write_bat(path, text, stamp):
         try:
             shutil.copyfile(path, bak)
         except Exception as e:
-            return (False, "备份失败：%s" % e)
+            return (False, T("备份失败：%s") % e)
     try:
         # GBK：cmd.exe 的 ANSI 代码页。newline="" 保证我们写进去的 \r\n 不被二次转换。
         with open(path, "w", encoding="gbk", newline="") as f:
             f.write(text)
     except UnicodeEncodeError as e:
         # 理论不可达（GBK 覆盖全部常用中文），但真发生时要能说清楚原因
-        return (False, "GBK 编码失败：%s" % e)
+        return (False, T("GBK 编码失败：%s") % e)
     except Exception as e:
-        return (False, "写入失败：%s" % e)
+        return (False, T("写入失败：%s") % e)
     return (True, bak)
 
 # 会原样拼进 `set "VAR=..."` / `REM ...` / `"node" "bin.js"` 的字符里，
@@ -907,7 +912,7 @@ def _bat_unsafe_fields(cfg):
         v = str(cfg.get(name) or "")
         bad = "".join(sorted({c for c in v if c in _BAT_UNSAFE_CHARS}))
         if bad:
-            return ("%s 含 cmd.exe 元字符 %r，已跳过生成 .bat：%r"
+            return (T("%s 含 cmd.exe 元字符 %r，已跳过生成 .bat：%r")
                     % (name, bad, v))
     return ""
 
@@ -929,11 +934,11 @@ def _rebuild_bats():
             continue
         root = _version_root(cfg)
         if not root or not os.path.isdir(root):
-            skipped.append("%s（找不到版本目录：%s）" % (key, root))
+            skipped.append(T("%s（找不到版本目录：%s）") % (key, root))
             continue
         port = cfg.get("port")
         jobs = [
-            (os.path.join(root, "dsh.bat"),        _bat_text_start(key, cfg, root), "启动"),
+            (os.path.join(root, "dsh.bat"),        _bat_text_start(key, cfg, root), T("启动")),
             (os.path.join(root, "kill-%s.bat" % port), _bat_text_kill(key, cfg, root), "kill"),
             (os.path.join(root, "dsh-cli.bat"),   _bat_text_cli(key, cfg, root), "CLI"),
         ]
@@ -942,7 +947,7 @@ def _rebuild_bats():
             if ok:
                 made.append("%s [%s] %s" % (key, kind, path))
                 log(T("[%s] 已生成 %s bat：%s%s")
-                    % (key, kind, path, ("（原文件已备份为 %s）" % os.path.basename(info)) if info else ""))
+                    % (key, kind, path, (T("（原文件已备份为 %s）") % os.path.basename(info)) if info else ""))
             else:
                 failed.append("%s [%s] %s —— %s" % (key, kind, path, info))
                 log(T("[%s] 生成 %s bat 失败：%s") % (key, kind, info))
@@ -955,18 +960,18 @@ def gen_bats():
     # 结果提示
     msg = []
     if made:
-        msg.append("已生成 %d 个文件：" % len(made))
+        msg.append(T("已生成 %d 个文件：") % len(made))
         msg.extend("  " + m for m in made)
     if skipped:
         msg.append("")
-        msg.append("跳过 %d 个：" % len(skipped))
+        msg.append(T("跳过 %d 个：") % len(skipped))
         msg.extend("  " + s for s in skipped)
     if failed:
         msg.append("")
-        msg.append("失败 %d 个：" % len(failed))
+        msg.append(T("失败 %d 个：") % len(failed))
         msg.extend("  " + f for f in failed)
     if not msg:
-        msg.append("没有可生成的版本。")
+        msg.append(T("没有可生成的版本。"))
     body = "\n".join(msg)
     log(T("=== 生成 bat 完成 ===\n") + body)
     try:
@@ -981,8 +986,8 @@ def start_one(key):
     if port_open(cfg["port"]):
         # 端口被占用：先说清「是谁」再决定动作，避免误伤别家程序。
         if dsh_kill is None:
-            hint = ("端口 %d 被占用，但无法识别占用者（dsh_kill 未加载）。\n"
-                    "请手动关闭占用程序，或改 config.json 里该版本的 port 后重启管理器。" % cfg["port"])
+            hint = (T("端口 %d 被占用，但无法识别占用者（dsh_kill 未加载）。\n"
+                    "请手动关闭占用程序，或改 config.json 里该版本的 port 后重启管理器。") % cfg["port"])
             log(T("[%s] 启动失败：%s") % (key, hint))
             try:
                 messagebox.showwarning(T("端口被占用"), "[%s]\n%s" % (key, hint))
@@ -994,8 +999,8 @@ def start_one(key):
         other_o = [o for o in owners if o["kind"] not in ("dsh", "dsh-ambiguous")]
         if other_o:
             # 非 dsh 程序占了端口：绝不自动结束，给详细提示 + 不启动
-            hint = (text + "\n\n这不是 dsh 进程。为避免影响其它程序，管理器不会自动结束它。\n"
-                    "请手动关闭占用程序，或修改 config.json 里该版本的 port 后重启管理器。")
+            hint = (text + T("\n\n这不是 dsh 进程。为避免影响其它程序，管理器不会自动结束它。\n"
+                    "请手动关闭占用程序，或修改 config.json 里该版本的 port 后重启管理器。"))
             log(T("[%s] 启动失败：端口被非 dsh 程序占用 ->\n%s") % (key, text))
             try:
                 messagebox.showwarning(T("端口被占用（非 dsh 程序）"), "[%s]\n%s" % (key, hint))
@@ -1036,7 +1041,7 @@ def start_one(key):
         # -------------------------------------------------------------------
         _clean_stale_lock(key)
         log(T("[%s] 启动 env: DSH_HOME=%s TEMP=%s")
-            % (key, cfg["dsh_home"], env.get("TEMP", "(继承)")))
+            % (key, cfg["dsh_home"], env.get("TEMP", T("(继承)"))))
     # 入口 URL 的扫描与 dsh_home 无关（见 VC 里的说明）：每个槽都布防，抓到就用。
     auth_urls[key] = None
     _scan_pos[key] = os.path.getsize(LOG_FILE) if LOG_FILE and os.path.exists(LOG_FILE) else 0
@@ -1053,9 +1058,9 @@ def start_one(key):
             % (key, cfg["node_exe"], os.path.exists(cfg["node_exe"]),
                cfg["bin_js"], os.path.exists(cfg["bin_js"])))
         # 必须弹框：pythonw 没有控制台，只写日志的话用户点了「启动」看着像没反应。
-        _notify_start_failure(key, "找不到可执行文件：%s" % e,
-                              "node_exe：%s（存在=%s）\nbin_js：%s（存在=%s）\n\n"
-                              "该版本可能没装好，或路径变了。修好 config.json 后重试。"
+        _notify_start_failure(key, T("找不到可执行文件：%s") % e,
+                              T("node_exe：%s（存在=%s）\nbin_js：%s（存在=%s）\n\n"
+                              "该版本可能没装好，或路径变了。修好 config.json 后重试。")
                               % (cfg["node_exe"], os.path.exists(cfg["node_exe"]),
                                  cfg["bin_js"], os.path.exists(cfg["bin_js"])))
     except Exception as e:
@@ -1199,7 +1204,7 @@ def _report_port_after_kill(key, port, killed):
         return
     if not owners:
         log(T("[%s] 停止完成：端口 %d 已释放%s")
-            % (key, port, ("（清理 %d 个进程）" % killed) if killed else ""))
+            % (key, port, (T("（清理 %d 个进程）") % killed) if killed else ""))
         return
 
     dsh_left = [o for o in owners if o["kind"] in ("dsh", "dsh-ambiguous")]
@@ -1299,7 +1304,7 @@ def stop_all_slots():
         except Exception:
             pass
         failed = ["%s（%s）" % (k, err) for k, _n, _s, err in results if err]
-        still = ["%s（端口 %d 仍在监听）" % (k, VC[k]["port"])
+        still = [T("%s（端口 %d 仍在监听）") % (k, VC[k]["port"])
                  for k, _n, s, err in results if s and not err]
         if failed:
             messagebox.showwarning(T("全部停止"), T("以下槽未能停止：\n\n") + "\n".join(failed))
@@ -1307,8 +1312,8 @@ def stop_all_slots():
             messagebox.showwarning(
                 T("全部停止"),
                 T("已发出停止指令，但这些端口还在监听：\n\n  ") + "\n  ".join(still) +
-                "\n\n可能是进程尚未退出，或端口被别的程序占着。"
-                "稍等再看状态；反复不行可用 CLI：python dsh-tm.py kill-stray")
+                T("\n\n可能是进程尚未退出，或端口被别的程序占着。"
+                "稍等再看状态；反复不行可用 CLI：python dsh-tm.py kill-stray"))
         if not failed and not still:
             log(T("[全部停止] 完成：%d 个槽已停止") % len(running))
 
@@ -1355,7 +1360,7 @@ def start_all_slots():
                     except Exception:
                         owners = []
                 if not any(o.get("kind") in ("dsh", "dsh-ambiguous") for o in owners):
-                    blocked.append("%s（端口 %d 被非 dsh 程序占用）" % (k, cfg["port"]))
+                    blocked.append(T("%s（端口 %d 被非 dsh 程序占用）") % (k, cfg["port"]))
                     continue
                 skipped.append(k)
                 continue
@@ -1375,7 +1380,7 @@ def start_all_slots():
         messagebox.showwarning(
             T("全部启动"),
             T("以下槽未能启动：\n\n  ") + "\n  ".join(blocked) +
-            "\n\n非 dsh 程序占用的端口不会自动结束，请手动处理或改端口。")
+            T("\n\n非 dsh 程序占用的端口不会自动结束，请手动处理或改端口。"))
     elif not started:
         messagebox.showinfo(T("全部启动"), T("所有槽都已经在运行了。"))
     else:
@@ -1453,7 +1458,7 @@ BROWSER_KNOWN = {
     "chrome":  ("Chrome",  CHROME_CANDIDATES),
     "edge":    ("Edge",    EDGE_CANDIDATES),
     "firefox": ("Firefox", FIREFOX_CANDIDATES),
-    "default": ("默认浏览器", []),
+    "default": (T("默认浏览器"), []),
 }
 
 # 「设置」里下拉框的顺序：默认浏览器排第一 —— 这是大多数人的选择，
@@ -1754,7 +1759,7 @@ def _build_version_picker(parent, var, height=9, width=38, multi=False):
         if not force:
             items, source = REG.cached_versions()
             if items:
-                apply_items(items, source + "，缓存")
+                apply_items(items, source + T("，缓存"))
                 return
         state["busy"] = True
         btn.configure(state="disabled")
@@ -1812,7 +1817,7 @@ def _activate_existing_instance():
         if user32.IsWindowVisible(hwnd):
             buf = ctypes.create_unicode_buffer(64)
             user32.GetWindowTextW(hwnd, buf, 64)
-            if buf.value == "DSH 版本管理器":
+            if buf.value == T("DSH 版本管理器"):
                 found.append(hwnd)
         return 1
     _cb_ref = _ENUMPROC(_cb)          # 防 GC
@@ -2019,8 +2024,8 @@ except Exception as _e:
     try:
         import ctypes
         ctypes.windll.user32.MessageBoxW(0,
-            "创建窗口失败：%s\n\n详情见日志：%s" % (_e, LOG_FILE),
-            "DSH 版本管理器", 0x10)
+            T("创建窗口失败：%s\n\n详情见日志：%s") % (_e, LOG_FILE),
+            T("DSH 版本管理器"), 0x10)
     except Exception:
         pass
     sys.exit(1)
@@ -2422,8 +2427,8 @@ def _show_env_report():
     body = "\n".join(lines[-40:])
     log(T("=== 环境检查（rc=%d）===\n%s") % (rc, body))
     (messagebox.showinfo if rc == 0 else messagebox.showwarning)(
-        "运行环境检查", "%s\n\n%s" % (
-            "环境满足要求。" if rc == 0 else "环境有不满足项，请看下面的说明。",
+        T("运行环境检查"), "%s\n\n%s" % (
+            T("环境满足要求。") if rc == 0 else T("环境有不满足项，请看下面的说明。"),
             body))
 
 # 2026-10-31：标题栏的「检查运行环境」按钮撤掉了。它查的是**管理器自己**的前置条件
@@ -2435,7 +2440,7 @@ def _show_env_report():
 
 # ── 三个版本卡片（平等等宽，中间用竖向分隔线分开）─────────────
 # 网格：每槽占 1 列，槽与槽之间插 1 列竖线；卡片列 weight=1 → 等宽。
-def _open_dir(path, what="数据目录"):
+def _open_dir(path, what=T("数据目录")):
     """用资源管理器打开目录。目录不存在 / 打开失败都要显式报错
     （pythonw 无控制台，只写日志用户看不见，所以同时弹框）。"""
     try:
@@ -3117,14 +3122,14 @@ def _health_tip(key):
            if it[0] in (HEALTH_MOD.LEVEL_ERROR, HEALTH_MOD.LEVEL_WARN)]
     if not bad:
         return ""
-    lines = ["⚠%d = 槽体检发现 %d 个问题（只影响提示，不影响启动）："
+    lines = [T("⚠%d = 槽体检发现 %d 个问题（只影响提示，不影响启动）：")
              % (len(bad), len(bad))]
     for lv, tag, txt in bad[:5]:
         lines.append("· [%s] %s：%s" % (lv, tag, txt))
     if len(bad) > 5:
-        lines.append("· …还有 %d 项" % (len(bad) - 5))
+        lines.append(T("· …还有 %d 项") % (len(bad) - 5))
     lines.append("")
-    lines.append("点「设置 → 维护 → 槽体检」看全部（只读，不会改任何文件）")
+    lines.append(T("点「设置 → 维护 → 槽体检」看全部（只读，不会改任何文件）"))
     return "\n".join(lines)
 
 
@@ -3191,7 +3196,7 @@ def _health_dialog():
 
     lines = []
     for lv, item, msg in HEALTH_GLOBAL:
-        lines.append(("%s 全局 · %s：%s\n" % (lv, item, msg),
+        lines.append((T("%s 全局 · %s：%s\n") % (lv, item, msg),
                       "err" if lv == HEALTH_MOD.LEVEL_ERROR else "warn"))
     for key in SLOT_KEYS:
         items = HEALTH.get(key) or []
@@ -3214,7 +3219,7 @@ def _health_dialog():
                 pass
         lines.append(("\n", "info"))
     if not lines:
-        lines = [("没有可体检的槽（管理器还没管理任何 dsh 版本）。\n", "info")]
+        lines = [(T("没有可体检的槽（管理器还没管理任何 dsh 版本）。\n"), "info")]
 
     txt.configure(state="normal")
     for text, tag in lines:
@@ -3267,7 +3272,7 @@ def _health_dialog():
             def work():
                 try:
                     ok, acts, err = UNINST.repair_slot(
-                        root_, _pick_node_source("修复"))
+                        root_, _pick_node_source(T("修复")))
                 except Exception as e:
                     ok, acts, err = False, [], str(e)
                 win.after(0, lambda: _after_fix(ok, acts, err))
@@ -3276,12 +3281,12 @@ def _health_dialog():
 
         def _after_fix(ok, acts, err):
             if not ok:
-                messagebox.showerror(T("修复未完成"), err or "原因未知")
+                messagebox.showerror(T("修复未完成"), err or T("原因未知"))
                 return
             messagebox.showinfo(
                 T("已修复"),
-                T("已完成：\n  ") + "\n  ".join(acts or ["（无需改动）"]) +
-                "\n\n重新体检一次看结果。")
+                T("已完成：\n  ") + "\n  ".join(acts or [T("（无需改动）")]) +
+                T("\n\n重新体检一次看结果。"))
             try:
                 win.destroy()
             except Exception:
@@ -3468,11 +3473,11 @@ def _build_cards():
         # 程序目录 / 数据目录 一键直达（2026-10-01 新增）
         _root_dir = _version_root(cfg) or ""
         _b_pdir = ttk.Button(_body, text=T("程序目录"),
-                             command=lambda k=key, p=_root_dir: _open_dir(p, "程序目录"))
+                             command=lambda k=key, p=_root_dir: _open_dir(p, T("程序目录")))
         _b_pdir.grid(row=3, column=0, padx=3, pady=(3, 0), sticky="ew")
         _home_dir = cfg["dsh_home"] or os.path.join(os.path.expanduser("~"), ".dsh")
         _b_ddir = ttk.Button(_body, text=T("数据目录"),
-                             command=lambda k=key, p=_home_dir: _open_dir(p, "数据目录"))
+                             command=lambda k=key, p=_home_dir: _open_dir(p, T("数据目录")))
         _b_ddir.grid(row=3, column=1, padx=3, pady=(3, 0), sticky="ew")
         BUSY["card"].extend([_b_start, _b_stop, _b_open, _b_copy, _b_pdir, _b_ddir])
         # 「启动 / 停止」单独记一份：装新版本期间这两个**不冻**（2026-11-14
@@ -3763,11 +3768,11 @@ def _slot_full_reason():
     """「没有空编号」时给用户的准确原因 —— 区分 config 满了 / 磁盘目录占着编号。"""
     occ = _occupied_unmanaged_keys()
     if occ:
-        return ("没有空编号了：磁盘上 %s 这些目录还占着编号（多半是移出管理后没删）。\n"
+        return (T("没有空编号了：磁盘上 %s 这些目录还占着编号（多半是移出管理后没删）。\n"
                 "想接着用就点「扫描已装 dsh 并纳入」接回来；不要了就把对应目录删掉，"
-                "编号会自动空出来。"
+                "编号会自动空出来。")
                 % "、".join("dsh%s" % k.upper() for k in occ))
-    return "槽位已满（上限 %d）" % MAX_SLOTS
+    return T("槽位已满（上限 %d）") % MAX_SLOTS
 
 class _GuiProgress(OPS.Progress if OPS else object):
     """把后台线程的进度转发到主线程的日志区 + 进度条。
@@ -4020,7 +4025,7 @@ def _relaunch_self():
         except Exception:
             entry = ""
     if not entry or not os.path.exists(entry):
-        return False, "找不到管理器入口文件：%s" % (entry or "(未知)")
+        return False, T("找不到管理器入口文件：%s") % (entry or T("(未知)"))
 
     # 用「同一个解释器 + 脚本」重启：pythonw 下 sys.executable 就是那个 pythonw.exe
     exe = sys.executable or ""
@@ -4032,7 +4037,7 @@ def _relaunch_self():
     except Exception:
         pass
     if not pyw or not os.path.exists(pyw):
-        return False, "找不到 Python 解释器：%s" % (pyw or "(未知)")
+        return False, T("找不到 Python 解释器：%s") % (pyw or T("(未知)"))
 
     try:
         # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP：子进程与当前进程脱钩，
@@ -4046,7 +4051,7 @@ def _relaunch_self():
                          stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)
     except Exception as e:
-        return False, "启动新实例失败：%s" % e
+        return False, T("启动新实例失败：%s") % e
     return True, ""
 
 
@@ -4076,12 +4081,12 @@ def _reload_config_after_change(new_keys=None):
         with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
             new_cfg = json.load(f)
     except Exception as e:
-        return False, "重新读取 config.json 失败：%s" % e
+        return False, T("重新读取 config.json 失败：%s") % e
 
     try:
         new_versions = new_cfg.get("versions") or {}
         if len(new_versions) > MAX_SLOTS:
-            return False, "config.json 里的槽数超过上限 %d" % MAX_SLOTS
+            return False, T("config.json 里的槽数超过上限 %d") % MAX_SLOTS
         CFG = new_cfg
         INSTALL_BASE = os.path.expanduser(
             str(CFG.get("install_base", "<home>"))
@@ -4120,7 +4125,7 @@ def _reload_config_after_change(new_keys=None):
         _scan_pos.clear()
         _scan_pos.update({k: _old_scan.get(k) for k in SLOT_KEYS})
     except Exception as e:
-        return False, "重建槽状态失败：%s" % e
+        return False, T("重建槽状态失败：%s") % e
 
     # 设置页里的槽列表已经过期，直接关掉；再点「设置」会按新配置重画
     try:
@@ -4189,7 +4194,7 @@ def _reload_config_after_change(new_keys=None):
     return True, ""
 
 
-def _restart_or_tell(what="版本列表", new_keys=None):
+def _restart_or_tell(what=T("版本列表"), new_keys=None):
     """配置变了之后刷新界面：**先原地刷新，失败才退回重启进程**。
 
     2026-11-12 用户要求：装 / 纳入 / 移出 / 卸载之后直接显示结果界面，
@@ -4243,29 +4248,29 @@ def _adopt_row_info(version, loc):
     try:
         info = dsh_adopt.inspect_adopt_source(nm) if dsh_adopt else {}
     except Exception as e:
-        info = {"ok": False, "problems": ["体检失败：%s" % e], "warnings": []}
+        info = {"ok": False, "problems": [T("体检失败：%s") % e], "warnings": []}
     kind = "npm 全局" if (loc or {}).get("kind") == "npm-global" else "版本目录"
     ver = version or info.get("version") or "?"
     dsh_dir = info.get("dsh_dir") or ""
     have = lambda rel: bool(dsh_dir) and os.path.isfile(os.path.join(dsh_dir, rel))
     comp = []
-    comp.append("入口 " + ("✓" if have(os.path.join("lib", "bin.js")) else "✗"))
+    comp.append(T("入口 ") + ("✓" if have(os.path.join("lib", "bin.js")) else "✗"))
     comp.append("package.json " + ("✓" if have("package.json") else "✗"))
     nm_count = 0
     try:
         nm_count = len([x for x in os.listdir(nm)]) if os.path.isdir(nm) else 0
     except Exception:
         nm_count = 0
-    comp.append("依赖 %d 项%s" % (nm_count, "" if not info.get("deps_missing")
-                                  else "（缺 %d）" % len(info["deps_missing"])))
+    comp.append(T("依赖 %d 项%s") % (nm_count, "" if not info.get("deps_missing")
+                                  else T("（缺 %d）") % len(info["deps_missing"])))
     src_home = info.get("source_home") or ""
-    comp.append("旧数据 " + ("✓ " + src_home if src_home else "（无）"))
+    comp.append(T("旧数据 ") + ("✓ " + src_home if src_home else T("（无）")))
     # 2026-11-02：给普通用户一句**能看懂**的摘要；下面的逐项体检细节收进"详情"。
     _deps_missing = len(info.get("deps_missing") or [])
     if info.get("ok") and not _deps_missing:
         _summary = "可以纳入"
     elif info.get("ok"):
-        _summary = "可以纳入（有 %d 个可选依赖缺失，一般不影响使用）" % _deps_missing
+        _summary = T("可以纳入（有 %d 个可选依赖缺失，一般不影响使用）") % _deps_missing
     else:
         _summary = "这个安装不完整，暂时不能纳入"
     # 2026-11-14：告诉用户「勾了之后会发生什么」—— 版本根下的原地接回（几秒），
@@ -4404,7 +4409,7 @@ def _adopt_picker_dialog(found):
         #   · 正常可纳入 → 只显示版本号（标题行已含），不追加任何说明
         #   · **不可纳入** → 才多显示一行原因（用户需要知道为什么点不了）
         if not r["ok"]:
-            _why = (r.get("problems") or ["安装文件不完整"])[0]
+            _why = (r.get("problems") or [T("安装文件不完整")])[0]
             # 换行宽度必须小于画布宽（484）减去左边缩进（22）—— 原来写 600，
             # 比画布还宽，长原因会被右边缘切掉（2026-11-14 实测）。
             ttk.Label(box, text=_why, foreground=_RED,
@@ -4646,12 +4651,12 @@ def _adopt_one(version, loc):
                                 "原安装未做任何改动。")
                                 % (msg, payload["slot_key"], payload["label"],
                                    payload["port"], payload["dsh_home"]))
-            _restart_or_tell("槽列表", [payload.get("slot_key")])
+            _restart_or_tell(T("槽列表"), [payload.get("slot_key")])
         else:
             log(T("[纳入] 失败：%s") % msg)
             messagebox.showerror(T("纳入失败"), msg)
 
-    prog = _GuiProgress("纳入 dsh %s" % version, done)
+    prog = _GuiProgress(T("纳入 dsh %s") % version, done)
     OPS.run_in_thread(work, prog, None)
 
 
@@ -4707,9 +4712,9 @@ def install_official_version():
                 if k not in SLOT_KEYS]
         _occ_txt = ""
         if _occ:
-            _occ_txt = ("\n\n另外，磁盘上这些编号的目录还在（多半是移出管理后没删）：%s\n"
+            _occ_txt = (T("\n\n另外，磁盘上这些编号的目录还在（多半是移出管理后没删）：%s\n"
                         "它们占着编号。想接着用就点「扫描已装 dsh 并纳入」接回来；"
-                        "不要了就把对应目录删掉，编号会自动空出来。"
+                        "不要了就把对应目录删掉，编号会自动空出来。")
                         % "、".join("dsh%s" % k.upper() for k in _occ))
         messagebox.showwarning(T("槽位已满"),
                                T("管理器最多管理 %d 个版本，当前已有 %d 个：%s\n\n"
@@ -4822,9 +4827,9 @@ def _install_queue(versions):
         lines = []
         for ver, ok, key, msg in results:
             if ok:
-                lines.append("  ✓ %s → 槽 %s" % (ver, key))
+                lines.append(T("  ✓ %s → 槽 %s") % (ver, key))
             else:
-                first = (msg or "原因未知").strip().splitlines()[0][:120]
+                first = (msg or T("原因未知")).strip().splitlines()[0][:120]
                 lines.append("  ✗ %s —— %s" % (ver, first))
         body = "\n".join(lines)
         if badr:
@@ -4838,7 +4843,7 @@ def _install_queue(versions):
             # 2026-11-12 实测：装完 v2 弹了「安装成功」，然后这里 NameError，
             # 被 Tk 的回调静默吞掉（pythonw 没有 stderr）→ 界面既不刷新也不
             # 重启，用户只看到"装成功了但没多出卡片"。改用 results 里的槽键。
-            _restart_or_tell("槽列表", [r[2] for r in okr if r[2]])
+            _restart_or_tell(T("槽列表"), [r[2] for r in okr if r[2]])
 
     def step(i):
         if i >= total:
@@ -4885,12 +4890,12 @@ def _do_install(version, slot_key, on_done=None, index=1, total=1):
             return
         if ok:
             messagebox.showinfo(T("安装成功"), msg)
-            _restart_or_tell("槽列表", _installed_keys_from(payload))
+            _restart_or_tell(T("槽列表"), _installed_keys_from(payload))
         else:
             messagebox.showerror(T("安装失败"), msg)
 
-    title = ("安装官方版 %s（%d/%d）" % (version, index, total)
-             if total > 1 else "安装官方版 %s" % version)
+    title = (T("安装官方版 %s（%d/%d）") % (version, index, total)
+             if total > 1 else T("安装官方版 %s") % version)
 
     # 进度窗必须先建：work() 要把它传给 run_official_install，否则下载/复制那几分钟
     # 窗口会一直停在「准备中…」，看起来像卡死（2026-10-29 实测踩到）。
@@ -4952,7 +4957,7 @@ def _slot_brief(key):
     cfg = VC[key]
     ver = INSTALLED.get(key) or T("未知")
     running = port_open(cfg["port"]) or proc_alive(procs.get(key))
-    return "%s（%s，端口 %d，实装 %s）· %s" % (
+    return T("%s（%s，端口 %d，实装 %s）· %s") % (
         key, cfg["label"], cfg["port"], ver, "运行中" if running else "已停止")
 
 
@@ -5063,9 +5068,9 @@ def uninstall_versions_dialog():
         _extra = ""
         if _foreign:
             _shown = "、".join(_foreign[:8]) + ("…" if len(_foreign) > 8 else "")
-            _extra = ("\n\n⚠ 这个槽目录里还有 %d 个不是 dsh 装出来的条目，"
+            _extra = (T("\n\n⚠ 这个槽目录里还有 %d 个不是 dsh 装出来的条目，"
                       "卸载会**一并删除**（不进备份）：\n  %s\n"
-                      "如果里面有你要的东西，请先自己拷走。"
+                      "如果里面有你要的东西，请先自己拷走。")
                       % (len(_foreign), _shown))
         if not messagebox.askyesno(
                 T("确认卸载"),
@@ -5135,15 +5140,15 @@ def _do_uninstall(keys):
         if ok:
             log(T("[卸载] 完成：%s") % msg.replace("\n", " | "))
             messagebox.showinfo(T("卸载完成"), msg)
-            _restart_or_tell("槽列表")
+            _restart_or_tell(T("槽列表"))
         else:
             log(T("[卸载] 未完成：%s") % msg.replace("\n", " | "))
-            messagebox.showerror(T("卸载未完成"), msg or "原因未知")
+            messagebox.showerror(T("卸载未完成"), msg or T("原因未知"))
 
     # 进度窗必须先建并把 prog 传进 uninstall_slots：删 node_modules 在机械盘上
     # 要几十秒，没有 step 回调窗口就一直停在「准备中…」——2026-10-29 实测被当成
     # "卸载失败"（其实已经卸干净了）。
-    prog = _GuiProgress("卸载 dsh 版本", done)
+    prog = _GuiProgress(T("卸载 dsh 版本"), done)
 
     def work():
         ok, payload, msg = UNINST.uninstall_slots(
@@ -5173,12 +5178,12 @@ def _do_detach(keys):
         if ok:
             log(T("[移出] 完成：%s") % msg.replace("\n", " | "))
             messagebox.showinfo(T("已移出管理"), msg)
-            _restart_or_tell("槽列表")
+            _restart_or_tell(T("槽列表"))
         else:
             log(T("[移出] 未完成：%s") % msg.replace("\n", " | "))
-            messagebox.showerror(T("移出未完成"), msg or "原因未知")
+            messagebox.showerror(T("移出未完成"), msg or T("原因未知"))
 
-    prog = _GuiProgress("移出管理", done)
+    prog = _GuiProgress(T("移出管理"), done)
 
     def running(key, port):
         """判据与卡片上那个「运行中」一致：端口在听 或 我们跟踪的进程还活着。"""
@@ -5232,7 +5237,7 @@ def _do_readd(roots):
         if ok:
             log(T("[纳入] 完成：%s") % msg.replace("\n", " | "))
             messagebox.showinfo(T("已重新纳入"), msg)
-            _restart_or_tell("槽列表", _installed_keys_from(payload))
+            _restart_or_tell(T("槽列表"), _installed_keys_from(payload))
             # 只在**必要时**重写三件 bat（2026-11-14）：
             #   · 端口被换过 → bat 里的 --port 必须跟着改，否则一启动就撞车；
             #   · bat 被删了 → 补回来，「双击 dsh.bat」才还能用。
@@ -5249,9 +5254,9 @@ def _do_readd(roots):
                     log(T("[纳入] 重写 bat 失败（可点「设置 → 维护 → 生成 bat」）：%s") % e)
         else:
             log(T("[纳入] 未完成：%s") % msg.replace("\n", " | "))
-            messagebox.showerror(T("重新纳入未完成"), msg or "原因未知")
+            messagebox.showerror(T("重新纳入未完成"), msg or T("原因未知"))
 
-    prog = _GuiProgress("重新纳入", done)
+    prog = _GuiProgress(T("重新纳入"), done)
 
     def work():
         ok, payload, msg = UNINST.readd_slots(
@@ -5666,11 +5671,11 @@ def _log_state_snapshot():
         listen, ext = d.get("listen"), d.get("ext")
         tracked = procs.get(key)
         if proc_alive(tracked):
-            who = "本管理器跟踪 pid=%s" % tracked.pid
+            who = T("本管理器跟踪 pid=%s") % tracked.pid
         elif ext is not None:
-            who = "外部运行 pid=%s" % ext
+            who = T("外部运行 pid=%s") % ext
         elif listen:
-            who = "端口被非 dsh 进程占用"
+            who = T("端口被非 dsh 进程占用")
         else:
             who = T("未运行")
         log(T("[%s] 端口=%d 监听=%s 判定=%s") % (key, cfg["port"], listen, who))
@@ -5826,11 +5831,11 @@ _n_scrubbed = _scrub_existing_log()
 if _n_scrubbed:
     log(T("已就地掩码历史日志里的 %d 个 token（等长覆盖，文件长度不变）") % _n_scrubbed)
 log("install_base = %s" % INSTALL_BASE)
-log("NPM_GLOBAL = %s" % (NPM_GLOBAL or "(未探测到，<npm_global> 占位符不可用)"))
+log("NPM_GLOBAL = %s" % (NPM_GLOBAL or T("(未探测到，<npm_global> 占位符不可用)")))
 for key in SLOT_KEYS:
     cfg = VC[key]
     log("[%s] label=%s" % (key, cfg["label"]))
-    log(T("[%s] 实装版本=%s") % (key, INSTALLED.get(key) or "未知（读 package.json 失败，可能未装好）"))
+    log(T("[%s] 实装版本=%s") % (key, INSTALLED.get(key) or T("未知（读 package.json 失败，可能未装好）")))
     log("[%s] cmd  = %s" % (key, " ".join(_build_cmd(key))))
     log("[%s] DSH_HOME=%s  port=%d  browser=%s"
         % (key, cfg["dsh_home"] or "(默认 ~/.dsh)", cfg["port"], cfg["browser"]))
@@ -5939,7 +5944,7 @@ def _ensure_slots_visible(new_keys):
         with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
     except Exception as e:
-        return "读取 config.json 失败：%s" % e
+        return T("读取 config.json 失败：%s") % e
     ui = data.get("ui")
     if not isinstance(ui, dict):
         return ""                       # 没有 ui 段 = 全显示，无需处理
@@ -5972,7 +5977,7 @@ def _ensure_slots_visible(new_keys):
             os.remove(tmp)
         except Exception:
             pass
-        return "写入 config.json 失败：%s" % e
+        return T("写入 config.json 失败：%s") % e
     return ""
 
 
@@ -5987,7 +5992,7 @@ def _save_ui_prefs(prefs):
         with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
     except Exception as e:
-        return "读取 config.json 失败：%s" % e
+        return T("读取 config.json 失败：%s") % e
     data["ui"] = prefs
     tmp = CONFIG_PATH + ".tmp-%d" % os.getpid()
     try:
@@ -5999,7 +6004,7 @@ def _save_ui_prefs(prefs):
             os.remove(tmp)
         except Exception:
             pass
-        return "写入 config.json 失败：%s" % e
+        return T("写入 config.json 失败：%s") % e
     return ""
 
 
@@ -6019,7 +6024,7 @@ def _write_config_data(data):
             os.remove(tmp)
         except Exception:
             pass
-        return "写入 config.json 失败：%s" % e
+        return T("写入 config.json 失败：%s") % e
     return ""
 
 
@@ -6029,12 +6034,12 @@ def _save_version_field(key, field, value):
         with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
     except Exception as e:
-        return "读取 config.json 失败：%s" % e
+        return T("读取 config.json 失败：%s") % e
     vs = data.get("versions")
     if not isinstance(vs, dict) or key not in vs:
-        return "config.json 里没有槽 %s（可能已被删除，请重开管理器）" % key
+        return T("config.json 里没有槽 %s（可能已被删除，请重开管理器）") % key
     if not isinstance(vs[key], dict):
-        return "config.json 里槽 %s 的格式不对（不是对象）" % key
+        return T("config.json 里槽 %s 的格式不对（不是对象）") % key
     vs[key][field] = value
     return _write_config_data(data)
 
@@ -6045,7 +6050,7 @@ def _save_top_field(field, value):
         with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
     except Exception as e:
-        return "读取 config.json 失败：%s" % e
+        return T("读取 config.json 失败：%s") % e
     data[field] = value
     return _write_config_data(data)
 
@@ -6110,7 +6115,7 @@ def _ask_install_root():
 
     r = ttk.Frame(win)
     r.pack(padx=20, fill="x")
-    ttk.Label(r, text=T("安装根目录"), width=11).pack(side="left")
+    ttk.Label(r, text=T("安装根目录")).pack(side="left")
     pv = tk.StringVar(value=os.path.normpath(INSTALL_BASE))
     ent = ttk.Entry(r, textvariable=pv, width=40, font=("Consolas", 9))
     ent.pack(side="left", padx=6, fill="x", expand=True)
@@ -6215,7 +6220,7 @@ def _dir_group(parent, padx=20):
                        command=lambda v=var: _pick(v)).pack(side="left")
         return var
 
-    ib = _row("安装根目录", os.path.normpath(INSTALL_BASE), readonly=locked)
+    ib = _row(T("安装根目录"), os.path.normpath(INSTALL_BASE), readonly=locked)
     if locked:
         # 2026-11-01：安装根锁定后不能"改"，但**可以整体移动**（换盘/整理）。
         # 移动 = 复制 + 校验 + 改配置 + 删旧位置，安全性由 dsh_move 保证。
@@ -6228,9 +6233,9 @@ def _dir_group(parent, padx=20):
     # 会变成 "." —— 设置页上就显示成一个点，用户完全看不懂那是什么。
     # 现在显示成人话（实际落点是每个槽自己的 `.tmp`）。
     _tr_cur = str(CFG.get("temp_root") or "").strip()
-    tr = _row("临时目录根",
+    tr = _row(T("临时目录根"),
               os.path.normpath(_temp_root()) if _tr_cur
-              else "（默认）每个槽目录下的 .tmp")
+              else T("（默认）每个槽目录下的 .tmp"))
     if locked:
         # 2026-11-14 用户指出：这句话和上面的「移动安装根目录…」按钮自相矛盾 ——
         # 换位置**不需要**卸载任何版本，点那个按钮整体搬过去就行。
@@ -6257,7 +6262,7 @@ def _apply_dir_settings(ib_var, tr_var):
     """保存「目录」设置。返回 (ok, 提示文本)；失败时文本是原因，由调用方弹框。"""
     new_base = os.path.normpath((ib_var.get() or "").strip() or INSTALL_BASE)
     _raw_temp = (tr_var.get() or "").strip()
-    if not _raw_temp or _raw_temp.startswith("（默认）"):
+    if not _raw_temp or _raw_temp.startswith(T("（默认）")):
         # 显示的是「（默认）每个槽目录下的 .tmp」这种说明文字，不是路径 ——
         # 当成"没改"处理，绝不能把它 normpath 成一个目录名写进 config。
         new_temp = _temp_root()
@@ -6270,44 +6275,44 @@ def _apply_dir_settings(ib_var, tr_var):
     if base_changed and temp_changed:
         # 两个一起改会算出「基于新 base 的临时目录」，但槽还没搬过去 ——
         # 等于把 TEMP 指到一片空地。宁可让用户分两步走。
-        return (False, "安装根目录和临时目录根不能一次同时改。\n\n"
-                       "请先改安装根目录并保存，再回来改临时目录根。")
+        return (False, T("安装根目录和临时目录根不能一次同时改。\n\n"
+                       "请先改安装根目录并保存，再回来改临时目录根。"))
 
     if base_changed:
         # 界面已经把安装根做成只读了，这里是第二道闸：万一有别的入口（旧版本
         # 留下的回调、探针脚本）把 var 改了，也不能真的写进 config。
         if SLOT_KEYS:
-            return (False, "安装根目录不能直接改。\n\n"
+            return (False, T("安装根目录不能直接改。\n\n"
                            "它是首次安装/纳入时选定的位置。管两个不同位置的版本会让"
                            "备份目录、临时目录、新建槽的落点全部分叉，所以这里不支持"
                            "手填新路径。\n\n"
                            "要换位置请用「移动安装根目录…」：会把所有已装版本连同数据"
                            "一起搬过去（复制 → 校验 → 改配置 → 删旧位置），"
-                           "**不需要卸载**。")
+                           "**不需要卸载**。"))
         if not os.path.isdir(new_base):
-            return (False, "目录不存在：\n%s" % new_base)
+            return (False, T("目录不存在：\n%s") % new_base)
         err = _save_top_field("install_base", _cfg_form_base(new_base))
         if err:
             return (False, err)
         log(T("[设置] 安装根目录 → %s") % new_base)
-        return (True, "安装根目录已设为：\n%s\n\n"
+        return (True, T("安装根目录已设为：\n%s\n\n"
                       "版本会装进 %s；卸载备份落在 %s。\n"
-                      "必须重启管理器才生效。"
+                      "必须重启管理器才生效。")
                       % (new_base, os.path.join(new_base, "dsh-versions"),
                          os.path.join(new_base, "dsh备份")))
 
     # ── 临时目录根 ───────────────────────────────────────────────────
     if OPS is None:
-        return (False, "缺少 dsh_install_ops.py，无法迁移临时目录。")
+        return (False, T("缺少 dsh_install_ops.py，无法迁移临时目录。"))
     try:
         os.makedirs(new_temp, exist_ok=True)
     except Exception as e:
-        return (False, "无法创建目录 %s：%s" % (new_temp, e))
+        return (False, T("无法创建目录 %s：%s") % (new_temp, e))
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
     except Exception as e:
-        return (False, "读取 config.json 失败：%s" % e)
+        return (False, T("读取 config.json 失败：%s") % e)
 
     changes = OPS.plan_temp_relocation(data, INSTALL_BASE, new_temp, HOME)
     ok, msg = OPS.apply_temp_relocation(CONFIG_PATH, changes)
@@ -6325,15 +6330,15 @@ def _apply_dir_settings(ib_var, tr_var):
     log(T("[设置] 临时目录根 → %s（%s；重写 %d 个 bat）")
         % (new_temp, msg, len(made)))
 
-    lines = ["临时目录已迁到：", "  " + new_temp, ""]
+    lines = [T("临时目录已迁到："), "  " + new_temp, ""]
     for ch in changes:
         if ch["old_abs"] and _norm_cmp(ch["old_abs"]) != _norm_cmp(ch["new_abs"]):
             lines.append("  %-6s %s → %s" % (ch["key"], ch["old_abs"], ch["new_abs"]))
     lines.append("")
-    lines.append("已重写 %d 个 bat（TEMP/TMP 指向新位置）。" % len(made))
+    lines.append(T("已重写 %d 个 bat（TEMP/TMP 指向新位置）。") % len(made))
     if failed:
-        lines.append("有 %d 个 bat 写入失败，请看日志。" % len(failed))
-    lines.append("旧临时目录里的文件没有搬（那是每次启动重建的垃圾），可手动删除。")
+        lines.append(T("有 %d 个 bat 写入失败，请看日志。") % len(failed))
+    lines.append(T("旧临时目录里的文件没有搬（那是每次启动重建的垃圾），可手动删除。"))
     return (True, "\n".join(lines))
 
 
@@ -7043,15 +7048,15 @@ def about_dialog():
         except Exception:
             return default
 
-    _row(0, "版本", _safe(lambda: _app_version()))
-    _row(1, "槽上限", "%d 个" % MAX_SLOTS)
-    _row(2, "当前槽数", "%d 个" % len(SLOT_KEYS))
-    _row(3, "安装根目录", os.path.normpath(INSTALL_BASE))
-    _row(4, "程序目录", BASE_DIR)
-    _row(5, "运行环境", "%s（%s）" % (
+    _row(0, T("版本"), _safe(lambda: _app_version()))
+    _row(1, T("槽上限"), T("%d 个") % MAX_SLOTS)
+    _row(2, T("当前槽数"), T("%d 个") % len(SLOT_KEYS))
+    _row(3, T("安装根目录"), os.path.normpath(INSTALL_BASE))
+    _row(4, T("程序目录"), BASE_DIR)
+    _row(5, T("运行环境"), "%s（%s）" % (
         _safe(lambda: "%d.%d.%d" % sys.version_info[:3]),
         _safe(lambda: os.path.basename(sys.executable) or "python")))
-    _row(6, "日志文件", LOG_FILE)
+    _row(6, T("日志文件"), LOG_FILE)
 
     ttk.Separator(win, orient="horizontal").pack(fill="x", padx=24, pady=(8, 0))
 
@@ -7170,7 +7175,7 @@ def move_install_root_dialog():
 
     cur = ttk.Frame(win)
     cur.pack(padx=20, fill="x")
-    ttk.Label(cur, text=T("当前位置"), width=10).pack(side="left")
+    ttk.Label(cur, text=T("当前位置")).pack(side="left")
     ttk.Label(cur, text=os.path.normpath(INSTALL_BASE),
               foreground=_MUTED).pack(side="left")
 
@@ -7178,7 +7183,7 @@ def move_install_root_dialog():
 
     row = ttk.Frame(win)
     row.pack(padx=20, pady=(8, 0), fill="x")
-    ttk.Label(row, text=T("新位置"), width=10).pack(side="left")
+    ttk.Label(row, text=T("新位置")).pack(side="left")
     ent = ttk.Entry(row, textvariable=newv, width=42, font=("Consolas", 9))
     ent.pack(side="left", padx=(0, 6), fill="x", expand=True)
 
@@ -7217,7 +7222,7 @@ def move_install_root_dialog():
         _free = plan.get("free_bytes")
         _space = ""
         if _free is not None:
-            _space = ("\n空间：需要约 %.2f GB，目标盘可用 %.2f GB。"
+            _space = (T("\n空间：需要约 %.2f GB，目标盘可用 %.2f GB。")
                       % (_need / 1073741824.0, _free / 1073741824.0))
         if not messagebox.askyesno(
                 T("确认移动"),
@@ -7252,7 +7257,7 @@ def _do_move_root(MV, plan):
             messagebox.showinfo(
                 T("移动完成"),
                 T("%s\n\n管理器已切换到新位置。") % message)
-            _restart_or_tell("安装位置")
+            _restart_or_tell(T("安装位置"))
             # 三件 bat 里写的是**绝对路径**，搬完必须重写 —— 否则双击 dsh.bat
             # 仍然指向旧位置（2026-11-14 补：之前搬完没重写，只有管理器里能启动）。
             try:
@@ -7265,7 +7270,7 @@ def _do_move_root(MV, plan):
             log(T("[移动] 失败：%s") % str(message).replace("\n", " | "))
             messagebox.showerror(T("移动失败"), str(message))
 
-    prog = _GuiProgress("移动安装根目录", done)
+    prog = _GuiProgress(T("移动安装根目录"), done)
 
     def work():
         try:
@@ -7274,7 +7279,7 @@ def _do_move_root(MV, plan):
                 progress=lambda t: prog.on_step(t))
             return (ok, msg, "")
         except Exception as e:
-            return (False, "", "移动过程异常：%s" % e)
+            return (False, "", T("移动过程异常：%s") % e)
 
     OPS.run_in_thread(work, prog, None)
 
@@ -7480,7 +7485,7 @@ def _dir_group_single(parent):
 
     row = ttk.Frame(df)
     row.pack(fill="x")
-    ttk.Label(row, text=T("安装根"), width=8).pack(side="left")
+    ttk.Label(row, text=T("安装根")).pack(side="left")
     # 2026-11-02 修 bug（用户实测：选了新位置后根目录没变化）：
     # 这里原来是固定文本，选完新位置后**不会刷新**，看起来像没生效。
     # 改成 StringVar，选择/移动后立刻更新。
@@ -7578,7 +7583,8 @@ def settings_hub_dialog():
         ops.columnconfigure(_c, weight=1)
 
     def _obtn(r, c, text, cmd, span=1):
-        b = ttk.Button(ops, text=text, command=cmd)
+        # 文案以**位置参数**传进来，白名单抓不到 text=，所以在函数内翻译。
+        b = ttk.Button(ops, text=T(text), command=cmd)
         b.grid(row=r, column=c, columnspan=span, padx=3, pady=3, sticky="ew")
         try:
             BUSY["btns"].append(b)
@@ -7586,10 +7592,10 @@ def settings_hub_dialog():
             pass
         return b
 
-    _obtn(0, 0, "安装官方版 dsh", install_official_version)
-    _obtn(0, 1, "扫描已装 dsh 并纳入",
+    _obtn(0, 0, T("安装官方版 dsh"), install_official_version)
+    _obtn(0, 1, T("扫描已装 dsh 并纳入"),
           lambda: scan_and_offer_adopt())
-    _obtn(1, 0, "卸载 / 移出管理", uninstall_versions_dialog, span=2)
+    _obtn(1, 0, T("卸载 / 移出管理"), uninstall_versions_dialog, span=2)
 
     # ── 界面 ──────────────────────────────────────────────
     look = ttk.LabelFrame(host, text=T("界面"), padding=(12, 10))
@@ -7659,27 +7665,40 @@ def settings_hub_dialog():
                 pass
 
     def _pick_lang(_v):
+        """切换界面语言 —— **就地生效，不重启**（2026-11-14 用户反馈）。
+
+        控件文案是创建时求值的，所以要遍历控件树重设 text（`I18N.retranslate`）。
+        卡片上还有动态文本（状态行、标题里的版本号），重建一次卡片让它们也用新语言。
+        """
         if _v == I18N.lang():
             return
+        I18N.set_lang(_v)
+        _save_ui_field("lang", _v)
         _lang_var.set(_v)
         _refresh_lang_seg()
-        _save_ui_field("lang", _v)
-        _nm = "English" if _v == "en" else "中文"
-        if messagebox.askyesno(
-                T("界面语言"),
-                T("界面语言已改为 %s。控件文案在创建时就定了，需要重启管理器才会生效。\n\n现在重启吗？") % _nm):
-            ok, _why = _relaunch_self()
-            if ok:
-                try:
-                    root.destroy()
-                except Exception:
-                    pass
-            else:
-                messagebox.showwarning(
-                    T("界面语言"),
-                    T("语言已保存，但自动重启失败（%s）。请手动关闭本窗口再打开管理器。") % _why)
+        # 已建好的窗口逐个重译：主窗口（含全部卡片）+ 所有 Toplevel（设置窗自己）
+        n = I18N.retranslate(root)
+        # 卡片状态行是 textvariable，retranslate 不碰，重建卡片让它按新语言重算
+        try:
+            _clear_cards()
+            _build_cards()
+        except Exception as e:
+            log(T("[界面] 重建卡片失败（不影响语言切换）：%s") % e)
+        try:
+            _refresh_theme_seg()        # 主题三按钮的文案刚变过
+            _refresh_lang_seg()
+        except Exception:
+            pass
+        # 窗口标题不是控件的 text，retranslate 管不到，单独设一次
+        for _w, _k in ((root, "DSH 版本管理器"), (win, "设置")):
+            try:
+                _w.title(T(_k))
+            except Exception:
+                pass
+        log(T("[界面] 界面语言已切换为 %s（就地生效，%d 个控件）")
+            % ("English" if _v == "en" else "中文", n))
 
-    for _i, (_val, _lbl) in enumerate((("zh", "中文"), ("en", "English"))):
+    for _i, (_val, _lbl) in enumerate((("zh", T("中文")), ("en", "English"))):
         _lb = ttk.Button(_lbtns, text=_lbl,
                          command=lambda v=_val: _pick_lang(v))
         _lb.grid(row=0, column=_i, sticky="ew", padx=(0 if _i == 0 else 6, 0))
@@ -7699,7 +7718,7 @@ def settings_hub_dialog():
         mnt.columnconfigure(_c, weight=1)
 
     def _mbtn(r, c, text, cmd):
-        b = ttk.Button(mnt, text=text, command=cmd)
+        b = ttk.Button(mnt, text=T(text), command=cmd)
         b.grid(row=r, column=c, padx=3, pady=3, sticky="ew")
         try:
             BUSY["btns"].append(b)
@@ -7707,10 +7726,10 @@ def settings_hub_dialog():
             pass
         return b
 
-    _mbtn(0, 0, "检查运行环境", _show_env_report)
-    _mbtn(0, 1, "槽体检", lambda: _run_health(deep=True, dialog=True))
-    _mbtn(1, 0, "生成启动/kill/CLI bat", gen_bats)
-    _mbtn(1, 1, "使用说明", _open_user_guide)
+    _mbtn(0, 0, T("检查运行环境"), _show_env_report)
+    _mbtn(0, 1, T("槽体检"), lambda: _run_health(deep=True, dialog=True))
+    _mbtn(1, 0, T("生成启动/kill/CLI bat"), gen_bats)
+    _mbtn(1, 1, T("使用说明"), _open_user_guide)
 
     # ── 日志 ──────────────────────────────────────────────
     lg = ttk.LabelFrame(host, text=T("日志"), padding=(12, 10))
@@ -7932,12 +7951,12 @@ def _settings_display_dialog():
         for b in BROWSER_CHOICES:
             name = BROWSER_KNOWN[b][0]
             if not _browser_installed(b):
-                name += "（未安装）"
+                name += T("（未安装）")
             _bmap[name] = b
             vals.append(name)
         low = (cur or "").strip().lower()
         if cur and low not in BROWSER_KNOWN:
-            d = "其他程序：%s" % os.path.basename(cur)
+            d = T("其他程序：%s") % os.path.basename(cur)
             _bmap[d] = cur
             vals.append(d)
         vals.append(_B_OTHER)
@@ -7949,9 +7968,9 @@ def _settings_display_dialog():
         if low in BROWSER_KNOWN:
             name = BROWSER_KNOWN[low][0]
             if not _browser_installed(low):
-                name += "（未安装）"
+                name += T("（未安装）")
             return name
-        return "其他程序：%s" % os.path.basename(v)
+        return T("其他程序：%s") % os.path.basename(v)
 
     bcb = ttk.Combobox(brow, state="readonly", width=24)
     bcb.pack(side="left", padx=(8, 0))
@@ -7978,7 +7997,7 @@ def _settings_display_dialog():
         if sel == _B_OTHER:
             p = filedialog.askopenfilename(
                 title=T("选择浏览器程序"), parent=win,
-                filetypes=[("可执行程序", "*.exe"), ("所有文件", "*.*")])
+                filetypes=[(T("可执行程序"), "*.exe"), (T("所有文件"), "*.*")])
             if not p:
                 _b_sync()                       # 取消 → 回到原值
                 return
@@ -8141,7 +8160,7 @@ def _log_fresh_env():
                          creationflags=CREATE_NO_WINDOW).returncode
         raw = open(tmp, "rb").read().decode("utf-8", "replace")
         for ln in raw.splitlines():
-            if ln.strip().startswith(("[OK]", "[注意]", "[缺失]")):
+            if ln.strip().startswith(("[OK]", T("[注意]"), T("[缺失]"))):
                 log(T("[环境] ") + ln.strip())
         log(T("[环境] 完整报告见 dsh-manager.log；要自己再跑一遍："
             "python scripts\\check-env.py（换新机器 / 排查管理器起不来时用）"))

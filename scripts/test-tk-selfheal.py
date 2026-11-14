@@ -31,6 +31,9 @@ import types
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, os.pardir))
 SRC = os.path.join(REPO, "dsh_manager.pyw")
+# exec 整个 .pyw 时，它自己的 `from dsh_i18n import T` 要能找到模块
+if REPO not in sys.path:
+    sys.path.insert(0, REPO)
 
 if not os.path.exists(SRC):
     print("找不到 %s —— 请在管理器仓库内运行本脚本" % SRC)
