@@ -92,7 +92,8 @@ set. Two paths per entry:
 - **Copy** — copies into the version root (hundreds of MB, slower); the original is untouched
 
 Both run the same health check: missing `bin.js` or missing dependencies is refused with a
-clear reason instead of "looks fine, explodes on start".
+clear reason instead of "looks fine, explodes on start". Neither path repairs anything
+in the source install — adopting only copies and registers a dsh that already runs.
 
 **Uninstall vs detach**
 
@@ -104,8 +105,13 @@ clear reason instead of "looks fine, explodes on start".
   starts it. Re-adopt it later as-is (same port, no copying).
 
 **Slot health check** — reports how the current state differs from what is registered.
-Read-only by default; for a slot missing its node runtime or data directory, pick it and
-click **Repair…** (only fills in missing pieces, never deletes or overwrites).
+Read-only by default; pick a slot and click **Repair…** to fill in only what is missing
+(the node runtime, empty `.dsh-home` / `.tmp` directories, and **missing**
+`dsh.bat` / `dsh-cli.bat` / `kill-<port>.bat`). The confirmation dialog lists exactly
+which files will be created. Existing files — including bats you edited by hand — are
+never deleted or overwritten. A bat whose *contents* are wrong (port / `TEMP` mismatch)
+is outside Repair's scope; use Settings → Maintenance →
+"Generate start / kill / CLI bats" for that.
 
 ## Command line
 

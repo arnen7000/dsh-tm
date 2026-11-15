@@ -77,8 +77,22 @@ Everything that used to be a row of buttons now lives in **Settings**:
 ### 4.3 Slot health check
 
 Reports how the current state differs from what is registered. **Read-only by default.**
-If a slot is missing its node runtime or data directory, pick it and click **Repair…** —
-only missing pieces are filled in; nothing you already have is deleted or overwritten.
+Pick a slot and click **Repair…** to fill in only what is missing; nothing you already
+have is deleted or overwritten. The confirmation dialog lists exactly which files will
+be created.
+
+| Missing | What **Repair…** does |
+|---|---|
+| `node/node.exe` | Copies one from another slot or the bundled runtime |
+| `.dsh-home` / `.tmp` | Creates empty directories (sessions / credentials do not come back) |
+| `dsh.bat`, `dsh-cli.bat`, `kill-<port>.bat` | Generates **only the missing ones** from the current config; existing bats — including ones you edited by hand — are never touched |
+| `lib/bin.js`, dependencies, dsh's `package.json` | **Not repaired** (that would be a reinstall); use "Install official dsh" |
+
+Repair runs the health check again afterwards and reports anything it could not fix,
+instead of claiming success. **Note:** a bat whose *contents* are wrong (port / `TEMP`
+not matching the config) is outside Repair's scope — it only fills in missing files,
+never rewrites existing ones. Use Settings → Maintenance →
+"Generate start / kill / CLI bats" for that.
 
 ### 4.4 A dsh started outside the manager
 
@@ -107,7 +121,13 @@ Settings → Version management → **Scan and adopt**. Two paths per entry:
   left untouched.
 
 Both paths run the same health check: a missing `bin.js` or missing dependencies is
-refused with a clear reason instead of "looks fine, explodes on start".
+refused with a clear reason instead of "looks fine, explodes on start". **Neither path
+repairs anything** in the source install — adopting only copies and registers a dsh
+that already runs correctly.
+
+When a detached slot is re-attached in place, the manager regenerates **only the
+missing** launch bats afterwards (and rewrites all three if the port changed); bats you
+edited by hand are never overwritten.
 
 ## 6. Removing slots
 
