@@ -145,7 +145,7 @@ if loaded:
     chk("D9 环境里 TEMP 指向该槽", env.get("TEMP") == slot["temp_dir"])
 
     # 坏配置要给出明确错误而不是崩栈。
-    # 2026-11-16 地基修复：下面两条断言查的是中文报错文案，以前依赖**本机**
+    # 2026-11-15 地基修复：下面两条断言查的是中文报错文案，以前依赖**本机**
     # config.json 的 ui.lang —— 用户切到英文界面后这里会假红，而 CI 用零槽模板
     # （无 ui.lang）永远是 zh，于是「本地红、云端绿」。回归必须钉住语言。
     import dsh_i18n as _I18N
@@ -188,7 +188,7 @@ _src_cli = io.open(CLI, encoding="utf-8").read()
 chk("E1 CLI 提供 --json 参数", 'p.add_argument("--json"' in _src_cli)
 chk("E2 顶层带 schema_version", "SCHEMA_VERSION = 1" in _src_cli)
 # 八个命令都要有 JSON 分支（2026-11-15 补 start / stop / kill-stray，
-# 2026-11-16 再加 doctor）
+# 2026-11-15 再加 doctor）
 _n_json = _src_cli.count('getattr(args, "json", False)')
 chk("E3 八个命令都有 JSON 分支（含写操作与 doctor）",
     _n_json >= 7 and "_json = getattr(args, \"json\", False)" in _src_cli

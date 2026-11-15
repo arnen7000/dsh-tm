@@ -408,7 +408,7 @@ if ($Fast) {
         (Join-Path $Repo "scripts\test-standalone.py"),
         (Join-Path $Repo "scripts\test-tk-selfheal.py"),
         (Join-Path $Repo "scripts\test-cli.py"),
-        # 配置层地基 + doctor 契约（2026-11-16 新增，第 17 套）
+        # 配置层地基 + doctor 契约（2026-11-15 新增，第 17 套）
         (Join-Path $Repo "scripts\test-config-guard.py"),
         # 日志脱敏（pre-commit 也跑这一套，全量总检以前漏了它）
         (Join-Path $Repo "scripts\test-log-mask.py"),
