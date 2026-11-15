@@ -818,9 +818,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1 -Fast   # 跳过耗时回归
 ```
 
-**CI**：`.github/workflows/ci.yml` 在 `windows-latest` 上跑同一份全量 `check-all.ps1`（含 18 套回归）。push 到 `main` 或开 PR 都会触发；仓库不含 `config.json`，CI 会先用 `config/config.example.json` 生成一份零槽配置。项目本身是 Windows 专属，所以只跑 Windows runner。
+**CI**：`.github/workflows/ci.yml` 在 `windows-latest` 上跑同一份全量 `check-all.ps1`（含 19 套回归）。push 到 `main` 或开 PR 都会触发；仓库不含 `config.json`，CI 会先用 `config/config.example.json` 生成一份零槽配置。项目本身是 Windows 专属，所以只跑 Windows runner。
 
-它覆盖 6 项 + 18 套离线回归：
+它覆盖 6 项 + 19 套离线回归：
 
 | # | 检查 |
 |---|---|
@@ -829,9 +829,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1 -Fast 
 | 3 | `config.json` / 日志 / 凭据不许入库 |
 | 4 | 文档与日志里不许出现完整 `token=...` |
 | 5 | Markdown 相对链接能否落地（逐个 `Test-Path`） |
-| 6 | 18 套离线回归 + **卫生闸**（回归不许在真实盘上留任何东西） |
+| 6 | 19 套离线回归 + **卫生闸**（回归不许在真实盘上留任何东西） |
 
-离线回归名单（18 套，见 `scripts/check-all.ps1` 的 `$all`）：`test-manager-logic` / `test-adopt-logic` / `test-install-ops` / `test-slot-ops` / `test-bat-text` / `test-ui-prefs` / `test-health` / `test-drift` / `test-standalone` / `test-tk-selfheal` / `test-cli` / `test-config-guard`（配置地基 + doctor 契约）/ `test-cli-boundary`（CLI 读写分界 + 地基修复）/ `test-log-mask` / `test-i18n` / `test-move` / `test-log-levels` / `test-portable`。
+离线回归名单（19 套，见 `scripts/check-all.ps1` 的 `$all`）：`test-manager-logic` / `test-adopt-logic` / `test-install-ops` / `test-slot-ops` / `test-bat-text` / `test-ui-prefs` / `test-health` / `test-drift` / `test-standalone` / `test-tk-selfheal` / `test-cli` / `test-config-guard`（配置地基 + doctor 契约）/ `test-cli-boundary`（CLI 读写分界 + 地基修复）/ `test-config-compat`（config.json 跨版本兼容）/ `test-log-mask` / `test-i18n` / `test-move` / `test-log-levels` / `test-portable`。
 
 `test-standalone.py` 特别值得知道：它用**真的 cmd.exe + 真的 node.exe** 跑生成出来的 bat，验证"管理器删了 dsh 仍能自己跑"。
 
