@@ -34,6 +34,8 @@
 `config_problems` 里，并拒绝据此执行写操作。
 
 `--json` 的固定 schema、读写分界与错误码见 docs/agent-api.md。
+命令的读 / 写分类只认 `CMD_CLASS` 这一张表，`main()` 有注册闸门，
+每个 JSON 输出都带 `effect`；写命令带 `changed[]`。CLI 永不提供改磁盘命令。
 退出码：0 成功 / 1 有失败 / 2 用法错误 / 3 配置错误
 """
 from __future__ import annotations
@@ -90,6 +92,43 @@ _VERBOSE = {"on": False}
 # 先猜「这份配置可信吗」；写操作还会据此拒绝端口不可信的槽。只读、不落盘。
 _CONFIG_PROBLEMS = []
 
+# ── 命令读写分界：唯一分类表（2026-11-15）────────────────────────────
+# docs/agent-api.md §1 的三分类以前只写在文档里：代码里加一条新命令时，文档
+# 可以不改、分类可以漏，脚本照样能驱动 —— 直到某天有人在 CLI 里接了「卸载」
+# 而契约还写着「CLI 不碰磁盘」。现在分类表是代码事实：
+#   · main() 每次调用都用 _gate_registry() 对账 handler 表，漏分类直接失败；
+#   · 每个 --json 输出由 _emit() 补 effect，agent 不必自己维护白名单；
+#   · 写命令统一带 changed[]，只读命令不带这个字段。
+# **CLI 永不提供 disk_write**：安装 / 纳入 / 卸载 / 移出 / 搬迁只在 GUI，
+# 带确认与备份。scripts/test-cli-boundary.py 会把这张表与文档逐项对账。
+CMD_CLASS = {
+    "list": "read",
+    "status": "read",
+    "url": "read",
+    "health": "read",
+    "doctor": "read",
+    "start": "runtime_write",
+    "stop": "runtime_write",
+    "kill-stray": "runtime_write",
+}
+ALLOWED_EFFECTS = ("read", "runtime_write")
+
+# _selected_keys() 记下被忽略的未知槽名，由 _emit() 显式摊给 agent。
+# 地基审计实跑：以前 `status v9 --json` 返回 0 槽 ok=true，而 `url v9 --json`
+# 返回全部槽 —— 同一个拼错槽名两种表现，agent 无从判断。
+_UNKNOWN_SLOTS = []
+
+
+def _gate_registry(handlers):
+    """运行时闸门：命令表和分类表必须一一对应，且不允许 disk_write。"""
+    missing = sorted(set(handlers) - set(CMD_CLASS))
+    stale = sorted(set(CMD_CLASS) - set(handlers))
+    bad = sorted(k for k, v in CMD_CLASS.items() if v not in ALLOWED_EFFECTS)
+    if missing or stale or bad:
+        raise RuntimeError(
+            "CLI 命令分类表与实现不一致：未分类=%s 表里多出=%s 非法分类=%s"
+            % (missing, stale, bad))
+
 
 # ─────────────────────────── 配置 ───────────────────────────
 def _probe_npm_global():
@@ -139,7 +178,9 @@ def _emit(obj):
     """统一的 JSON 出口：补齐所有命令共有的顶层字段，保证契约形状一致。
 
     每个命令的 JSON 都至少有 schema_version / command / ok / count / slots /
-    errors；命令自己的字段（deep / dry_run / changed …）由调用方追加。
+    errors / effect；命令自己的字段（deep / dry_run / changed …）由调用方追加。
+    `effect` 从 CMD_CLASS 查，是**命令类别**（它被允许改什么），不是本次调用的
+    副作用证明；要看结果认 `ok` / `changed[]`。
     """
     obj = dict(obj)
     obj.setdefault("schema_version", SCHEMA_VERSION)
@@ -148,6 +189,12 @@ def _emit(obj):
     # 加字段不升 schema_version（契约规则见 docs/agent-api.md §7）。
     # 配置坏但还能读时，只读命令照常出报告，同时把不可信之处摊开给 agent。
     obj.setdefault("config_problems", [dict(p) for p in _CONFIG_PROBLEMS])
+    effect = CMD_CLASS.get(obj.get("command"), "read")
+    obj.setdefault("effect", effect)
+    if effect == "runtime_write":
+        obj.setdefault("changed", [])
+    if _UNKNOWN_SLOTS:
+        obj.setdefault("unknown_slots", list(_UNKNOWN_SLOTS))
     print(json.dumps(obj, ensure_ascii=False, indent=2))
 
 
@@ -268,8 +315,8 @@ def _config_error(json_mode, command, code, detail):
     sys.exit(EXIT_CONFIG)
 
 
-def _cfg_or_die(path=CONFIG_PATH, json_mode=False, command=""):
-    """读配置 + 统一校验；缺失时**和 GUI 一样**从模板自动生成。
+def _cfg_or_die(path=CONFIG_PATH, json_mode=False, command="", auto_create=True):
+    """读配置 + 统一校验；**默认路径**缺失时和 GUI 一样从模板自动生成。
 
     2026-11-01：全新 clone 后直接跑 `dsh-tm.py list` 会报「找不到配置文件」，
     但 GUI 双击却能自动生成 —— 补齐了这个不一致。
@@ -277,8 +324,12 @@ def _cfg_or_die(path=CONFIG_PATH, json_mode=False, command=""):
     versions（例如被写成数组）以前会伪装成「零槽」，agent 会据此判断这台
     机器没装过任何版本。现在阻断级问题直接结构化报错退出 3；端口类问题
     不阻断读命令，但挂进 `config_problems` 并挡住写操作。
+    2026-11-15 地基审计：显式 `--config <路径>` 指向不存在的文件时**不再**
+    自动生成。以前会静默写出一份零槽模板并回 `ok:true, count:0` —— 路径
+    写错的 agent 会误判「这台机器没装任何版本」，盘上还凭空多出一个文件。
+    现在只有默认 config.json 缺失（用户没指定路径）才做 bootstrap。
     """
-    if not os.path.exists(path) and os.path.exists(EXAMPLE_PATH):
+    if not os.path.exists(path) and auto_create and os.path.exists(EXAMPLE_PATH):
         try:
             import shutil
             shutil.copyfile(EXAMPLE_PATH, path)
@@ -663,7 +714,10 @@ def cmd_stop(ctx, args):
 
 def cmd_status(ctx, args):
     if getattr(args, "json", False):
-        keys = _target_keys(ctx, args) if args.slot else ctx.keys
+        # 2026-11-15 地基审计：原来走 _target_keys（只给写操作的人读分支用），
+        # 未知槽会被静默过滤成 0 槽 ok=true；现在与其它只读命令统一走
+        # _selected_keys，并且 unknown_slots[] 会把拼错的槽名讲清楚。
+        keys = _selected_keys(ctx, args)
         _emit({"schema_version": SCHEMA_VERSION, "command": "status", "ok": True,
                "count": len(keys),
                "slots": [_slot_json(ctx, k) for k in keys]})
@@ -717,6 +771,15 @@ def cmd_health(ctx, args):
         sys.path.insert(0, BASE_DIR)
         import dsh_health
     except Exception as e:
+        # 2026-11-15 地基审计：以前这里只往 stderr 写一行就 return，--json
+        # 时 stdout 是空的（实测 0 字节），直接违反「一次调用一个 JSON 对象」。
+        # doctor 早就把模块不可用结构化了，这里对齐，并复用同一个错误码。
+        if getattr(args, "json", False):
+            _emit({"command": "health", "ok": False, "count": 0, "slots": [],
+                   "level": "error", "deep": bool(getattr(args, "deep", False)),
+                   "errors": [{"key": None, "code": "module_unavailable",
+                               "detail": str(e)}]})
+            return EXIT_FAIL
         sys.stderr.write(T("[错误] 无法加载 dsh_health：%s\n") % e)
         return EXIT_FAIL
     keys = _selected_keys(ctx, args)   # 见 cmd_url：修非 JSON 分支的 UnboundLocalError
@@ -739,8 +802,12 @@ def cmd_health(ctx, args):
                 continue
             mapped = [{"level": _lv_en(lv), "title": title, "detail": detail}
                       for lv, title, detail in items]
+            # 2026-11-15 地基审计：以前「只要 items 非空」就报 warning，
+            # 于是只有一条提示（如实装版本）的槽被误报成有警告。info 不是
+            # 问题；枚举仍保持 ok / warning / error 三值，不升 schema_version。
             level = ("error" if any(m["level"] == "error" for m in mapped)
-                     else "warning" if mapped else "ok")
+                     else "warning" if any(m["level"] == "warning" for m in mapped)
+                     else "ok")
             slots.append({"key": k, "label": c.get("label") or k,
                           "level": level, "items": mapped})
         worst = ("error" if any(x["level"] == "error" for x in slots)
@@ -1033,8 +1100,12 @@ def _selected_keys(ctx, args):
     2026-11-15 修：`cmd_url` / `cmd_health` 的非 JSON 分支以前用了只在 JSON
     分支里赋值的 `keys`，不带 `--json` 时直接 UnboundLocalError。两个分支
     现在共用这里；未知槽名在非 JSON 分支另外提示（JSON 模式保持 stdout 干净）。
+    2026-11-15 地基审计：把被忽略的槽名记进 `_UNKNOWN_SLOTS`，由 `_emit()`
+    显式输出 `unknown_slots[]`，agent 不会再拿到一份看不出问题的空报告。
     """
-    given = [k for k in (getattr(args, "slot", None) or []) if k in ctx.versions]
+    given_all = list(getattr(args, "slot", None) or [])
+    _UNKNOWN_SLOTS[:] = [k for k in given_all if k not in ctx.versions]
+    given = [k for k in given_all if k in ctx.versions]
     return given or list(ctx.keys)
 
 
@@ -1170,14 +1241,20 @@ def main(argv=None):
     else:
         _adopt_config_lang(args.config)
     _VERBOSE["on"] = bool(getattr(args, "verbose", False))
-    ctx = Ctx(_cfg_or_die(args.config, json_mode=bool(getattr(args, "json", False)),
-                          command=args.cmd))
-    handler = {
+    # 显式 --config 是调用方「我知道文件在哪」的声明：文件不存在就是错误，
+    # 绝不能自动生成一份零槽配置把路径拼错伪装成「这台机器没装版本」。
+    _explicit_cfg = (os.path.normcase(os.path.abspath(args.config))
+                     != os.path.normcase(os.path.abspath(CONFIG_PATH)))
+    ctx = Ctx(_cfg_or_die(args.config,
+                          json_mode=bool(getattr(args, "json", False)),
+                          command=args.cmd, auto_create=not _explicit_cfg))
+    handlers = {
         "list": cmd_list, "status": cmd_status, "start": cmd_start,
         "stop": cmd_stop, "url": cmd_url, "health": cmd_health,
         "doctor": cmd_doctor, "kill-stray": cmd_kill_stray,
-    }[args.cmd]
-    return handler(ctx, args)
+    }
+    _gate_registry(handlers)   # 新增命令忘了分类 → 当场失败，不会静默绕过
+    return handlers[args.cmd](ctx, args)
 
 
 if __name__ == "__main__":

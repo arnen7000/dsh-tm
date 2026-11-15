@@ -410,6 +410,8 @@ if ($Fast) {
         (Join-Path $Repo "scripts\test-cli.py"),
         # 配置层地基 + doctor 契约（2026-11-15 新增，第 17 套）
         (Join-Path $Repo "scripts\test-config-guard.py"),
+        # CLI 读写分界硬标记 + 四个地基修复（2026-11-15 新增，第 18 套）
+        (Join-Path $Repo "scripts\test-cli-boundary.py"),
         # 日志脱敏（pre-commit 也跑这一套，全量总检以前漏了它）
         (Join-Path $Repo "scripts\test-log-mask.py"),
         # 中英双语的完整性（每个 T() 都有译文、换行没被写成 /n、无空译文）
