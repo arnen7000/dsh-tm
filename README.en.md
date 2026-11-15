@@ -114,6 +114,7 @@ python dsh-tm.py list
 python dsh-tm.py start --all
 python dsh-tm.py stop --all
 python dsh-tm.py health
+python dsh-tm.py doctor --json       :: one-shot diagnosis (read-only)
 python dsh-tm.py --lang en list      :: English output
 python dsh-tm.py list --json         :: machine-readable
 python dsh-tm.py start v1 --json     :: write commands too
@@ -128,6 +129,19 @@ follows `--lang` and must not be parsed. Write commands add `changed[]` and per-
 `state` / `listening`, and never default to all slots. Disk-changing operations
 (install / adopt / uninstall) are GUI-only. See the
 [Agent API contract](docs/agent-api.md) for the full schema, error codes and examples.
+
+**`doctor --json`** is the one-shot read-only diagnosis: it merges config validation,
+the slot health check and the slot-shape check, and labels every issue with a fixed
+English `code` / `source` / `action` plus per-slot `actions[]` (`fix_config`,
+`reinstall_slot`, `regenerate_bats`, `create_data_dir`, `review_manually`).
+Unlike `health --json`, an agent can classify these without parsing free text.
+
+Every JSON result also carries `config_problems[]`. A malformed `versions` section is
+reported as a structured config error (exit `3`) instead of being silently mistaken
+for "no slots installed"; a `port` / `--port` mismatch is reported on read commands
+and makes `start` / `stop` refuse the affected slots (`config_port_invalid`) rather
+than acting on a wrong port. The GUI, the CLI and `doctor` share one implementation
+in `dsh_config_guard.py`.
 
 ## Configuration
 

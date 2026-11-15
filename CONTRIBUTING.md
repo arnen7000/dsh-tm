@@ -159,7 +159,8 @@ pythonw dsh_manager.pyw           # 无控制台（与发布版一致，异常�
 | `dsh_kill.py` | 按「签名 + 端口」精准清理进程 |
 | `dsh_registry.py` | 拉 npm 版本列表 |
 | `dsh_i18n.py` | 中英翻译层：**中文原文就是 key**，英文查 `lang/en.json`，查不到原样返回中文；`retranslate()` 负责就地切换 |
-| `dsh-tm.py` | CLI |
+| `dsh_config_guard.py` | 配置层唯一判据：versions 类型、port / `extra_args --port` 一致性。GUI / CLI / `doctor` 共用，别在任一入口另写一份 |
+| `dsh-tm.py` | CLI 与 agent 接口（`--json` 全命令覆盖、`doctor --json`） |
 | `lang/en.json` | 英文文案表（`中文原文 → English`），缺一条就回退中文，不会空白 |
 | `scripts/i18n-wrap.py` | 把源码里的 UI 文案包成 `T("...")` 的 AST 工具（白名单，可重复执行） |
 | `scripts/make-portable.py` | 打「解压即用」发布包（源码 + 精简 runtime） |
@@ -184,7 +185,7 @@ pythonw dsh_manager.pyw           # 无控制台（与发布版一致，异常�
 ### 跑测试
 
 ```powershell
-# 提交前总检：6 项静态检查 + 16 套离线回归（约 40 秒）
+# 提交前总检：6 项静态检查 + 17 套离线回归（约 40 秒）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1
 
 # 只跑静态检查（快，适合频繁改）

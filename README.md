@@ -466,6 +466,7 @@ python dsh-tm.py stop  --all         :: 停止全部
 python dsh-tm.py start v1 v3         :: 启动指定的几个
 python dsh-tm.py url   v1            :: 打印入口地址（不含 token）
 python dsh-tm.py health v1 --deep    :: 槽体检（只读）
+python dsh-tm.py doctor --json       :: 综合诊断（只读）：配置 + 体检 + 槽形状 + 建议动作
 ```
 
 | 参数 | 说明 |
@@ -482,9 +483,22 @@ python dsh-tm.py health v1 --deep    :: 槽体检（只读）
 
 ```bat
 python dsh-tm.py list --json
+python dsh-tm.py doctor --json            :: 排障总入口（只读）
 python dsh-tm.py start v1 --json
 python dsh-tm.py kill-stray --json        :: 只出计划，不加 --yes 不动任何进程
 ```
+
+**`doctor --json`** 把「配置校验 + 槽体检 + 槽形状复核」合成一次只读结论：每条问题带
+固定英文 `code` / `source` / `action`，槽级给 `actions[]`（`fix_config` /
+`reinstall_slot` / `regenerate_bats` / `create_data_dir` / `review_manually`），
+顶层给 `level` / `summary` / `config_valid`。`health --json` 只有随语言变的自由文本，
+agent 要分类就走 `doctor`。
+
+**配置可信度是明摆着的**：所有 `--json` 结果都带 `config_problems[]`。
+类型写坏的 `versions` 现在直接结构化报错（退出码 3，**不再静默当成零槽**）；
+`port` 与 `extra_args --port` 不一致时，读命令照常出报告但把问题列出来，
+`start` / `stop` 会拒绝这些槽（`config_port_invalid`），不会拿错端口去启停进程。
+GUI、CLI、`doctor` 用的是 `dsh_config_guard.py` 里同一份判据。
 
 ```json
 {
@@ -514,7 +528,10 @@ python dsh-tm.py kill-stray --json        :: 只出计划，不加 --yes 不动�
 - **`ok` 有两种含义**：只读命令 = 命令跑通（槽是否健康看 `level`）；写操作 =
   目标状态真的达成（`start` 后端口要在听，`stop` 后端口要不通）
 - 写操作不给槽、也不给 `--all` → `no_target`（退出码 2），**绝不默认全开**
-- `health --json` 的每条问题带 `level` + `title` + `detail`，没指定槽就查全部
+- `health --json` 的每条问题带 `level` + `title` + `detail`，没指定槽就查全部；
+  要固定英文分类与建议动作就用 `doctor --json`
+- 每个结果都带 `config_problems[]`（空 = 配置可信）；配置不可用时 `--json`
+  仍然输出一个 `ok: false` 的对象、退出码 3
 - JSON 模式 `stdout` 只有一个 JSON 对象，诊断走 stderr
 - 带 token 的完整入口 URL 只存在管理器进程内存里，CLI 拿不到 ——
   `url --json` 里 `has_token: false` 表示这只是裸地址
@@ -765,6 +782,8 @@ dsh 官方文档站（`deepseek-harness.github.io`）在国内可能打不开，
 | `dsh_adopt.py` | 扫描已装 dsh、复制（不跟随 junction）、重指链接、端口分配 |
 | `dsh_kill.py` | 按签名 + 端口杀进程（唯一允许杀进程的入口） |
 | `dsh_health.py` | 槽体检：只读对比与分级报告 |
+| `dsh_config_guard.py` | 配置层唯一判据（versions 类型、port / `--port` 一致性）；GUI / CLI / doctor 共用 |
+| `dsh-tm.py` | 无图形 CLI 与 agent 接口（含 `doctor --json`） |
 | `dsh_drift.py` | 插件/数据漂移快照（只读，不碰凭据） |
 | `dsh_ui_prefs.py` | 界面显示偏好纯逻辑（`.pyw` 里测不了，所以拆出来） |
 | `dsh_registry.py` | npm registry 版本列表 |
@@ -784,9 +803,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1 -Fast   # 跳过耗时回归
 ```
 
-**CI**：`.github/workflows/ci.yml` 在 `windows-latest` 上跑同一份全量 `check-all.ps1`（含 14 套回归）。push 到 `main` 或开 PR 都会触发；仓库不含 `config.json`，CI 会先用 `config/config.example.json` 生成一份零槽配置。项目本身是 Windows 专属，所以只跑 Windows runner。
+**CI**：`.github/workflows/ci.yml` 在 `windows-latest` 上跑同一份全量 `check-all.ps1`（含 17 套回归）。push 到 `main` 或开 PR 都会触发；仓库不含 `config.json`，CI 会先用 `config/config.example.json` 生成一份零槽配置。项目本身是 Windows 专属，所以只跑 Windows runner。
 
-它覆盖 6 项 + 13 套离线回归：
+它覆盖 6 项 + 17 套离线回归：
 
 | # | 检查 |
 |---|---|
@@ -795,9 +814,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1 -Fast 
 | 3 | `config.json` / 日志 / 凭据不许入库 |
 | 4 | 文档与日志里不许出现完整 `token=...` |
 | 5 | Markdown 相对链接能否落地（逐个 `Test-Path`） |
-| 6 | 13 套离线回归 + **卫生闸**（回归不许在真实盘上留任何东西） |
+| 6 | 17 套离线回归 + **卫生闸**（回归不许在真实盘上留任何东西） |
 
-离线回归名单（13 套，见 `scripts/check-all.ps1` 的 `$all`）：`test-manager-logic` / `test-adopt-logic` / `test-install-ops` / `test-slot-ops` / `test-bat-text` / `test-ui-prefs` / `test-health` / `test-drift` / `test-standalone` / `test-tk-selfheal` / `test-cli` / `test-move` / `test-log-levels`。
+离线回归名单（17 套，见 `scripts/check-all.ps1` 的 `$all`）：`test-manager-logic` / `test-adopt-logic` / `test-install-ops` / `test-slot-ops` / `test-bat-text` / `test-ui-prefs` / `test-health` / `test-drift` / `test-standalone` / `test-tk-selfheal` / `test-cli` / `test-config-guard`（配置地基 + doctor 契约）/ `test-log-mask` / `test-i18n` / `test-move` / `test-log-levels` / `test-portable`。
 
 `test-standalone.py` 特别值得知道：它用**真的 cmd.exe + 真的 node.exe** 跑生成出来的 bat，验证"管理器删了 dsh 仍能自己跑"。
 

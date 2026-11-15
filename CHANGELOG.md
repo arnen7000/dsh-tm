@@ -11,6 +11,53 @@
 
 ---
 
+## [0.1.6] — 2026-11-16
+
+这一版按「**地基优先**」推进：先把审计确认的基础问题修掉、补上回归，再动扩展功能。
+
+### 新增
+
+- **`doctor --json`**：一次只读调用合成「配置校验 + 槽体检 + 槽形状复核」。
+  每条问题带固定英文 `code` / `source` / `action`，逐槽给 `level` / `issues[]` /
+  `actions[]`（`fix_config` / `reinstall_slot` / `regenerate_bats` /
+  `create_data_dir` / `review_manually`），顶层给 `summary` / `config_valid` /
+  `config_issues` / `global_issues`。`health --json` 只有随语言变的自由文本，
+  agent 要分类就走 `doctor`。不写盘、不启停进程、不修文件。
+- **`dsh_config_guard.py`**：配置层的**唯一判据**，GUI / CLI / `doctor` 共用。
+  `dsh_manager.pyw` 的 `_check_port_consistency()` 改为薄转发，不再另写一份。
+- 所有 `--json` 结果新增 `config_problems[]`（加字段不升 schema_version）。
+  `docs/agent-api.md`（中英双语）补 doctor 字段表、动作码、配置错误码与示例；
+  两个 README、两份使用说明、路线图同步。
+- 第 17 套离线回归 `scripts/test-config-guard.py`（43 项）：纯函数判据 + 三处入口
+  共用判据的静态断言 + CLI 实跑（假配置，不启动也不杀任何进程）。
+
+### 修复（地基）
+
+- **损坏配置被伪装成零槽**：CLI 的 `_cfg_or_die()` 以前把类型写坏的 `versions`
+  静默改成 `{}`，agent 会据此判断「这台机器没装过任何版本」。现在阻断级问题
+  （`versions` 缺失/类型错、槽不是对象、槽数超上限）结构化报错并退出 3。
+- **`--json` 遇坏配置 stdout 是空的**：以前只往 stderr 写一行就 `exit(3)`，
+  破坏了「一次调用 stdout 只有一个 JSON 对象」的契约。现在两种模式都给结论，
+  `ok: false` / `config_valid: false` / 固定英文 `code`。
+- **CLI 没有 GUI 的端口双源校验**：`start --json` / `list --json` 正是用 `port`
+  判断 `state` / `listening`，`port` 与 `extra_args --port` 不一致时会稳定误报。
+  现在读命令照常出报告但列出 `config_problems`，`start` / `stop` 拒绝受影响的槽
+  （`config_port_invalid`），不会拿错端口去启停进程。
+- GUI 端口校验老实现用 `cfg["extra_args"]` 硬取键，手改配置缺字段会 KeyError；
+  改用共享模块后给可读错误，并顺带支持 `--port=4080` 写法。
+- **回归假红**：`test-cli.py` 的 D10/D11 断言中文报错文案，却让语言跟着**本机**
+  `config.json` 的 `ui.lang` 走 —— 用户把界面切成英文后本地必红，而 CI 用零槽模板
+  （无 `ui.lang`）永远绿。现在这两条显式钉成 zh，新增回归的两条文案断言改成
+  中英都认。
+
+### 变更
+
+- `scripts/test-cli.py` 53 → 56 项：八个命令的 JSON 契约、doctor 字段、
+  `config_problems` 全覆盖。
+- 离线回归 16 → 17 套；`README.md` / `CONTRIBUTING.md` 里的旧套数一并更正。
+
+---
+
 ## [0.1.5] — 2026-11-15
 
 ### 新增

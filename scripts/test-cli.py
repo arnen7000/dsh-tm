@@ -144,7 +144,14 @@ if loaded:
     chk("D8 环境里 DSH_HOME 指向该槽", env.get("DSH_HOME") == slot["dsh_home"])
     chk("D9 环境里 TEMP 指向该槽", env.get("TEMP") == slot["temp_dir"])
 
-    # 坏配置要给出明确错误而不是崩栈
+    # 坏配置要给出明确错误而不是崩栈。
+    # 2026-11-16 地基修复：下面两条断言查的是中文报错文案，以前依赖**本机**
+    # config.json 的 ui.lang —— 用户切到英文界面后这里会假红，而 CI 用零槽模板
+    # （无 ui.lang）永远是 zh，于是「本地红、云端绿」。回归必须钉住语言。
+    import dsh_i18n as _I18N
+    _saved_lang = _I18N.lang()
+    _I18N.set_lang("zh")
+
     bad = os.path.join(d, "bad.json")
     with io.open(bad, "w", encoding="utf-8") as f:
         f.write("{not json")
@@ -154,6 +161,7 @@ if loaded:
     missing = os.path.join(d, "nope.json")
     c3, e3 = mod.load_config(missing)
     chk("D11 缺文件返回明确错误", c3 is None and "找不到配置文件" in e3, e3)
+    _I18N.set_lang(_saved_lang)
 
     # 未知槽要返回 None，而不是 KeyError
     chk("D12 未知槽返回 None", ctx.slot("v9") is None)
@@ -179,10 +187,12 @@ print("== E. --json 机器可读输出 ==")
 _src_cli = io.open(CLI, encoding="utf-8").read()
 chk("E1 CLI 提供 --json 参数", 'p.add_argument("--json"' in _src_cli)
 chk("E2 顶层带 schema_version", "SCHEMA_VERSION = 1" in _src_cli)
-# 七个命令都要有 JSON 分支（2026-11-15 补上 start / stop / kill-stray）
+# 八个命令都要有 JSON 分支（2026-11-15 补 start / stop / kill-stray，
+# 2026-11-16 再加 doctor）
 _n_json = _src_cli.count('getattr(args, "json", False)')
-chk("E3 七个命令都有 JSON 分支（含写操作）",
-    _n_json >= 6 and "_json = getattr(args, \"json\", False)" in _src_cli,
+chk("E3 八个命令都有 JSON 分支（含写操作与 doctor）",
+    _n_json >= 7 and "_json = getattr(args, \"json\", False)" in _src_cli
+    and "def cmd_doctor(" in _src_cli,
     "%d 处" % _n_json)
 # 字段名与枚举值必须是英文，不跟 --lang 漂移
 chk("E4 level 归一成英文枚举",
@@ -248,15 +258,16 @@ def _run(*argv):
     return _p.returncode, _p.stdout, _p.stderr
 
 
-# url / health 的非 JSON 分支以前必崩（UnboundLocalError: keys）
-for _c in ("url", "health"):
+# url / health 的非 JSON 分支以前必崩（UnboundLocalError: keys）；doctor 一并守着
+for _c in ("url", "health", "doctor"):
     _rc, _out, _err = _run(_c)
     chk("F1 %s 不带 --json 不再崩" % _c,
         "Traceback" not in _err and "UnboundLocalError" not in _err,
         _err[-140:])
 
 _cases = [("list", "--json"), ("status", "--json"), ("url", "--json"),
-          ("health", "--json"), ("start", "v1", "--json", "--wait", "0"),
+          ("health", "--json"), ("doctor", "--json"),
+          ("start", "v1", "--json", "--wait", "0"),
           ("stop", "v1", "--json"), ("kill-stray", "--json")]
 _need = ("schema_version", "command", "ok", "count", "slots", "errors")
 _bad = []
@@ -271,7 +282,7 @@ for _a in _cases:
             _bad.append(" ".join(_a) + ":字段")
     except Exception as _e:
         _bad.append(" ".join(_a) + ":" + str(_e)[:60])
-chk("F2 七个命令 --json 都是单个 JSON、顶层字段齐", not _bad, "; ".join(_bad[:3]))
+chk("F2 八个命令 --json 都是单个 JSON、顶层字段齐", not _bad, "; ".join(_bad[:3]))
 
 _rc, _out, _ = _run("start", "--json")
 _o = json.loads(_out)
@@ -293,6 +304,14 @@ chk("F6 写操作失败项带固定英文 error_code",
 _rc, _out, _ = _run("--lang", "en", "list", "--json")
 _o = json.loads(_out)
 chk("F7 --lang en 不改字段名", all(k in _o for k in _need))
+_rc, _out, _ = _run("doctor", "--json")
+_o = json.loads(_out)
+chk("F8 doctor --json 带 level / config_issues / actions（不只是自由文本）",
+    "level" in _o and "config_issues" in _o
+    and all("actions" in s for s in _o["slots"]))
+_rc, _out, _ = _run("list", "--json")
+chk("F9 所有 --json 输出都带 config_problems（配置可信度不再靠猜）",
+    "config_problems" in json.loads(_out))
 
 import shutil as _sh
 _sh.rmtree(_fdir, ignore_errors=True)

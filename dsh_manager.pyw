@@ -481,21 +481,15 @@ def _check_port_consistency():
     ——_build_cmd() 把它拼进命令行，而 port 字段只用于端口预检和状态显示。
     手改其中一个却不改另一个时，预检会查 4080、实际起在 4081，界面永远显示
     「已停止」，而日志里看不出任何异常——纯静默失效。宁可启动即报错。
-    返回不一致的槽位列表（空 = 全一致）。"""
-    bad = []
-    for key, cfg in VC.items():
-        want = cfg["port"]
-        args = cfg["extra_args"]
-        try:
-            i = args.index("--port")
-            got = int(args[i + 1])
-        except (ValueError, IndexError):
-            bad.append((key, T("extra_args 里没有 --port（实际监听端口无法确定）")))
-            continue
-        if got != want:
-            bad.append((key, T("port=%d 但 extra_args --port=%d（实际会起在 %d）")
-                        % (want, got, got)))
-    return bad
+    返回不一致的槽位列表（空 = 全一致）。
+
+    2026-11-15 地基审计：判据搬到 `dsh_config_guard.py`，CLI 和新的
+    `doctor --json` 用同一份；这里只做一层薄转发，避免「界面拦了、脚本没拦」。
+    顺带修掉老实现 `cfg["extra_args"]` / `cfg["port"]` 直接取键，
+    手改配置缺字段时会在启动前 KeyError 而非给出可读错误的问题。
+    """
+    import dsh_config_guard as G
+    return G.port_problems(VC)
 
 SIG = {k: _make_sig(cfg) for k, cfg in VC.items()}
 

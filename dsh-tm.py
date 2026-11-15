@@ -25,8 +25,13 @@
     python dsh-tm.py stop --all            # 停止全部
     python dsh-tm.py url <槽名>            # 打印入口地址（不含 token）
     python dsh-tm.py health [槽名]         # 槽体检（只读）
+    python dsh-tm.py doctor --json         # 综合诊断（配置 + 体检 + 槽形状 + 建议动作）
     python dsh-tm.py list --json           # 机器可读（所有命令都支持）
     python dsh-tm.py start v1 --json       # 写操作也返回结构化结果
+
+配置层的判据统一走 `dsh_config_guard.py`（与 GUI 同一份）：类型写坏的
+`versions` 不再被静默当成零槽，port 与 extra_args --port 不一致会附在
+`config_problems` 里，并拒绝据此执行写操作。
 
 `--json` 的固定 schema、读写分界与错误码见 docs/agent-api.md。
 退出码：0 成功 / 1 有失败 / 2 用法错误 / 3 配置错误
@@ -42,6 +47,7 @@ import sys
 import time
 import dsh_i18n as I18N
 from dsh_i18n import T
+import dsh_config_guard as G
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
@@ -79,6 +85,10 @@ EXIT_CONFIG = 3
 
 # --verbose 打开后，底层模块（dsh_kill / dsh_health）的详细过程才打到 stderr。
 _VERBOSE = {"on": False}
+
+# `_cfg_or_die()` 校验出的配置层问题。所有 --json 输出都带上它，agent 不必
+# 先猜「这份配置可信吗」；写操作还会据此拒绝端口不可信的槽。只读、不落盘。
+_CONFIG_PROBLEMS = []
 
 
 # ─────────────────────────── 配置 ───────────────────────────
@@ -135,6 +145,9 @@ def _emit(obj):
     obj.setdefault("schema_version", SCHEMA_VERSION)
     obj.setdefault("count", len(obj.get("slots") or []))
     obj.setdefault("errors", [])
+    # 加字段不升 schema_version（契约规则见 docs/agent-api.md §7）。
+    # 配置坏但还能读时，只读命令照常出报告，同时把不可信之处摊开给 agent。
+    obj.setdefault("config_problems", [dict(p) for p in _CONFIG_PROBLEMS])
     print(json.dumps(obj, ensure_ascii=False, indent=2))
 
 
@@ -239,13 +252,31 @@ class Ctx(object):
 EXAMPLE_PATH = os.path.join(BASE_DIR, "config", "config.example.json")
 
 
-def _cfg_or_die(path=CONFIG_PATH):
-    """读配置；缺失时**和 GUI 一样**从模板自动生成。
+def _config_error(json_mode, command, code, detail):
+    """配置不可用时的**唯一出口**：人读模式走 stderr，--json 仍给一个 JSON 对象。
 
-    2026-11-01 实测发现：全新 clone 后直接跑 `dsh-tm.py list` 会报
-    「找不到配置文件」而退出，但 GUI 双击却能自动生成 —— 同一个产品，
-    两个入口对"首次使用"的态度不一致。这里补齐：缺 config 且有模板时，
-    先按模板生成一份零槽配置，再照常往下走（零槽会打印「还没有任何槽」）。
+    2026-11-15 地基审计：以前这里只往 stderr 写一行就 sys.exit(3)，
+    `--json` 模式下 stdout 是空的 —— 契约说「一次调用 stdout 只有一个 JSON
+    对象」，agent 解析到空串就直接崩。现在两种模式都结构化。
+    """
+    if not json_mode:
+        sys.stderr.write(T("[错误] 配置不可用：%s\n") % detail)
+    else:
+        _emit({"schema_version": SCHEMA_VERSION, "command": command or "config",
+               "ok": False, "count": 0, "slots": [], "config_valid": False,
+               "errors": [{"key": None, "code": code, "detail": detail}]})
+    sys.exit(EXIT_CONFIG)
+
+
+def _cfg_or_die(path=CONFIG_PATH, json_mode=False, command=""):
+    """读配置 + 统一校验；缺失时**和 GUI 一样**从模板自动生成。
+
+    2026-11-01：全新 clone 后直接跑 `dsh-tm.py list` 会报「找不到配置文件」，
+    但 GUI 双击却能自动生成 —— 补齐了这个不一致。
+    2026-11-15：**删掉 `cfg["versions"] = {}` 那段静默兜底**。类型写坏的
+    versions（例如被写成数组）以前会伪装成「零槽」，agent 会据此判断这台
+    机器没装过任何版本。现在阻断级问题直接结构化报错退出 3；端口类问题
+    不阻断读命令，但挂进 `config_problems` 并挡住写操作。
     """
     if not os.path.exists(path) and os.path.exists(EXAMPLE_PATH):
         try:
@@ -257,14 +288,36 @@ def _cfg_or_die(path=CONFIG_PATH):
             sys.stderr.write(T("[警告] 自动生成 config.json 失败：%s\n") % e)
     cfg, err = load_config(path)
     if cfg is None:
-        sys.stderr.write(T("[错误] %s\n") % err)
-        sys.exit(EXIT_CONFIG)
-    if not isinstance(cfg.get("versions"), dict):
-        cfg["versions"] = {}
-    if len(cfg["versions"]) > MAX_SLOTS:
-        sys.stderr.write(T("[错误] versions 超过 %d 个槽上限\n") % MAX_SLOTS)
-        sys.exit(EXIT_CONFIG)
+        _CONFIG_PROBLEMS[:] = []
+        _config_error(json_mode, command, "config_unreadable", err)
+
+    problems = G.validate_config(cfg, max_slots=MAX_SLOTS)
+    _CONFIG_PROBLEMS[:] = problems
+    blocking = G.fatal(problems)
+    if blocking:
+        detail = "；".join("%s: %s" % (p["code"], p["detail"]) for p in blocking)
+        _config_error(json_mode, command, blocking[0]["code"], detail)
+    if problems and not json_mode:
+        for p in problems:
+            sys.stderr.write(T("[警告] config.json 有问题：%s\n") % p["detail"])
     return cfg
+
+
+def _blocked_by_config(keys):
+    """哪些槽的端口不可信，不能执行写操作。返回 {槽键: [code, ...]}。
+
+    `start` / `stop` 都用 `port` 字段判断「起来了没有 / 停掉了没有」，
+    配置一错，结论就是稳定的假象。GUI 在启动前会 fatal 拦住，CLI 以前没有
+    这道闸 —— 现在对齐：只读照常报，写操作拒绝这些槽。
+    """
+    bad = {}
+    for p in _CONFIG_PROBLEMS:
+        if p["level"] != "error":
+            continue
+        k = p.get("key")
+        if k is not None and k in keys:
+            bad.setdefault(k, []).append(p["code"])
+    return bad
 
 
 # ─────────────────────────── 运行态探测 ───────────────────────────
@@ -466,32 +519,48 @@ def _installed_version(cfg):
     return ""
 
 
+def _config_refusal_detail(codes):
+    return T("配置端口不可信（%s）：先修正 config.json 的 port 与 extra_args --port") \
+        % "、".join(sorted(set(codes)))
+
+
 def cmd_start(ctx, args):
     if getattr(args, "json", False):
         keys, err = _json_target_keys(ctx, args)
         if err:
             return _usage_emit("start", err)
+        blocked = _blocked_by_config(keys)
+        work = [k for k in keys if k not in blocked]
         before = {k: _is_running(ctx, k) for k in keys}
         rows = []
         for k in keys:
+            if k in blocked:
+                # 不 spawn：端口判断不可信，起起来也没法给出正确结论。
+                rows.append({"key": k, "action": "start",
+                             "detail": _config_refusal_detail(blocked[k]),
+                             "_spawn_ok": False, "_refused": True})
+                continue
             ok, msg = _spawn(ctx, k)
             # `_spawn_ok` 是中间量，输出前会摘掉；`ok` 留给"目标状态是否达成"
             rows.append({"key": k, "action": "start", "detail": msg,
                          "_spawn_ok": bool(ok)})
         # dsh 从 spawn 到 listen 实测要 5~8 秒（0.2.x 要加载插件树）。
         # quiet=True：JSON 模式下 WARN 不能打到 stdout，否则就不是单个 JSON 了。
-        _wait_until_listening(ctx, keys,
-                              timeout=float(getattr(args, "wait", 20)), quiet=True)
+        if work:
+            _wait_until_listening(ctx, work,
+                                  timeout=float(getattr(args, "wait", 20)), quiet=True)
         changed = []
         for r in rows:
             k = r["key"]
             spawn_ok = r.pop("_spawn_ok")
+            refused = r.pop("_refused", False)
             now = _is_running(ctx, k)
             r["state"] = "running" if now else "stopped"
             r["listening"] = now
             r["ok"] = spawn_ok and now
             if not r["ok"]:
-                r["error_code"] = ("spawn_failed" if not spawn_ok
+                r["error_code"] = ("config_port_invalid" if refused
+                                   else "spawn_failed" if not spawn_ok
                                    else "port_not_listening")
             if before[k] != now:
                 changed.append(k)
@@ -500,16 +569,24 @@ def cmd_start(ctx, args):
     keys = _target_keys(ctx, args)
     if not keys:
         return EXIT_USAGE
+    blocked = _blocked_by_config(keys)
     rc = EXIT_OK
+    todo = []
     for k in keys:
+        if k in blocked:
+            print("%-6s FAIL  %s" % (k, _config_refusal_detail(blocked[k])))
+            rc = EXIT_FAIL
+            continue
+        todo.append(k)
+    for k in todo:
         ok, msg = _spawn(ctx, k)
         print("%-6s %s  %s" % (k, "OK  " if ok else "FAIL", msg))
         if not ok:
             rc = EXIT_FAIL
-    if keys:
+    if todo:
         # 等端口真正开始监听再回报。dsh 从 spawn 到 listen 实测要 5~8 秒
         # （0.2.x 要加载插件树），固定 sleep 1.5s 会把"已启动"误报成"已停止"。
-        _wait_until_listening(ctx, keys, timeout=float(getattr(args, "wait", 20)))
+        _wait_until_listening(ctx, todo, timeout=float(getattr(args, "wait", 20)))
         print(T("\n实际状态："))
         rc |= cmd_list(ctx, args)
     return rc
@@ -540,9 +617,21 @@ def cmd_stop(ctx, args):
         keys, err = _json_target_keys(ctx, args)
         if err:
             return _usage_emit("stop", err)
+        blocked = _blocked_by_config(keys)
         before = {k: _is_running(ctx, k) for k in keys}
         rows, changed = [], []
         for k in keys:
+            if k in blocked:
+                # 门控按端口找进程；配置端口不可信时宁可什么都不做。
+                now = _is_running(ctx, k)
+                rows.append({"key": k, "action": "stop", "ok": False,
+                             "state": "running" if now else "stopped",
+                             "listening": now,
+                             "detail": _config_refusal_detail(blocked[k]),
+                             "error_code": "config_port_invalid"})
+                if before[k] != now:
+                    changed.append(k)
+                continue
             ok, msg = _stop(ctx, k)
             now = _is_running(ctx, k)
             reached = bool(ok) and not now
@@ -558,8 +647,13 @@ def cmd_stop(ctx, args):
     keys = _target_keys(ctx, args)
     if not keys:
         return EXIT_USAGE
+    blocked = _blocked_by_config(keys)
     rc = EXIT_OK
     for k in keys:
+        if k in blocked:
+            print("%-6s FAIL  %s" % (k, _config_refusal_detail(blocked[k])))
+            rc = EXIT_FAIL
+            continue
         ok, msg = _stop(ctx, k)
         print("%-6s %s  %s" % (k, "OK  " if ok else "FAIL", msg))
         if not ok:
@@ -682,6 +776,183 @@ def cmd_health(ctx, args):
                 bad += 1
         print()
     return EXIT_FAIL if bad else EXIT_OK
+
+
+# ── doctor：一次调用把「配置 + 体检 + 槽形状」合成机器可读结论 ─────────────
+# 与 health --json 的差别：health 的 items[] 只有随语言变的自由文本，agent
+# 无从分类；doctor 给每条问题固定英文 code、source 和动作码，能直接据此决策。
+# 只读：不写盘、不启停进程、不修文件（--deep 最多跑一次 node --version）。
+_DOCTOR_TITLE = {
+    "入口": ("entry", "reinstall_slot"),
+    "槽目录": ("slot_root", "reinstall_slot"),
+    "node": ("node", "reinstall_slot"),
+    "node 版本": ("node_version", "reinstall_slot"),
+    "数据目录": ("dsh_home", "create_data_dir"),
+    "临时目录": ("temp_dir", "regenerate_bats"),
+    "启动脚本": ("launcher_bats", "regenerate_bats"),
+    "包清单": ("package_json", "reinstall_slot"),
+    "实装版本": ("version", "none"),
+    "依赖": ("dependencies", "reinstall_slot"),
+    "原生模块": ("native_module", "reinstall_slot"),
+    "端口冲突": ("port_conflict", "fix_config"),
+    "重复槽": ("duplicate_slot", "fix_config"),
+}
+_DOCTOR_UNKNOWN = ("other", "review_manually")
+
+
+def _doctor_title_map(title):
+    """把随语言变的体检「项目」还原成固定英文 (code, action)。"""
+    key = I18N.to_key(title) or str(title)
+    return _DOCTOR_TITLE.get(key, _DOCTOR_UNKNOWN)
+
+
+def _doctor_issue(level, source, code, title, detail, action):
+    return {"level": level, "source": source, "code": code,
+            "title": title, "detail": detail, "action": action}
+
+
+def _doctor_level(issues):
+    lv = "ok"
+    for i in issues:
+        if i["level"] == "error":
+            return "error"
+        if i["level"] == "warning":
+            lv = "warning"
+    return lv
+
+
+def _doctor_actions(issues):
+    rank = {"error": 0, "warning": 1, "info": 2}
+    ordered = sorted(issues, key=lambda i: rank.get(i["level"], 3))
+    out = []
+    for i in ordered:
+        a = i["action"]
+        if a and a != "none" and a not in out:
+            out.append(a)
+    return out
+
+
+def cmd_doctor(ctx, args):
+    """综合诊断（只读）。返回结构化问题清单 + 固定英文建议动作。"""
+    _json = getattr(args, "json", False)
+    deep = bool(getattr(args, "deep", False))
+    keys = _selected_keys(ctx, args)
+    errors = []
+
+    cfg_issues = []
+    for p in _CONFIG_PROBLEMS:
+        item = _doctor_issue(p["level"], "config", p["code"], "",
+                             p["detail"], "fix_config")
+        item["key"] = p["key"]          # 槽级问题时挂到对应槽，全局问题 key=None
+        cfg_issues.append(item)
+    global_issues = []
+    health_by_key = {}
+    shape_by_key = {}
+
+    try:
+        sys.path.insert(0, BASE_DIR)
+        import dsh_health
+        # check_all 内部会对 port 做 int()；配置里端口写坏时先摘掉这个字段，
+        # 否则整份体检会因为一个坏槽全崩（配置问题本身已由 config_problems 报出）。
+        safe = {}
+        for k, raw in (ctx.versions or {}).items():
+            if not isinstance(raw, dict):
+                continue
+            c = dict(raw)
+            try:
+                if c.get("port") is not None:
+                    int(c.get("port"))
+            except (TypeError, ValueError):
+                c.pop("port", None)
+            safe[k] = c
+        res = dsh_health.check_all(safe, base=ctx.install_base, home=HOME,
+                                   self_dir=BASE_DIR, deep=deep) or {}
+        health_by_key = {k: v for k, v in res.items() if k != "_global"}
+        for lv, title, detail in (res.get("_global") or []):
+            code, action = _doctor_title_map(title)
+            global_issues.append(_doctor_issue(_lv_en(lv), "health", code,
+                                               title, detail, action))
+    except Exception as e:
+        errors.append({"key": None, "code": "health_unavailable", "detail": str(e)})
+
+    try:
+        sys.path.insert(0, BASE_DIR)
+        import dsh_install_ops as OPS
+        for k in keys:
+            shape_by_key[k] = OPS.slot_shape_problems(
+                ctx.slot(k) or {}, base=ctx.install_base, home=HOME)
+    except Exception as e:
+        errors.append({"key": None, "code": "shape_unavailable", "detail": str(e)})
+
+    slots = []
+    for k in keys:
+        c = ctx.slot(k) or {}
+        # 配置问题只挂到它对应的槽上（key=None 的全局问题留在 config_issues 里）。
+        issues = [i for i in cfg_issues if i.get("key") == k]
+        seen = set()
+        for lv, title, detail in (health_by_key.get(k) or []):
+            code, action = _doctor_title_map(title)
+            issues.append(_doctor_issue(_lv_en(lv), "health", code,
+                                        title, detail, action))
+            seen.add((str(lv), str(detail)))
+        for lv, detail in (shape_by_key.get(k) or []):
+            if (str(lv), str(detail)) in seen:
+                continue                      # health 已报过同一件事，别刷屏
+            issues.append(_doctor_issue(_lv_en(lv), "shape", "shape", "",
+                                        detail, "review_manually"))
+        slots.append({"key": k, "label": c.get("label") or k,
+                      "port": c.get("port"),
+                      "state": "running" if _is_running(ctx, k) else "stopped",
+                      "version": _installed_version(c) or None,
+                      "level": _doctor_level(issues), "issues": issues,
+                      "actions": _doctor_actions(issues)})
+
+    # 槽级 config 问题已并进 slots[].issues，别在汇总里数两遍。
+    all_issues = ([i for i in cfg_issues if i.get("key") is None]
+                  + global_issues + [i for s in slots for i in s["issues"]])
+    level = _doctor_level(all_issues)
+    counts = {"error": 0, "warning": 0, "info": 0}
+    for i in all_issues:
+        if i["level"] in counts:
+            counts[i["level"]] += 1
+    ok = not errors
+
+    if _json:
+        _emit({"schema_version": SCHEMA_VERSION, "command": "doctor", "ok": ok,
+               "count": len(slots), "level": level, "deep": deep,
+               "config_valid": not cfg_issues,
+               "summary": counts, "global_issues": global_issues,
+               "config_issues": cfg_issues, "slots": slots, "errors": errors})
+        return EXIT_FAIL if (not ok or level == "error") else EXIT_OK
+
+    print(T("=== dsh-tm 诊断（只读，不改任何文件）==="))
+    if cfg_issues:
+        print(T("配置：%d 个问题") % len(cfg_issues))
+    else:
+        print(T("配置正常"))
+    for i in cfg_issues:
+        print("  [%-7s] [config] %s: %s" % (i["level"], i["code"], i["detail"]))
+    if global_issues:
+        print(T("全局问题"))
+        for i in global_issues:
+            print("  [%-7s] [health] %s: %s" % (i["level"], i["code"], i["detail"]))
+    if not slots:
+        print(T("没有登记任何槽（先装一个版本，或加 --deep 做依赖深查）"))
+    for s in slots:
+        print("--- %s (%s) [%s] state=%s ---"
+              % (s["key"], s["label"], s["level"], s["state"]))
+        for i in s["issues"]:
+            print("  [%-7s] [%-6s] %s%s%s"
+                  % (i["level"], i["source"], i["code"],
+                     (" / " + i["title"]) if i["title"] else "",
+                     (": " + i["detail"]) if i["detail"] else ""))
+        if s["actions"]:
+            print(T("建议动作：%s") % "、".join(s["actions"]))
+    for e in errors:
+        sys.stderr.write(T("[错误] 诊断模块不可用：%s\n") % e["detail"])
+    print(T("结论：%s —— %d 个错误、%d 个警告、%d 条提示")
+          % (level, counts["error"], counts["warning"], counts["info"]))
+    return EXIT_FAIL if (not ok or level == "error") else EXIT_OK
 
 
 def cmd_kill_stray(ctx, args):
@@ -839,11 +1110,12 @@ def build_parser():
     for name, help_text in (("list", T("列出所有槽与运行状态")),
                             ("status", T("同 list，可指定槽")),
                             ("url", T("打印入口地址（不含 token）")),
-                            ("health", T("槽体检（只读）"))):
+                            ("health", T("槽体检（只读）")),
+                            ("doctor", T("综合诊断（只读）：配置 + 体检 + 槽形状 + 建议动作"))):
         sp = sub.add_parser(name, help=help_text)
         sp.add_argument("slot", nargs="*", help=T("槽名（如 v1）；可给多个"))
         sp.add_argument("--all", action="store_true", help=T("对所有槽执行"))
-        if name == "health":
+        if name in ("health", "doctor"):
             sp.add_argument("--deep", action="store_true", help=T("深度体检"))
 
     for name, help_text in (("start", T("启动槽（支持 --all）")),
@@ -898,11 +1170,12 @@ def main(argv=None):
     else:
         _adopt_config_lang(args.config)
     _VERBOSE["on"] = bool(getattr(args, "verbose", False))
-    ctx = Ctx(_cfg_or_die(args.config))
+    ctx = Ctx(_cfg_or_die(args.config, json_mode=bool(getattr(args, "json", False)),
+                          command=args.cmd))
     handler = {
         "list": cmd_list, "status": cmd_status, "start": cmd_start,
         "stop": cmd_stop, "url": cmd_url, "health": cmd_health,
-        "kill-stray": cmd_kill_stray,
+        "doctor": cmd_doctor, "kill-stray": cmd_kill_stray,
     }[args.cmd]
     return handler(ctx, args)
 

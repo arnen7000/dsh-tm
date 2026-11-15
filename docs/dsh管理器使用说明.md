@@ -325,6 +325,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -Targe
 
 `uninstall-here.bat` 是同一套逻辑的交互式外壳。
 
+### 6.4 排障：一条命令看全貌
+
+```bat
+python dsh-tm.py doctor --json
+```
+
+只读、不改任何文件，把「配置校验 + 槽体检 + 槽形状复核」合成一份结论：每条问题带
+固定英文 `code` / `source` / `action`，每个槽给 `level` 与 `actions[]`。
+`config_problems[]` 会指出 `port` 与 `extra_args --port` 不一致、端口重复等配置问题
+（这时 `start` / `stop` 会拒绝执行受影响的槽，不会拿错端口去启停）。
+所有 `--json` 结果都带这个字段。完整字段与错误码见
+[`agent-api.md`](agent-api.md)。
+
 ---
 
 ## 7. 日志

@@ -132,8 +132,16 @@ still starts it. Detach it and later re-adopt it as-is (same port, no copying).
 python dsh-tm.py list
 python dsh-tm.py start --all
 python dsh-tm.py stop --all
+python dsh-tm.py doctor --json     :: one-shot read-only diagnosis
 python dsh-tm.py kill-stray
 ```
+
+`doctor --json` merges config validation, the health check and the slot-shape check
+into one read-only report. Every issue carries a fixed English `code` / `source` /
+`action`; every slot gets `level` and `actions[]`. All JSON results also carry
+`config_problems[]` — a `port` / `--port` mismatch is reported there and makes
+`start` / `stop` refuse the affected slot. Full field and error-code reference:
+[Agent API contract](agent-api.md).
 
 ## 7. Logs
 
