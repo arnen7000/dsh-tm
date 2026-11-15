@@ -115,9 +115,19 @@ python dsh-tm.py start --all
 python dsh-tm.py stop --all
 python dsh-tm.py health
 python dsh-tm.py --lang en list      :: English output
+python dsh-tm.py list --json         :: machine-readable
+python dsh-tm.py start v1 --json     :: write commands too
 ```
 
 `--lang` also works as `--lang=en`. Without it, the CLI follows `ui.lang` in `config.json`.
+
+**Every command supports `--json`**, emitting exactly one JSON object on stdout with a
+fixed envelope (`schema_version`, `command`, `ok`, `count`, `slots`, `errors`). Field
+names and enum values are always English regardless of `--lang`; free-text `detail`
+follows `--lang` and must not be parsed. Write commands add `changed[]` and per-slot
+`state` / `listening`, and never default to all slots. Disk-changing operations
+(install / adopt / uninstall) are GUI-only. See the
+[Agent API contract](docs/agent-api.md) for the full schema, error codes and examples.
 
 ## Configuration
 
@@ -157,6 +167,7 @@ data directory and runtime.
 | Document | Language |
 |---|---|
 | [User guide (English)](docs/user-guide.en.md) | English |
+| [Agent API contract](docs/agent-api.md) | English + Chinese |
 | [README (Chinese)](README.md) | Chinese |
 | [FAQ](docs/常见问题.md) | Chinese |
 | [Security policy](SECURITY.md) | English + Chinese |

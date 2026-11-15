@@ -11,6 +11,37 @@
 
 ---
 
+## [0.1.5] — 2026-11-15
+
+### 新增
+
+- **Agent 接口契约**：`--json` 覆盖到写操作 `start` / `stop` / `kill-stray`，
+  之前只有 4 个只读命令有。现在所有 7 个命令都返回同一个外层形状
+  （`schema_version` / `command` / `ok` / `count` / `slots` / `errors`），
+  写操作额外给 `changed[]`、逐槽 `state` / `listening` 与固定英文 `error_code`。
+  一次调用 `stdout` 只有一个 JSON 对象；字段名与枚举值不随 `--lang` 变。
+- **[`docs/agent-api.md`](docs/agent-api.md)**（入库，中英双语）：读写分界、
+  逐命令字段表、错误码、退出码、示例、契约版本规则。改磁盘的操作
+  （安装 / 纳入 / 卸载）**不在 CLI 里**，脚本不可能误卸载。
+- 写操作不给槽、也不给 `--all` 时返回 `no_target`（退出码 2），不会误启动全部槽；
+  `kill-stray --json` 不加 `--yes` 是结构化 dry-run（`executed: false`）。
+
+### 修复
+
+- **`url` / `health` 不带 `--json` 直接崩**：这两个函数的非 JSON 分支用了只在
+  JSON 分支里赋值的 `keys` → `UnboundLocalError`（0.1.4 就有）。现在两个分支
+  共用 `_selected_keys()`，并新增实跑回归守着。
+- JSON 模式下等端口的 WARN 不再打进 `stdout`（原来会破坏「单个 JSON」契约）。
+
+### 变更
+
+- `scripts/test-cli.py` 从 42 项扩到 53 项：新增 E9–E11 静态断言与 F 段实跑
+  （假配置，不启动也不杀任何进程），覆盖 7 个命令的 JSON 契约与两个分支 bug。
+- 两个 README 的 CLI 章节与文档索引接上 `agent-api.md`；路线图里
+  「CLI 还没有 `--json`」等过时描述已更正。
+
+---
+
 ## [0.1.4] — 2026-11-14
 
 ### 修复

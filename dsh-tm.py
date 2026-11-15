@@ -25,7 +25,10 @@
     python dsh-tm.py stop --all            # 停止全部
     python dsh-tm.py url <槽名>            # 打印入口地址（不含 token）
     python dsh-tm.py health [槽名]         # 槽体检（只读）
+    python dsh-tm.py list --json           # 机器可读（所有命令都支持）
+    python dsh-tm.py start v1 --json       # 写操作也返回结构化结果
 
+`--json` 的固定 schema、读写分界与错误码见 docs/agent-api.md。
 退出码：0 成功 / 1 有失败 / 2 用法错误 / 3 配置错误
 """
 from __future__ import annotations
@@ -106,22 +109,68 @@ def load_config(path=CONFIG_PATH):
     return cfg, ""
 
 
-# ── 机器可读输出（2026-11-14）──────────────────────────────────────
+# ── 机器可读输出（2026-11-14 建；2026-11-15 覆盖写操作）────────────────
 # 为什么要 `--json`：dsh-tm 的价值是"确定、可复现、不猜"，最适合被另一个
-# agent 驱动。但给人看的对齐文本 agent 解析起来很痛苦，所以每个只读命令都
-# 提供固定 schema 的 JSON 出口。
+# agent 驱动。但给人看的对齐文本 agent 解析起来很痛苦，所以**每个命令**都
+# 提供固定 schema 的 JSON 出口（只读 + 写操作）。
 #
-# 约定：
+# 约定（完整契约见 docs/agent-api.md）：
 #   · **字段名与枚举值一律英文**，不跟 `--lang` 变 —— 机器读的东西不该随界面语言漂移
 #   · 顶层必有 `schema_version`，加字段可以，改已有字段名要升版本
-#   · 只读命令（list / status / url / health）输出 `ok: true` 表示"命令跑通了"，
-#     不代表槽都健康 —— 槽的问题在 `slots[].level` 里
+#   · 一次调用 stdout 只有**一个** JSON 对象；诊断信息只走 stderr，不混进 stdout
+#   · 只读命令的 `ok` = "命令跑通了"，不代表槽健康（槽问题在 slots[].level）；
+#     写操作的 `ok` = "请求的目标状态已达成"（start 后要真的在监听）
+#   · `detail` / `title` 是给人看的自由文本，会随 --lang 变，**agent 不要解析**；
+#     要判断就认 `error` / `code` / `level` 这些固定英文枚举
 SCHEMA_VERSION = 1
 
 
 def _emit(obj):
-    """统一的 JSON 出口。"""
+    """统一的 JSON 出口：补齐所有命令共有的顶层字段，保证契约形状一致。
+
+    每个命令的 JSON 都至少有 schema_version / command / ok / count / slots /
+    errors；命令自己的字段（deep / dry_run / changed …）由调用方追加。
+    """
+    obj = dict(obj)
+    obj.setdefault("schema_version", SCHEMA_VERSION)
+    obj.setdefault("count", len(obj.get("slots") or []))
+    obj.setdefault("errors", [])
     print(json.dumps(obj, ensure_ascii=False, indent=2))
+
+
+def _op_emit(command, rows, changed=None, extra=None):
+    """写操作（start / stop）的统一 JSON 出口。
+
+    rows[] 每项含 key / ok / action / state / detail（+ 可选 error_code）。
+    `changed` 是状态真正发生翻转的槽；`errors` 是失败项的固定英文 code 汇总。
+    """
+    obj = {
+        "schema_version": SCHEMA_VERSION,
+        "command": command,
+        "ok": all(r["ok"] for r in rows) if rows else True,
+        "count": len(rows),
+        "changed": list(changed or []),
+        "slots": rows,
+        "errors": [{"key": r["key"],
+                    "code": r.get("error_code") or "state_not_reached",
+                    "detail": r.get("detail", "")}
+                   for r in rows if not r["ok"]],
+    }
+    if extra:
+        obj.update(extra)
+    _emit(obj)
+    return EXIT_OK if obj["ok"] else EXIT_FAIL
+
+
+def _usage_emit(command, err):
+    """写操作缺目标 / 给了未知槽时的结构化用法错误（退出码 2）。"""
+    obj = {"schema_version": SCHEMA_VERSION, "command": command,
+           "ok": False, "count": 0, "changed": [], "slots": [],
+           "errors": [{"key": None, "code": err.get("error", "no_target"),
+                       "detail": ""}]}
+    obj.update(err)
+    _emit(obj)
+    return EXIT_USAGE
 
 
 def _slot_json(ctx, key):
@@ -418,6 +467,36 @@ def _installed_version(cfg):
 
 
 def cmd_start(ctx, args):
+    if getattr(args, "json", False):
+        keys, err = _json_target_keys(ctx, args)
+        if err:
+            return _usage_emit("start", err)
+        before = {k: _is_running(ctx, k) for k in keys}
+        rows = []
+        for k in keys:
+            ok, msg = _spawn(ctx, k)
+            # `_spawn_ok` 是中间量，输出前会摘掉；`ok` 留给"目标状态是否达成"
+            rows.append({"key": k, "action": "start", "detail": msg,
+                         "_spawn_ok": bool(ok)})
+        # dsh 从 spawn 到 listen 实测要 5~8 秒（0.2.x 要加载插件树）。
+        # quiet=True：JSON 模式下 WARN 不能打到 stdout，否则就不是单个 JSON 了。
+        _wait_until_listening(ctx, keys,
+                              timeout=float(getattr(args, "wait", 20)), quiet=True)
+        changed = []
+        for r in rows:
+            k = r["key"]
+            spawn_ok = r.pop("_spawn_ok")
+            now = _is_running(ctx, k)
+            r["state"] = "running" if now else "stopped"
+            r["listening"] = now
+            r["ok"] = spawn_ok and now
+            if not r["ok"]:
+                r["error_code"] = ("spawn_failed" if not spawn_ok
+                                   else "port_not_listening")
+            if before[k] != now:
+                changed.append(k)
+        return _op_emit("start", rows, changed=changed,
+                        extra={"waited_seconds": float(getattr(args, "wait", 20))})
     keys = _target_keys(ctx, args)
     if not keys:
         return EXIT_USAGE
@@ -436,8 +515,12 @@ def cmd_start(ctx, args):
     return rc
 
 
-def _wait_until_listening(ctx, keys, timeout=20.0, step=0.4):
-    """轮询到所有目标槽都开始监听，或超时。返回仍未起来的槽名列表。"""
+def _wait_until_listening(ctx, keys, timeout=20.0, step=0.4, quiet=False):
+    """轮询到所有目标槽都开始监听，或超时。返回仍未起来的槽名列表。
+
+    `quiet=True` 给 JSON 模式用：超时 WARN 不能打到 stdout，否则 stdout 里
+    就不止一个 JSON 对象了。调用方从返回值（或随后再查状态）拿这个信息。
+    """
     deadline = time.time() + max(0.0, timeout)
     pending = list(keys)
     while pending and time.time() < deadline:
@@ -445,13 +528,33 @@ def _wait_until_listening(ctx, keys, timeout=20.0, step=0.4):
         if not pending:
             break
         time.sleep(step)
-    for k in pending:
-        print(T("%-6s WARN  等了 %.0f 秒仍未监听（dsh 可能仍在加载插件，稍后自行确认）")
-              % (k, timeout))
+    if not quiet:
+        for k in pending:
+            print(T("%-6s WARN  等了 %.0f 秒仍未监听（dsh 可能仍在加载插件，稍后自行确认）")
+                  % (k, timeout))
     return pending
 
 
 def cmd_stop(ctx, args):
+    if getattr(args, "json", False):
+        keys, err = _json_target_keys(ctx, args)
+        if err:
+            return _usage_emit("stop", err)
+        before = {k: _is_running(ctx, k) for k in keys}
+        rows, changed = [], []
+        for k in keys:
+            ok, msg = _stop(ctx, k)
+            now = _is_running(ctx, k)
+            reached = bool(ok) and not now
+            row = {"key": k, "action": "stop", "ok": reached,
+                   "state": "running" if now else "stopped",
+                   "listening": now, "detail": msg}
+            if not reached:
+                row["error_code"] = ("stop_failed" if not ok else "still_running")
+            rows.append(row)
+            if before[k] != now:
+                changed.append(k)
+        return _op_emit("stop", rows, changed=changed)
     keys = _target_keys(ctx, args)
     if not keys:
         return EXIT_USAGE
@@ -479,9 +582,11 @@ def cmd_status(ctx, args):
 
 
 def cmd_url(ctx, args):
+    # 2026-11-15 修：以前 keys 只在 JSON 分支里赋值，非 JSON 分支直接
+    # `for k in keys` → UnboundLocalError（url 不带 --json 必崩）。
+    # 两个分支现在共用 _selected_keys：不写 stderr，JSON 安全。
+    keys = _selected_keys(ctx, args)
     if getattr(args, "json", False):
-        # 同 health：不调 _target_keys，避免 stderr 混进机器可读输出
-        keys = [k for k in (getattr(args, "slot", None) or []) if k in ctx.versions] or ctx.keys
         rows = []
         for k in keys:
             u = _entry_url(ctx, k)
@@ -494,6 +599,9 @@ def cmd_url(ctx, args):
         _emit({"schema_version": SCHEMA_VERSION, "command": "url", "ok": True,
                "slots": rows})
         return EXIT_OK
+    for s in (getattr(args, "slot", None) or []):
+        if s not in ctx.versions:
+            sys.stderr.write(T("[错误] 没有这个槽：%s\n") % s)
     found = 0
     for k in keys:
         u = _entry_url(ctx, k)
@@ -517,10 +625,10 @@ def cmd_health(ctx, args):
     except Exception as e:
         sys.stderr.write(T("[错误] 无法加载 dsh_health：%s\n") % e)
         return EXIT_FAIL
+    keys = _selected_keys(ctx, args)   # 见 cmd_url：修非 JSON 分支的 UnboundLocalError
     if getattr(args, "json", False):
-        # JSON 模式下不调 _target_keys —— 它会在没给槽时往 stderr 写中文提示，
-        # 把 stdout 的 JSON 弄脏。没指定槽就查全部（agent 通常想要全貌）。
-        keys = [k for k in (getattr(args, "slot", None) or []) if k in ctx.versions] or ctx.keys
+        # 不调 _target_keys —— 它会在没给槽时往 stderr 写中文提示；
+        # 没指定槽就查全部（agent 通常想要全貌）。
         slots = []
         for k in keys:
             c = ctx.slot(k) or {}
@@ -548,6 +656,9 @@ def cmd_health(ctx, args):
                "deep": bool(getattr(args, "deep", False)),
                "level": worst, "count": len(slots), "slots": slots})
         return EXIT_FAIL if worst == "error" else EXIT_OK
+    for s in (getattr(args, "slot", None) or []):
+        if s not in ctx.versions:
+            sys.stderr.write(T("[错误] 没有这个槽：%s\n") % s)
     bad = 0
     for k in keys:
         c = ctx.slot(k)
@@ -584,10 +695,18 @@ def cmd_kill_stray(ctx, args):
     安全边界与管理器的停止逻辑一致：只认命令行里出现
     @deepseek-ai/dsh 的 node 进程（SIG_ANY），绝不碰其它应用的 node。
     """
+    _json = getattr(args, "json", False)
     try:
         sys.path.insert(0, BASE_DIR)
         import dsh_kill
     except Exception as e:
+        if _json:
+            _emit({"schema_version": SCHEMA_VERSION, "command": "kill-stray",
+                   "ok": False, "executed": False, "count": 0, "changed": [],
+                   "slots": [], "errors": [{"key": None,
+                                            "code": "module_unavailable",
+                                            "detail": str(e)}]})
+            return EXIT_FAIL
         sys.stderr.write(T("[错误] 无法加载 dsh_kill：%s\n") % e)
         return EXIT_FAIL
     if not _VERBOSE.get("on"):
@@ -598,19 +717,74 @@ def cmd_kill_stray(ctx, args):
         versions[k] = {"sig": _make_sig(c), "port": c.get("port")}
     sig_any = "@deepseek-ai/dsh"
     if not getattr(args, "yes", False):
+        if _json:
+            # 缺省只出计划，不杀任何进程。`slots` 与其它命令一样是对象数组，
+            # 这里是执行前的状态快照；agent 看 `executed` / `requires_confirm`。
+            _emit({"schema_version": SCHEMA_VERSION, "command": "kill-stray",
+                   "ok": True, "executed": False, "dry_run": True,
+                   "requires_confirm": True, "managed_slots": len(versions),
+                   "sig_any": sig_any, "count": len(ctx.keys),
+                   "changed": [], "slots": [_slot_json(ctx, k) for k in ctx.keys],
+                   "errors": []})
+            return EXIT_OK
         print(T("将清理：本管理器管的 %d 个槽 + 所有命令行含 %s 的 node 进程。")
               % (len(versions), sig_any))
         print(T("（只杀 dsh，不碰其它软件的 node 进程）"))
         print(T("确认执行请加 --yes"))
         return EXIT_OK
+    before = {k: _is_running(ctx, k) for k in ctx.keys}
     try:
         dsh_kill.kill_all(versions, sig_any=sig_any)
     except Exception as e:
+        if _json:
+            _emit({"schema_version": SCHEMA_VERSION, "command": "kill-stray",
+                   "ok": False, "executed": False, "count": 0, "changed": [],
+                   "slots": [], "errors": [{"key": None, "code": "kill_failed",
+                                            "detail": str(e)}]})
+            return EXIT_FAIL
         sys.stderr.write(T("[错误] 清理失败：%s\n") % e)
         return EXIT_FAIL
     time.sleep(0.8)
+    if _json:
+        changed = [k for k in ctx.keys if before[k] != _is_running(ctx, k)]
+        _emit({"schema_version": SCHEMA_VERSION, "command": "kill-stray",
+               "ok": True, "executed": True, "dry_run": False,
+               "count": len(ctx.keys), "changed": changed,
+               "slots": [_slot_json(ctx, k) for k in ctx.keys], "errors": []})
+        return EXIT_OK
     print(T("已清理。当前状态："))
     return cmd_list(ctx, args)
+
+
+def _selected_keys(ctx, args):
+    """只读命令选槽：给了槽名就只选登记过的，没给就选全部。**不写 stderr**。
+
+    2026-11-15 修：`cmd_url` / `cmd_health` 的非 JSON 分支以前用了只在 JSON
+    分支里赋值的 `keys`，不带 `--json` 时直接 UnboundLocalError。两个分支
+    现在共用这里；未知槽名在非 JSON 分支另外提示（JSON 模式保持 stdout 干净）。
+    """
+    given = [k for k in (getattr(args, "slot", None) or []) if k in ctx.versions]
+    return given or list(ctx.keys)
+
+
+def _json_target_keys(ctx, args):
+    """写操作在 JSON 模式下选槽，返回 (keys, err_dict)。
+
+    与只读命令不同：`start` / `stop` 不给槽名时**不能默认全开**（会误启动
+    所有版本），必须显式给槽名或 `--all`。err_dict 用固定英文枚举，供 agent
+    判断；命中时由 `_usage_emit()` 输出结构化用法错误（退出码 2）。
+    """
+    slots = list(getattr(args, "slot", None) or [])
+    unknown = [s for s in slots if s not in ctx.versions]
+    if unknown:
+        return [], {"error": "unknown_slot", "unknown": unknown,
+                    "available": list(ctx.keys)}
+    if getattr(args, "all", False):
+        return list(ctx.keys), None
+    given = [k for k in slots if k in ctx.versions]
+    if not given:
+        return [], {"error": "no_target", "available": list(ctx.keys)}
+    return given, None
 
 
 def _target_keys(ctx, args):

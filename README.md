@@ -478,11 +478,12 @@ python dsh-tm.py health v1 --deep    :: 槽体检（只读）
 
 退出码：`0` 全成功 / `1` 有失败 / `2` 用法错误 / `3` 配置错误。
 
-**`--json`：给 agent / 脚本用**。只读命令（`list` / `status` / `url` / `health`）
-都支持，输出固定 schema：
+**`--json`：给 agent / 脚本用**。**所有命令**（只读 + 写操作）都支持，输出固定 schema：
 
 ```bat
 python dsh-tm.py list --json
+python dsh-tm.py start v1 --json
+python dsh-tm.py kill-stray --json        :: 只出计划，不加 --yes 不动任何进程
 ```
 
 ```json
@@ -490,7 +491,8 @@ python dsh-tm.py list --json
   "schema_version": 1,
   "command": "list",
   "ok": true,
-  "count": 3,
+  "count": 1,
+  "errors": [],
   "slots": [
     {"key": "v1", "label": "dshV1", "port": 4080, "state": "stopped",
      "version": "0.2.2-rc.3", "bin_js": "...", "dsh_home": "...",
@@ -499,17 +501,28 @@ python dsh-tm.py list --json
 }
 ```
 
+写操作额外给 `changed[]`（状态真正翻转的槽）和逐槽 `ok` / `state` / `listening`；
+失败项在 `errors[]` 里带固定英文 `code`（`spawn_failed` / `port_not_listening` /
+`stop_failed` / `still_running` …）。
+
 约定：
 
 - **字段名与枚举值固定英文**（`running` / `stopped` / `ok` / `warning` / `error`），
   不跟 `--lang` 漂移 —— 机器读的东西不该随界面语言变
-- 顶层必有 `schema_version`；加字段不升版本，**改已有字段名要升**
+- 每个命令的顶层至少有 `schema_version` / `command` / `ok` / `count` / `slots` / `errors`；
+  加字段不升版本，**改已有字段名 / 枚举值 / `ok` 的含义要升**
+- **`ok` 有两种含义**：只读命令 = 命令跑通（槽是否健康看 `level`）；写操作 =
+  目标状态真的达成（`start` 后端口要在听，`stop` 后端口要不通）
+- 写操作不给槽、也不给 `--all` → `no_target`（退出码 2），**绝不默认全开**
 - `health --json` 的每条问题带 `level` + `title` + `detail`，没指定槽就查全部
-- JSON 模式下不会往 stderr 写提示，`stdout` 是干净的一整段 JSON
+- JSON 模式 `stdout` 只有一个 JSON 对象，诊断走 stderr
 - 带 token 的完整入口 URL 只存在管理器进程内存里，CLI 拿不到 ——
   `url --json` 里 `has_token: false` 表示这只是裸地址
+- 改磁盘的操作（安装 / 纳入 / 卸载）**不在 CLI 里**，脚本不可能误卸载
 
 `--json` / `--lang` 写在子命令前后都行（`list --json` 和 `--json list` 等价）。
+完整契约（读写分界、逐命令字段表、错误码、示例）见
+[`docs/agent-api.md`](docs/agent-api.md)（中英双语）。
 
 > **「全部启动」为什么两个入口都有？**
 > 标题栏的「全部启动 / 全部停止」只作用于 config 里登记的这几个槽；CLI 的
@@ -829,6 +842,7 @@ git config core.hooksPath .githooks
 |---|---|
 | [`docs/工程经验总结.md`](docs/工程经验总结.md) | **★ 想懂"为什么这么写"读这篇**：开工前六问、八类反复咬人的坑、四层测试体系、发布前体检清单、与插件开发的对照 |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | 环境、代码地图、六条硬约束、跑测试、提交信息约定 |
+| [`docs/agent-api.md`](docs/agent-api.md) | **Agent / 脚本接口契约**（中英双语）：`--json` 固定 schema、读写分界、错误码、示例 |
 
 ### 发新版本（维护者）
 
