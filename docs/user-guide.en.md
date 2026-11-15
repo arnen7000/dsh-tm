@@ -50,6 +50,29 @@ The manager does **not** create a desktop icon by itself — after unzipping you
 > The shortcut stores an **absolute path**. If you later move the folder, run
 > `build_lnk.py` again.
 
+### Upgrading from an older version
+
+**Portable package**: download the new zip → **unzip it over the existing folder**
+(same-named files are replaced) → double-click `start-manager.bat`.
+
+- The package does **not** contain `config.json`, and slots live under the install root
+  (default `<home>`), not inside the package — so unzipping over it never touches your
+  configuration or installed dsh versions.
+- **Do not delete the old folder first.** That takes `config.json` with it, which is
+  effectively a reinstall: the slots have to be adopted again.
+- Keep the previous zip as a rollback: unzip it back and leave `config.json` alone.
+
+**From source**: `git pull`, then restart the manager. `config.json` and `runtime/` are
+gitignored, so they are unaffected.
+
+**After upgrading, run the slot health check once** (Settings → Maintenance → Slot health
+check) and confirm there are no **error** items.
+
+> If a release changed how bats are generated (encoding, TEMP isolation and the port
+> pre-check all changed historically), click "Generate start / kill / CLI bats" once so the
+> three bats match the new version. **That rewrites existing bats** (each is backed up as
+> `.bak-<timestamp>` first) — save your own copy first if you edited them by hand.
+
 ## 4. Interface
 
 ### 4.1 Cards

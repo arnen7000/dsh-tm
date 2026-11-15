@@ -113,6 +113,13 @@ never deleted or overwritten. A bat whose *contents* are wrong (port / `TEMP` mi
 is outside Repair's scope; use Settings → Maintenance →
 "Generate start / kill / CLI bats" for that.
 
+**Upgrading from an older version** — download the new zip and **unzip it over the
+existing folder**. `config.json` and the slots are not inside the package, so they are
+never overwritten. **Do not delete the old folder first** — that removes `config.json`
+too, which is effectively a reinstall. From source: `git pull` and restart the manager.
+After upgrading, run the slot health check once.
+Details (rollback, regenerating bats, source users): [user guide §3](docs/user-guide.en.md).
+
 ## Command line
 
 ```bat
