@@ -193,6 +193,16 @@ try:
     chk("D4 <base> 占位符与绝对路径指向同一目录时也算重复",
         any(it[1] == "重复槽" for it in res3["_global"]), str(res3["_global"]))
 
+    cfg18, _ = make_slot(os.path.join(tmp, "p"), key="dshV3")
+    res4 = H.check_all({"v1": cfg13, "v2": cfg14, "v3": cfg18})
+    global_errors = [it for it in res4["_global"] if it[0] == H.LEVEL_ERROR]
+    chk("D5 三个槽共用端口 → 只报一条全局错误",
+        len(global_errors) == 1, str(res4["_global"]))
+    chk("D6 同一条端口冲突错误包含三个槽 ID",
+        any("4080" in it[2] and all(key in it[2] for key in ("v1", "v2", "v3"))
+            for it in global_errors),
+        str(global_errors))
+
     print()
     print("== E. 汇总工具 ==")
     chk("E1 worst_level 取最严重", H.worst_level(
