@@ -523,8 +523,12 @@ GUI、CLI、`doctor` 用的是 `dsh_config_guard.py` 里同一份判据。
 
 - **字段名与枚举值固定英文**（`running` / `stopped` / `ok` / `warning` / `error`），
   不跟 `--lang` 漂移 —— 机器读的东西不该随界面语言变
-- 每个命令的顶层至少有 `schema_version` / `command` / `ok` / `count` / `slots` / `errors`；
-  加字段不升版本，**改已有字段名 / 枚举值 / `ok` 的含义要升**
+- 每个命令的顶层至少有 `schema_version` / `command` / `effect` / `ok` / `count` /
+  `slots` / `errors`；加字段不升版本，**改已有字段名 / 枚举值 / `ok` 的含义要升**
+- `effect` 取自 `dsh-tm.py` 的 `CMD_CLASS` 唯一分类表（`read` / `runtime_write`）。
+  `main()` 有注册闸门：命令漏分类、分类表里混进 `disk_write` 都会当场失败，
+  第 18 套回归还会把这张表与 `docs/agent-api.md` 逐项对账。写命令一律带
+  `changed[]`，只读命令不带；给了未登记的槽名会带 `unknown_slots[]`
 - **`ok` 有两种含义**：只读命令 = 命令跑通（槽是否健康看 `level`）；写操作 =
   目标状态真的达成（`start` 后端口要在听，`stop` 后端口要不通）
 - 写操作不给槽、也不给 `--all` → `no_target`（退出码 2），**绝不默认全开**
@@ -803,9 +807,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1 -Fast   # 跳过耗时回归
 ```
 
-**CI**：`.github/workflows/ci.yml` 在 `windows-latest` 上跑同一份全量 `check-all.ps1`（含 17 套回归）。push 到 `main` 或开 PR 都会触发；仓库不含 `config.json`，CI 会先用 `config/config.example.json` 生成一份零槽配置。项目本身是 Windows 专属，所以只跑 Windows runner。
+**CI**：`.github/workflows/ci.yml` 在 `windows-latest` 上跑同一份全量 `check-all.ps1`（含 18 套回归）。push 到 `main` 或开 PR 都会触发；仓库不含 `config.json`，CI 会先用 `config/config.example.json` 生成一份零槽配置。项目本身是 Windows 专属，所以只跑 Windows runner。
 
-它覆盖 6 项 + 17 套离线回归：
+它覆盖 6 项 + 18 套离线回归：
 
 | # | 检查 |
 |---|---|
@@ -814,9 +818,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1 -Fast 
 | 3 | `config.json` / 日志 / 凭据不许入库 |
 | 4 | 文档与日志里不许出现完整 `token=...` |
 | 5 | Markdown 相对链接能否落地（逐个 `Test-Path`） |
-| 6 | 17 套离线回归 + **卫生闸**（回归不许在真实盘上留任何东西） |
+| 6 | 18 套离线回归 + **卫生闸**（回归不许在真实盘上留任何东西） |
 
-离线回归名单（17 套，见 `scripts/check-all.ps1` 的 `$all`）：`test-manager-logic` / `test-adopt-logic` / `test-install-ops` / `test-slot-ops` / `test-bat-text` / `test-ui-prefs` / `test-health` / `test-drift` / `test-standalone` / `test-tk-selfheal` / `test-cli` / `test-config-guard`（配置地基 + doctor 契约）/ `test-log-mask` / `test-i18n` / `test-move` / `test-log-levels` / `test-portable`。
+离线回归名单（18 套，见 `scripts/check-all.ps1` 的 `$all`）：`test-manager-logic` / `test-adopt-logic` / `test-install-ops` / `test-slot-ops` / `test-bat-text` / `test-ui-prefs` / `test-health` / `test-drift` / `test-standalone` / `test-tk-selfheal` / `test-cli` / `test-config-guard`（配置地基 + doctor 契约）/ `test-cli-boundary`（CLI 读写分界 + 地基修复）/ `test-log-mask` / `test-i18n` / `test-move` / `test-log-levels` / `test-portable`。
 
 `test-standalone.py` 特别值得知道：它用**真的 cmd.exe + 真的 node.exe** 跑生成出来的 bat，验证"管理器删了 dsh 仍能自己跑"。
 

@@ -71,7 +71,7 @@ pythonw dsh_manager.pyw           # no console (same as release; exceptions are 
 ### Running tests
 
 ```powershell
-# Full pre-release gate: 6 static checks + 16 offline regressions (~40 s)
+# Full pre-release gate: 6 static checks + 18 offline regressions (~40 s)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1
 
 # Static checks only (fast, for frequent edits)
@@ -185,7 +185,7 @@ pythonw dsh_manager.pyw           # 无控制台（与发布版一致，异常�
 ### 跑测试
 
 ```powershell
-# 提交前总检：6 项静态检查 + 17 套离线回归（约 40 秒）
+# 提交前总检：6 项静态检查 + 18 套离线回归（约 40 秒）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1
 
 # 只跑静态检查（快，适合频繁改）

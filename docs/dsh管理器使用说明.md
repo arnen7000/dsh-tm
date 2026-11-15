@@ -335,7 +335,10 @@ python dsh-tm.py doctor --json
 固定英文 `code` / `source` / `action`，每个槽给 `level` 与 `actions[]`。
 `config_problems[]` 会指出 `port` 与 `extra_args --port` 不一致、端口重复等配置问题
 （这时 `start` / `stop` 会拒绝执行受影响的槽，不会拿错端口去启停）。
-所有 `--json` 结果都带这个字段。完整字段与错误码见
+所有 `--json` 结果都带这个字段，还带 `effect`：`read` 表示只读命令，
+`runtime_write` 表示只起停进程（`start` / `stop` / `kill-stray`）——
+CLI 不会输出 `disk_write`，装 / 卸 / 纳入 / 搬迁一律只在管理器里做。
+给了不存在的槽名会带 `unknown_slots[]`。完整字段与错误码见
 [`agent-api.md`](agent-api.md)。
 
 ---

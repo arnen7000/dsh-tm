@@ -140,7 +140,10 @@ python dsh-tm.py kill-stray
 into one read-only report. Every issue carries a fixed English `code` / `source` /
 `action`; every slot gets `level` and `actions[]`. All JSON results also carry
 `config_problems[]` — a `port` / `--port` mismatch is reported there and makes
-`start` / `stop` refuse the affected slot. Full field and error-code reference:
+`start` / `stop` refuse the affected slot. Every result also carries `effect`:
+`read` or `runtime_write` (process state only). The CLI never emits `disk_write` —
+install / adopt / uninstall stay in the GUI. An unknown slot name is listed in
+`unknown_slots[]`. Full field and error-code reference:
 [Agent API contract](agent-api.md).
 
 ## 7. Logs

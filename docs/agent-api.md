@@ -33,6 +33,21 @@ Commands are split into three classes. Only the first two are available on the C
 | **runtime write** | `start`, `stop`, `kill-stray` | Starts/stops processes. Reversible |
 | **disk write** | install / adopt / uninstall / detach / move | **CLI does not expose these.** GUI only, with confirmation and backup |
 
+The table is not decoration: `CMD_CLASS` in `dsh-tm.py` is the single source of
+truth. `main()` refuses to dispatch when a command is missing from (or stale in)
+that table, or when any entry is `disk_write`. Every `--json` result carries the
+class as a top-level `effect`:
+
+| `effect` | Class | Allowed to change |
+|---|---|---|
+| `read` | read | nothing (except the one-time default-config bootstrap, see §8) |
+| `runtime_write` | runtime write | running processes only |
+| `disk_write` | disk write | **never emitted by the CLI** |
+
+`effect` is the command's **class** — what it is *allowed* to change, **not proof**
+that something changed. Use `ok` / `changed[]` for the outcome. Write commands
+always carry `changed[]` (an array, possibly empty); read commands never do.
+
 ### 2. Invocation
 
 ```bat
@@ -54,16 +69,21 @@ python dsh-tm.py --json <command> [slots]     :: both orders work
 
 ### 3. Common envelope
 
-Every command returns at least these six top-level fields:
+Every command returns at least these seven top-level fields:
 
 | Field | Type | Meaning |
 |---|---|---|
 | `schema_version` | int | Currently `1` |
 | `command` | string | The command name, e.g. `"start"` |
+| `effect` | string | `read` / `runtime_write` — the command's class from `CMD_CLASS`, never `disk_write` |
 | `ok` | bool | See below — **the meaning differs for read vs write commands** |
 | `count` | int | Number of entries in `slots` |
 | `slots` | array | Per-slot results. Always an array of objects, possibly empty |
 | `errors` | array | `{"key": str\|null, "code": str, "detail": str}`; empty on success |
+
+`unknown_slots[]` appears only when a named slot is not in `config.json`: the
+read command still reports the registered slots, and lists the mistyped names
+here instead of silently returning an empty/partial-looking report.
 
 Every result also carries `config_problems[]`: a list of
 `{"code", "key", "level", "blocking", "detail", ...}`. Empty means the config is
@@ -116,6 +136,12 @@ Notes:
 
 - `changed[]` lists slots whose running state actually flipped. An idempotent call
   (`start` on an already-running slot) returns `ok: true` with `changed: []`.
+  Every write command (`effect: "runtime_write"`) always includes `changed[]`,
+  including usage errors (`no_target`) and config errors (exit `2` / `3`).
+- `health --json` counts only `error` / `warning` items as problems: a slot with
+  just `info` items (e.g. the installed version) is `level: "ok"`. If a diagnostic
+  module cannot be imported, the result is still one JSON object with
+  `ok: false` and `errors[].code = "module_unavailable"`.
 - `url` never contains a login token. `has_token: false` means a bare address; the
   full tokenised URL exists only in the GUI process memory — use the card's
   **Copy entry URL** button.
@@ -134,12 +160,12 @@ Notes:
 | `port_not_listening` | `start` launched but the port never listened within `--wait` | 1 |
 | `stop_failed` | `stop` could not issue the stop | 1 |
 | `still_running` | `stop` issued but the port is still occupied | 1 |
-| `module_unavailable` | `dsh_kill` could not be imported | 1 |
+| `module_unavailable` | A diagnostic / kill module could not be imported (`health` / `kill-stray`) | 1 |
 | `kill_failed` | `kill-stray --yes` raised | 1 |
 | `state_not_reached` | Fallback for a failed write item | 1 |
 | `config_port_invalid` | A write command refused a slot whose port config is untrustworthy | 1 |
 | `health_unavailable` / `shape_unavailable` | `doctor` could not load a diagnostic module (`ok: false`) | 1 |
-| `config_unreadable` | `config.json` cannot be read or parsed | 3 |
+| `config_unreadable` | `config.json` cannot be read or parsed — including an explicit `--config` path that does not exist | 3 |
 | `versions_missing` / `versions_not_object` / `slot_not_object` / `too_many_slots` | Config cannot be safely enumerated; **never** treated as "zero slots" | 3 |
 
 Config problems in `config_problems[]` use the same fixed English `code` values:
@@ -197,6 +223,14 @@ and treat unknown fields as ignorable.
 - Config validation is shared by the GUI, the CLI and `doctor` (`dsh_config_guard.py`).
   When `start` / `stop` see a port mismatch they refuse with `config_port_invalid`
   rather than acting on a wrong port.
+- When the **default** `config.json` is missing, the first CLI call copies
+  `config/config.example.json` into place. That is the only disk write a read
+  command can ever make. An explicit `--config <path>` pointing at a missing file
+  is **never** auto-created: it fails with `config_unreadable` / exit `3`, so a
+  mistyped path can never look like "zero versions installed".
+- `CMD_CLASS` is checked at runtime and in the offline regression
+  (`scripts/test-cli-boundary.py`) against the command table **and this document**;
+  the CLI cannot grow a disk-changing command silently.
 
 See [Contributing](../CONTRIBUTING.md) for the code map and
 [Changelog](../CHANGELOG.md) for the version that introduced this contract.
@@ -222,6 +256,20 @@ See [Contributing](../CONTRIBUTING.md) for the code map and
 | **改运行时** | `start`、`stop`、`kill-stray` | 起停进程，可逆 |
 | **改磁盘** | 安装 / 纳入 / 卸载 / 移出 / 搬迁 | **CLI 不提供**，只在 GUI 里做，带确认与备份 |
 
+这张表不是说明文字：`dsh-tm.py` 里的 `CMD_CLASS` 是唯一事实来源。`main()` 每次
+分发前都对账，命令漏分类、表里多出旧命令、或出现 `disk_write` 都会当场失败。
+每个 `--json` 结果的顶层 `effect` 就是这条命令的类别：
+
+| `effect` | 类别 | 允许改动 |
+|---|---|---|
+| `read` | 只读 | 不改任何东西（§8 里默认配置的一次性初始化除外） |
+| `runtime_write` | 改运行时 | 只改进程运行状态 |
+| `disk_write` | 改磁盘 | **CLI 永不输出** |
+
+`effect` 是**命令类别**（它被允许改什么），**不是本次调用**确实改动了什么的证明；
+结果请看 `ok` / `changed[]`。写命令一律带 `changed[]`（数组，可以为空），
+只读命令不带这个字段。
+
 ### 2. 调用方式
 
 ```bat
@@ -243,16 +291,20 @@ JSON 对象**，诊断信息只走 stderr。
 
 ### 3. 公共外层字段
 
-每个命令至少返回这六个顶层字段：
+每个命令至少返回这七个顶层字段：
 
 | 字段 | 类型 | 含义 |
 |---|---|---|
 | `schema_version` | int | 目前是 `1` |
 | `command` | string | 命令名，如 `"start"` |
+| `effect` | string | `read` / `runtime_write` —— 取自 `CMD_CLASS` 的命令类别，绝不出现 `disk_write` |
 | `ok` | bool | 见下 —— **只读与写操作含义不同** |
 | `count` | int | `slots` 的条目数 |
 | `slots` | array | 逐槽结果，永远是对象数组，可以为空 |
 | `errors` | array | `{"key": str\|null, "code": str, "detail": str}`，成功时为空 |
+
+`unknown_slots[]` 只在给了未登记的槽名时出现：只读命令照常报告已登记的槽，
+并把拼错的名字列在这里，不会悄悄给出一份看着像「空报告」的结果。
 
 每个结果还带 `config_problems[]`：`{"code", "key", "level", "blocking", "detail", ...}`，
 空数组 = 配置可信。**阻断级**问题（`versions` 类型写坏、槽不是对象、槽数超上限）
@@ -300,7 +352,11 @@ JSON 对象**，诊断信息只走 stderr。
 说明：
 
 - `changed[]` 是运行状态**真的发生翻转**的槽。幂等调用（对已在运行的槽 `start`）会
-  返回 `ok: true` 且 `changed: []`。
+  返回 `ok: true` 且 `changed: []`。所有写命令（`effect: "runtime_write"`）都带
+  `changed[]`，包括用法错误（`no_target`）和配置错误（退出码 2 / 3）。
+- `health --json` 只把 `error` / `warning` 当问题：只有 `info` 条目（如实装版本）的槽
+  是 `level: "ok"`。诊断模块加载不了时仍输出一个 JSON 对象，`ok: false`、
+  `errors[].code = "module_unavailable"`。
 - `url` 永远不含登录 token。`has_token: false` 表示只是裸地址；带 token 的完整 URL
   只存在 GUI 进程内存里，请在卡片上点「复制入口 URL」。
 - `kill-stray --json` **不加 `--yes` 就是演练**：`executed: false`、
@@ -318,12 +374,12 @@ JSON 对象**，诊断信息只走 stderr。
 | `port_not_listening` | `start` 已发出，但 `--wait` 内端口始终没监听 | 1 |
 | `stop_failed` | `stop` 指令没发出去 | 1 |
 | `still_running` | `stop` 已发出但端口仍被占用 | 1 |
-| `module_unavailable` | 导入 `dsh_kill` 失败 | 1 |
+| `module_unavailable` | 诊断 / 杀进程模块导入失败（`health` / `kill-stray`） | 1 |
 | `kill_failed` | `kill-stray --yes` 抛异常 | 1 |
 | `state_not_reached` | 写操作失败项的兜底码 | 1 |
 | `config_port_invalid` | 写操作拒绝端口配置不可信的槽 | 1 |
 | `health_unavailable` / `shape_unavailable` | `doctor` 诊断模块加载失败（`ok: false`） | 1 |
-| `config_unreadable` | `config.json` 读不到或解析失败 | 3 |
+| `config_unreadable` | `config.json` 读不到或解析失败；显式 `--config` 指向不存在的文件也算 | 3 |
 | `versions_missing` / `versions_not_object` / `slot_not_object` / `too_many_slots` | 配置无法安全枚举；**绝不伪装成「零槽」** | 3 |
 
 `config_problems[]` 的 `code` 也是固定英文枚举：`versions_missing`、
@@ -375,6 +431,12 @@ $r.slots | Where-Object { $_.state -eq 'running' }
 - 配置校验由 GUI / CLI / `doctor` 共用一份实现（`dsh_config_guard.py`）。
   `start` / `stop` 遇到端口不一致会拒绝执行并报 `config_port_invalid`，
   不会拿错端口去启停进程。
+- **默认** `config.json` 缺失时，第一次调用会从 `config/config.example.json`
+  复制一份出来 —— 这是只读命令唯一可能写盘的情形。显式 `--config <路径>`
+  指向不存在的文件时**绝不自动生成**，直接报 `config_unreadable`、退出 3，
+  路径写错不会被伪装成「这台机器没装版本」。
+- `CMD_CLASS` 在运行时和离线回归（`scripts/test-cli-boundary.py`）里都与命令表、
+  与本文档逐项对账，CLI 不可能悄悄多出一条改磁盘命令。
 
 代码地图见 [参与开发](../CONTRIBUTING.md)，契约引入的版本见
 [更新记录](../CHANGELOG.md)。

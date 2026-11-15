@@ -123,11 +123,15 @@ python dsh-tm.py start v1 --json     :: write commands too
 `--lang` also works as `--lang=en`. Without it, the CLI follows `ui.lang` in `config.json`.
 
 **Every command supports `--json`**, emitting exactly one JSON object on stdout with a
-fixed envelope (`schema_version`, `command`, `ok`, `count`, `slots`, `errors`). Field
-names and enum values are always English regardless of `--lang`; free-text `detail`
-follows `--lang` and must not be parsed. Write commands add `changed[]` and per-slot
+fixed envelope (`schema_version`, `command`, `effect`, `ok`, `count`, `slots`,
+`errors`). Field names and enum values are always English regardless of `--lang`;
+free-text `detail` follows `--lang` and must not be parsed. `effect` is the command's
+class (`read` / `runtime_write`) from `CMD_CLASS` — the CLI refuses to dispatch if a
+command is unclassified or if any class is `disk_write`, so a script can never
+accidentally uninstall anything. Write commands add `changed[]` and per-slot
 `state` / `listening`, and never default to all slots. Disk-changing operations
-(install / adopt / uninstall) are GUI-only. See the
+(install / adopt / uninstall) are GUI-only. Read commands add `unknown_slots[]`
+when a named slot does not exist. See the
 [Agent API contract](docs/agent-api.md) for the full schema, error codes and examples.
 
 **`doctor --json`** is the one-shot read-only diagnosis: it merges config validation,

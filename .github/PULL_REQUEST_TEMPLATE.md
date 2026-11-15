@@ -13,7 +13,7 @@
 
 <!-- Tick only what you actually ran / 勾选你实际跑过的，不要勾没跑的 -->
 
-- [ ] `scripts/check-all.ps1` is green — 6 static checks + 17 offline suites / 全绿（6 项静态检查 + 17 套离线回归）
+- [ ] `scripts/check-all.ps1` is green — 6 static checks + 18 offline suites / 全绿（6 项静态检查 + 18 套离线回归）
 - [ ] New or changed behaviour has regression assertions in `scripts/test-*.py` / 新增或修改的行为补了回归断言
 - [ ] UI changes: launched the manager and clicked through it / 涉及界面：真启动管理器点过一遍
 - [ ] Docs updated where relevant (README / 使用说明 / 架构说明) / 涉及文档：相关 `.md` 已同步

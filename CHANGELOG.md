@@ -11,6 +11,50 @@
 
 ---
 
+## [0.1.7] — 2026-11-15
+
+继续按「**地基优先**」推进：动手做扩展功能之前先跑基础层审计，确认的真问题
+先修并补回归，再做 CLI 读写分界硬标记。
+
+### 新增
+
+- **CLI 读写分界从文档变成代码事实**：`dsh-tm.py` 新增 `CMD_CLASS` 唯一分类表
+  （`list` / `status` / `url` / `health` / `doctor` = `read`；
+  `start` / `stop` / `kill-stray` = `runtime_write`）。`main()` 每次分发前过
+  `_gate_registry()`：命令漏分类、分类表里有旧命令、或出现 `disk_write` 都当场失败。
+  **CLI 永不提供改磁盘命令**。
+- 每个 `--json` 结果顶层新增 `effect`（取值就是分类）；写命令一律带 `changed[]`
+  （含用法错误 / 配置错误路径），只读命令不带。加字段不升 `schema_version`（仍为 1）。
+- 给了未登记的槽名时新增 `unknown_slots[]`，四个只读命令统一走 `_selected_keys()`。
+- 第 18 套离线回归 `scripts/test-cli-boundary.py`（35 项）：分类表 ↔ handler 表 ↔
+  parser 子命令 ↔ `docs/agent-api.md` 英中表格逐项对账，实跑八个命令的
+  `effect` / `changed[]`，并守住下面四个地基修复。
+
+### 修复（地基审计确认，均为实跑复现）
+
+- **`health --json` 在 `dsh_health` 加载失败时 stdout 是 0 字节**，违反「一次调用
+  一个 JSON 对象」。现在输出 `ok: false` + `errors[].code = module_unavailable`。
+- **`health --json` 把「只有提示条目」误报成 `warning`**：`level` 现在只按
+  `error` / `warning` 计，仅 `info` 的槽是 `ok`；枚举集合不变，不升契约版本。
+- **显式 `--config <不存在的路径>` 会静默生成一份零槽模板并回 `ok:true, count:0`**：
+  路径写错被伪装成「这台机器没装版本」，盘上还凭空多出文件。现在只有**默认**
+  `config.json` 缺失才从模板 bootstrap，显式路径缺失直接 `config_unreadable` /
+  退出 3、不写盘。
+- **未知槽处理不一致**：以前 `status v9 --json` 返回 0 槽、`url v9 --json`
+  返回全部槽。现在统一给 `unknown_slots[]`，stdout 干净。
+
+### 文档
+
+- `docs/agent-api.md`（英文在前中文紧随）补 `effect` / `changed[]` /
+  `unknown_slots[]`、三分类与 `CMD_CLASS` 的关系、配置 bootstrap 边界、
+  `module_unavailable` 说明；`README.md` / `README.en.md`、两份使用说明、
+  `常见问题.md`（新增 Q19c）、`CONTRIBUTING.md`、PR 模板、
+  `工程经验总结.md`、路线图同步。
+- 离线回归 17 → 18 套；`scripts/test-cli.py` 56 项、`test-config-guard.py`
+  43 项保持不变且全绿。
+
+---
+
 ## [0.1.6] — 2026-11-15
 
 这一版按「**地基优先**」推进：先把审计确认的基础问题修掉、补上回归，再动扩展功能。
