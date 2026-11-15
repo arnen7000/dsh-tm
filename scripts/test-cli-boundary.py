@@ -327,6 +327,24 @@ for token in ("effect", "changed[]", "runtime_write", "disk_write",
 chk("D8 文档说明 effect 是命令类别而非副作用证明",
     "not proof" in doc and "不是本次调用" in doc)
 
+# ── E. 人读版 health 的退出码不能随界面语言漂移（2026-11-15 真跑复现） ──
+# 坏槽（bin_js / node_exe 都不存在）在英文下照样打印 [error]，但过去
+# `if lv == "错误"` 让 bad 恒为 0 → 退出码 0，脚本 / CI 会把坏槽误判成健康。
+print()
+print("== E. 人读版 health 退出码中英一致 ==")
+_rc_map = {}
+for _lg in ("zh", "en"):
+    for _kind, _extra in (("plain", []), ("json", ["--json"])):
+        _rc, _out, _err = run(CFG, *(["--lang", _lg, "health"] + _extra))
+        _rc_map[(_lg, _kind)] = _rc
+        _marked = ("[错误]" in _out or "[error]" in _out
+                   or '"level": "error"' in _out)
+        chk("E1 %s / %s：报了 error 就退出 1" % (_lg, _kind),
+            _rc == 1 and _marked, "rc=%s marked=%s" % (_rc, _marked))
+chk("E2 四种组合退出码完全一致", len(set(_rc_map.values())) == 1, str(_rc_map))
+chk("E3 源码里不再拿中文字面量比级别",
+    'lv == "错误"' not in src and '_lv_en(lv) == "error"' in src)
+
 shutil.rmtree(TMP, ignore_errors=True)
 print()
 print("RESULT: %s（%d 项，FAIL=%d）" % ("ALL PASS" if not FAIL else "FAILED", N, FAIL))

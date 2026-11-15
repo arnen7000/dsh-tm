@@ -964,6 +964,40 @@ for _p, _before in sorted(_REAL_TEMP_SNAP.items()):
             "不存在" if _before is None else "%d 项" % len(_before),
             "不存在" if _after is None else "%d 项" % len(_after)))
 
+# ── 地基审计（2026-11-15）：英文模式下 hard 形状复核不能失效 ─────────────
+# slot_shape_problems() 的级别是 T("错误")；过去安装 / 纳入直接比中文字面量，
+# 英文界面下该值变成 "error"，hard 全被当成 soft，坏槽也照样报成功。
+print("== 英文模式 hard 形状复核 ==")
+import dsh_i18n as _I   # noqa: E402
+_saved_lang = _I._LANG["code"]
+try:
+    for _lg in ("zh", "en"):
+        _I.set_lang(_lg)
+        _lv_err = O.T("错误")
+        chk("F1 %s：is_hard 认出「错误」级" % _lg,
+            O.is_hard(_lv_err) is True, repr(_lv_err))
+        chk("F2 %s：warning 不算 hard" % _lg,
+            not O.is_hard(O.T("警告")) and not O.is_hard("warning"))
+        _shape = O.slot_shape_problems({}, "", "", "")
+        chk("F3 %s：坏槽形状仍判出 hard（没有全变 soft）" % _lg,
+            sum(1 for _lv, _ in _shape if O.is_hard(_lv)) >= 3,
+            str([_lv for _lv, _ in _shape]))
+    _I.set_lang("zh")
+    chk("F4 返回值没被改成固定英文码（中文日志仍显示「错误」）",
+        O.slot_shape_problems({}, "", "", "")[0][0] == "错误")
+    _I.set_lang("en")
+    chk("F5 英文界面级别显示为 error（i18n 仍生效）",
+        O.slot_shape_problems({}, "", "", "")[0][0] == "error")
+finally:
+    _I.set_lang(_saved_lang)
+
+_ops_src = open(os.path.join(ROOT, "dsh_install_ops.py"), encoding="utf-8").read()
+chk("F6 安装 / 纳入不再拿中文字面量比级别",
+    'lv == "错误"' not in _ops_src and 'lv != "错误"' not in _ops_src
+    and _ops_src.count("is_hard(lv)") >= 4,
+    "is_hard 出现 %d 处" % _ops_src.count("is_hard(lv)"))
+
+print()
 if FAILS:
     print("RESULT: FAIL（%d 项）: %s" % (len(FAILS), "; ".join(FAILS)))
     sys.exit(1)

@@ -839,7 +839,10 @@ def cmd_health(ctx, args):
                                       else T("（浅查；加 --deep 做依赖深查）")))
         for lv, title, detail in items:
             print("  [%s] %s：%s" % (lv, title, detail))
-            if lv == "错误":
+            # 级别随界面语言变（中文「错误」/ 英文 "error"），必须归一后再比：
+            # 以前直接比中文字面量，英文人读版明明打印了 [error] 却返回退出码 0，
+            # 脚本 / CI 会把有问题的槽误判成健康（2026-11-15 真跑复现）。
+            if _lv_en(lv) == "error":
                 bad += 1
         print()
     return EXIT_FAIL if bad else EXIT_OK

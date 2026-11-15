@@ -911,15 +911,22 @@ def _bat_unsafe_fields(cfg):
     return ""
 
 
-def _rebuild_bats():
-    """重写所有槽的三件 bat（不弹框）。返回 (made, failed, skipped) 三个列表。
+def _rebuild_bats(keys=None, only_missing=False):
+    """重写三件 bat（不弹框）。返回 (made, failed, skipped) 三个列表。
 
     抽出来是因为「临时目录改了要重建 bat」这种场景不该再弹一次汇总框 ——
     设置对话框自己会报结果。gen_bats() 只是它 + 一个 messagebox。
+
+    keys=None         → 全部槽（默认）。gen_bats / 接回 / 改临时目录 / 移动安装
+                        位置这四处都依赖「全槽重写、已存在的也覆盖」的旧行为，
+                        默认参数必须保持原样，不能悄悄改掉。
+    only_missing=True → **只补缺失的文件**：已存在的 bat 一律跳过，既不备份
+                        也不覆盖。2026-11-15 起「槽体检 → 修复…」用这个模式 ——
+                        用户可能手工给 bat 加过环境变量，绝不能冲掉。
     """
     stamp = time.strftime("%Y%m%d-%H%M%S")
     made, failed, skipped = [], [], []
-    for key in SLOT_KEYS:
+    for key in (keys if keys is not None else SLOT_KEYS):
         cfg = VC[key]
         problem = _bat_unsafe_fields(cfg)
         if problem:
@@ -937,6 +944,13 @@ def _rebuild_bats():
             (os.path.join(root, "dsh-cli.bat"),   _bat_text_cli(key, cfg, root), "CLI"),
         ]
         for path, text, kind in jobs:
+            if only_missing and os.path.isfile(path):
+                # 只补缺失；已存在（含用户手工改过）的一律不碰。
+                continue
+            if only_missing and kind == "kill" and not port:
+                # 与 _bats_missing 同判据：没配端口时不需要 kill-<port>.bat，
+                # 更不能凭空生成一个 kill-None.bat。
+                continue
             ok, info = _write_bat(path, text, stamp)
             if ok:
                 made.append("%s [%s] %s" % (key, kind, path))
@@ -3173,8 +3187,8 @@ def _health_dialog():
               ).pack(padx=16, pady=(14, 2), anchor="w")
     ttk.Label(win, foreground=_MUTED, justify="left", wraplength=680,
               text=T("这里报告「现在的样子和登记的样子差在哪」，默认**不会修改任何文件**。"
-                   "\n缺 node 运行时或数据目录的槽，可以在下面选一个点「修复…」——"
-                   "只补缺的东西，不删、不覆盖你已有的文件。"
+                   "\n缺 node 运行时、数据目录或启动脚本的槽，可以在下面选一个点「修复…」——"
+                   "只补缺的文件，不删、不覆盖你已有的文件。"
                    "确实装坏了就走「卸载 → 重装」（那条路有完整备份）。")
               ).pack(padx=16, pady=(0, 8), anchor="w")
 
@@ -3232,8 +3246,9 @@ def _health_dialog():
             log(T("[体检] 复制失败：%s") % e)
 
     # ── 修复（用户点了才动）─────────────────────────────────────────
-    # 只列"有错误/警告"的槽；修复本身只补 node 运行时与 .dsh-home/.tmp，
-    # 缺 bin.js / 依赖会当场拒绝并说明"等于重装"。
+    # 只列"有错误/警告"的槽。ops 层 repair_slot 只补 node 运行时与
+    # .dsh-home/.tmp（缺 bin.js / 依赖会当场拒绝并说明"等于重装"）；
+    # 三件 bat 由本窗口在 repair_slot 成功后补回（只补缺失、不覆盖手改过的）。
     fixable = []
     if HEALTH_MOD is not None:
         fixable = [k for k in SLOT_KEYS
@@ -3257,12 +3272,22 @@ def _health_dialog():
                 return
             key = fixable[i]
             root_ = _version_root(VC[key])
+            # 只读列出这个槽缺哪几件 bat（判据与 _bats_missing 一致）：
+            # 确认框必须说清「到底会生成什么」，不能让用户点完才发现多了文件。
+            _need = ["dsh.bat", "dsh-cli.bat"]
+            if VC[key].get("port"):
+                _need.append("kill-%s.bat" % VC[key]["port"])
+            _missing = [n for n in _need
+                        if not os.path.isfile(os.path.join(root_, n))]
+            _what = "、".join(_missing) or "—"
             if not messagebox.askyesno(
                     T("修复这个槽？"),
-                    T("只会**补上缺的东西**（node 运行时、.dsh-home / .tmp 空目录），\n"
-                    "不会删除或覆盖你已有的文件。\n\n"
-                    "%s（%s）\n%s\n\n继续？")
-                    % (key, VC[key].get("label") or key, root_),
+                    T("只会**补上缺的东西**，不会删除或覆盖你已有的文件：\n"
+                      "  · node 运行时、.dsh-home / .tmp 空目录\n"
+                      "  · 缺失的启动脚本：%s\n\n"
+                      "已经存在、或你手工改过的 bat 一律不碰。\n\n"
+                      "%s（%s）\n%s\n\n继续？")
+                    % (_what, key, VC[key].get("label") or key, root_),
                     default="yes"):
                 return
 
@@ -3272,13 +3297,36 @@ def _health_dialog():
                         root_, _pick_node_source(T("修复")))
                 except Exception as e:
                     ok, acts, err = False, [], str(e)
-                win.after(0, lambda: _after_fix(ok, acts, err))
+                win.after(0, lambda: _after_fix(ok, acts, err, key))
 
             threading.Thread(target=work, daemon=True).start()
 
-        def _after_fix(ok, acts, err):
+        def _after_fix(ok, acts, err, key):
             if not ok:
                 messagebox.showerror(T("修复未完成"), err or T("原因未知"))
+                return
+            acts = list(acts or [])
+            # 2026-11-15：repair_slot 只补 node / 空目录，bat 归管理器。
+            # 这里在主线程补（log / T / tkinter 不是线程安全的），且只补本槽
+            # 缺失的文件 —— 全量 _rebuild_bats() 会备份并覆盖所有槽的 bat，
+            # 用户手工改过的那份会被冲掉，所以修复必须用 only_missing=True。
+            bat_failed = []
+            if _bats_missing(key):
+                try:
+                    made, failed, skipped = _rebuild_bats(
+                        keys=[key], only_missing=True)
+                except Exception as e:
+                    made, failed, skipped = [], [], [str(e)]
+                if made:
+                    acts.append(T("补回缺失的启动脚本（%d 件）") % len(made))
+                bat_failed = list(failed) + list(skipped)
+            if bat_failed:
+                # 绝不能出现「node 补了、bat 没补」却弹「已修复」。
+                messagebox.showerror(
+                    T("修复未完成"),
+                    T("已补上：%s\n\n但启动脚本没补全：\n  %s\n\n"
+                      "可到「设置 → 维护」点「生成启动/kill/CLI bat」重试。")
+                    % ("、".join(acts) or "—", "\n  ".join(bat_failed)))
                 return
             messagebox.showinfo(
                 T("已修复"),

@@ -298,8 +298,8 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
     shape = slot_shape_problems(slot_cfg, install_base or "",
                                 os.path.expanduser("~"),
                                 os.path.dirname(os.path.abspath(__file__)))
-    soft = [t for lv, t in shape if lv != "错误"]
-    hard = [t for lv, t in shape if lv == "错误"]
+    soft = [t for lv, t in shape if not is_hard(lv)]
+    hard = [t for lv, t in shape if is_hard(lv)]
     for t in soft:
         p.on_step(T("提示：%s") % t)
 
@@ -682,8 +682,8 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
     shape = slot_shape_problems(slot_cfg, install_base,
                                 os.path.expanduser("~"),
                                 os.path.dirname(os.path.abspath(__file__)))
-    hard = [t for lv, t in shape if lv == "错误"]
-    soft = [t for lv, t in shape if lv != "错误"]
+    hard = [t for lv, t in shape if is_hard(lv)]
+    soft = [t for lv, t in shape if not is_hard(lv)]
     if hard:
         return (False, slot_key,
                 T("安装结束，但槽结构和其它槽不一致（配置已保留，可重试）：\n  ")
@@ -964,6 +964,19 @@ def slot_root_from_bin_js(bin_js):
     if i <= 0:
         return ""
     return p[:i].replace("/", os.sep)
+
+
+def is_hard(lv):
+    """级别是否为「错误」—— **与界面语言无关**（2026-11-15 地基审计）。
+
+    slot_shape_problems() 返回的级别是 T("错误")：中文界面是「错误」，
+    英文界面是 "error"。安装 / 纳入流程过去直接拿中文字面量比级别，
+    于是英文界面下 hard 判定全部失效、坏槽也照样报成功。
+
+    返回值本身被 GUI 日志、CLI doctor 和离线回归断言消费，不能改；
+    所以只在这里把「怎么判」统一掉，调用方一律走 is_hard()。
+    """
+    return str(lv).strip().lower() in ("错误", "error")
 
 
 def slot_shape_problems(cfg, base="", home="", self_dir=""):

@@ -384,6 +384,14 @@ chk("I43 修复不覆盖已有文件（.dsh-home/settings.yaml 原样）",
     open(os.path.join(_home15, "settings.yaml"), encoding="utf-8").read() == "keep: 1")
 chk("I44 修复动作有清单可展示给用户",
     any("node" in a for a in acts18), str(acts18))
+# 2026-11-15 起「槽体检 → 修复…」会在 repair_slot 成功之后，由 GUI 层用
+# 「单槽 + 只补缺失」补回三件 bat；ops 层 repair_slot 的职责不变（仍只补
+# node 运行时与两个空目录），所以 I42-I44 的断言保持原样。
+_uops_src = open(os.path.join(REPO, "dsh_uninstall_ops.py"), encoding="utf-8").read()
+_rep_body = _uops_src.split("def repair_slot(")[1].split("\ndef ")[0]
+chk("I44b repair_slot 仍不写 bat（bat 归 GUI 修复流程，且只补缺失）",
+    "_write_bat" not in _rep_body and "dsh.bat" not in _rep_body
+    and "单槽 + 只补缺失" in _uops_src)
 
 # 缺 bin.js：补不了（等于重装），而且**一个文件都不动**
 make_slot("v16")

@@ -1646,6 +1646,38 @@ chk("C3z25c 移动完成后重写三件 bat（bat 里是绝对路径）",
 chk("C3z25d 提示不再说「要换位置请先卸载全部版本」",
     "要换位置请先卸载全部版本" not in src)
 
+# ── C3z28：修复要补回【缺失的】三件 bat（2026-11-15 用户实测缺陷）────────
+# 用户删掉 dsh.bat → 体检报缺陷 → 点「修复」只弹「无需改动」→ 只有
+# 「移出 → 重新纳入」才补回来。根因是 repair_slot 明确不生成 bat，而
+# 接回流程才调 _rebuild_bats()。现在修复成功后也补，但必须只补缺失。
+_rb = _fn_body("_rebuild_bats")
+_hd = _fn_body("_health_dialog")
+chk("C3z28a _rebuild_bats 支持 keys / only_missing，默认仍是全槽重写",
+    "def _rebuild_bats(keys=None, only_missing=False)" in src
+    and "keys if keys is not None else SLOT_KEYS" in _rb
+    and "= _rebuild_bats()" in src)
+chk("C3z28b 四个旧调用点没被改成单槽模式（gen_bats/接回/临时目录/移动位置）",
+    src.count("= _rebuild_bats()") == 4,
+    "实际 %d 处" % src.count("= _rebuild_bats()"))
+chk("C3z28c only_missing 跳过已存在的 bat（不备份、不覆盖用户手改过的）",
+    "if only_missing and os.path.isfile(path)" in _rb
+    and "continue" in _rb)
+chk("C3z28d 没配端口时不凭空生成 kill-None.bat（与 _bats_missing 同判据）",
+    'kind == "kill" and not port' in _rb)
+chk("C3z28e 修复成功后在主线程补本槽缺失的 bat",
+    "_after_fix(ok, acts, err, key)" in _hd
+    and "_bats_missing(key)" in _hd
+    and "keys=[key], only_missing=True" in _hd
+    and "UNINST.repair_slot(" in _hd)
+chk("C3z28f 确认框列明将补哪几件 bat（不让用户点完才发现多了文件）",
+    '"dsh.bat", "dsh-cli.bat"' in _hd
+    and "kill-%s.bat" in _hd
+    and "缺失的启动脚本" in _hd)
+chk("C3z28g bat 补全失败时改弹「修复未完成」，绝不弹「已修复」",
+    "if bat_failed:" in _hd
+    and _hd.index("if bat_failed:") < _hd.index('T("已修复")')
+    and "messagebox.showerror" in _hd)
+
 
 print()
 if FAILS:
