@@ -45,6 +45,63 @@ def app_version():
         return "0.0.0"
 
 
+def _git(*args):
+    """在仓库里跑一条只读 git 命令，返回 (rc, stdout)。"""
+    r = subprocess.run(["git", "-C", REPO] + list(args),
+                       capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    return r.returncode, (r.stdout or "").strip()
+
+
+def preflight(ver):
+    """打包前把「版本号」这个事实来源钉死；不满足就地中止，绝不出包。
+
+    历史事故（2026-11-14，v0.1.4）：工作区 VERSION 已手改成 0.1.4 但还没提交，
+    文件名和 README-FIRST 读的是**工作区**，源码却用 `git archive HEAD` 导出
+    **已提交快照**（当时还是 0.1.3）—— 打出来的包叫 0.1.4，里面 VERSION 与
+    CHANGELOG 却是 0.1.3，用户解压后界面标题栏显示旧版本。两者必须同源。
+    """
+    rc, head_ver = _git("show", "HEAD:VERSION")
+    if rc != 0 or head_ver != ver:
+        raise SystemExit(
+            "版本号不一致，拒绝打包：工作区 VERSION=%s，HEAD:VERSION=%s\n"
+            "  先提交 VERSION / CHANGELOG.md（或打 tag）再打包。包内源码来自\n"
+            "  git archive HEAD，不能拿工作区版本号当文件名。"
+            % (ver, head_ver or "(读不到)"))
+    rc, dirty = _git("status", "--porcelain", "--", "VERSION", "CHANGELOG.md")
+    if rc != 0 or dirty:
+        raise SystemExit("VERSION / CHANGELOG.md 有未提交改动，拒绝打包：\n%s"
+                         % (dirty or rc))
+    rc, changelog = _git("show", "HEAD:CHANGELOG.md")
+    if rc != 0 or ("## [%s]" % ver) not in changelog:
+        raise SystemExit("HEAD 的 CHANGELOG.md 里没有 ## [%s] 条目，拒绝打包。" % ver)
+    print("      preflight OK：HEAD 与工作区都是 %s，CHANGELOG 有对应条目" % ver)
+
+
+def verify_zip(out_zip, ver):
+    """成品自检：包内三处版本号必须一致，不一致就报错（且退出码非 0）。"""
+    with zipfile.ZipFile(out_zip) as z:
+        names = set(n.replace("\\", "/") for n in z.namelist())
+        prefix = "dsh-tm/"
+        for rel in ("VERSION", "README-FIRST.txt", "CHANGELOG.md"):
+            if prefix + rel not in names:
+                raise SystemExit("成品自检失败：包里缺 %s" % rel)
+        zip_ver = z.read(prefix + "VERSION").decode("utf-8-sig").strip()
+        first = z.read(prefix + "README-FIRST.txt").decode("utf-8-sig").splitlines()[0]
+        changelog = z.read(prefix + "CHANGELOG.md").decode("utf-8-sig")
+    problems = []
+    if zip_ver != ver:
+        problems.append("包内 VERSION=%s，应为 %s" % (zip_ver, ver))
+    if ver not in first:
+        problems.append("README-FIRST 首行没写 %s：%r" % (ver, first))
+    if ("## [%s]" % ver) not in changelog:
+        problems.append("包内 CHANGELOG 没有 ## [%s] 条目" % ver)
+    if problems:
+        raise SystemExit("成品自检失败，这个包不要发布：\n  - "
+                         + "\n  - ".join(problems))
+    print("      verify OK：包内 VERSION / README-FIRST / CHANGELOG 都是 %s" % ver)
+
+
 def export_source(dst):
     """用 git archive 导出**受控文件**，避免把 config.json / 日志 / 备份带进去。"""
     os.makedirs(dst, exist_ok=True)
@@ -81,6 +138,8 @@ def copy_runtime(src, dst):
 def main():
     keep = "--keep-temp" in sys.argv
     ver = app_version()
+    print("0/3 版本号一致性预检 …")
+    preflight(ver)
     os.makedirs(DIST, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix="dsh-tm-portable-")
     root = os.path.join(tmp, "dsh-tm")
@@ -103,17 +162,26 @@ def main():
         # （Windows 记事本打开时每行之间多一个空行，2026-11-14 实测踩到）。
         with open(os.path.join(root, "README-FIRST.txt"), "w",
                   encoding="utf-8-sig", newline="") as f:
+            # 公开分发物：英文在前、中文紧随（2026-11-15 审计补上）。
             f.write(
-                "dsh-tm 便携版 %s\r\n"
+                "dsh-tm portable %s\r\n"
                 "========================================\r\n\r\n"
-                "1. 双击 start-manager.bat 打开管理器\r\n"
-                "2. 点「安装 dsh」选一个版本 → 装好后点卡片上的「启动」\r\n"
-                "3. 想换语言：设置 → 界面 → 界面语言\r\n"
-                "4. 想要桌面图标：在本目录运行\r\n"
-                "   runtime\\python\\python.exe build_lnk.py\r\n\r\n"
-                "不需要安装 Python 或 Node —— 包里自带了，解压即用。\r\n\r\n"
-                "详细说明见 docs 文件夹，或 README.md\r\n"
-                % app_version())
+                "EN - Unzip anywhere, then:\r\n"
+                "  1. Double-click start-manager.bat\r\n"
+                "  2. Click \"Install dsh\", pick a version, then \"Start\" on its card\r\n"
+                "  3. Switch language: Settings > Interface > Interface language\r\n"
+                "  4. Desktop shortcut: run runtime\\python\\python.exe build_lnk.py\r\n"
+                "  No Python or Node needed - both are bundled.\r\n"
+                "  Docs: docs/user-guide.en.md / README.en.md\r\n\r\n"
+                "中文 - 解压到任意目录，然后：\r\n"
+                "  1. 双击 start-manager.bat 打开管理器\r\n"
+                "  2. 点「安装 dsh」选一个版本 → 装好后点卡片上的「启动」\r\n"
+                "  3. 想换语言：设置 → 界面 → 界面语言\r\n"
+                "  4. 想要桌面图标：在本目录运行\r\n"
+                "     runtime\\python\\python.exe build_lnk.py\r\n"
+                "  不需要安装 Python 或 Node —— 包里自带了，解压即用。\r\n"
+                "  详细说明见 docs 文件夹，或 README.md\r\n"
+                % ver)
 
         # 便携包不需要开发用的东西
         for junk in ("dist", ".git", "config.json", "dsh-manager.log"):
@@ -133,9 +201,17 @@ def main():
                     z.write(full, os.path.relpath(full, tmp))
                     n += 1
         size = os.path.getsize(out_zip) / 1024 / 1024
+        print("3/3 成品自检 …")
+        verify_zip(out_zip, ver)
+        import hashlib
+        sha = hashlib.sha256()
+        with open(out_zip, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                sha.update(chunk)
         print("\n完成：%s" % out_zip)
         print("      %d 个文件，%.1f MB" % (n, size))
-        print("\n下一步：把它作为附件传到 GitHub Release（单个文件上限 2 GB，没问题）。")
+        print("      SHA256: %s" % sha.hexdigest())
+        print("\n下一步：把 zip 作为附件传到 GitHub Release，并把上面这串 SHA256 写进发布说明。")
     finally:
         if keep:
             print("中间目录保留在：%s" % tmp)

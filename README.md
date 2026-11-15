@@ -111,7 +111,11 @@
 任何时候都可以跑一次环境自检（只读，不改任何东西）：
 
 ```bat
+:: 从源码跑（本机已装 Python）
 python scripts\check-env.py
+
+:: 便携包（用包内自带的 Python，什么都不用装）
+runtime\python\python.exe scripts\check-env.py
 ```
 
 它会逐项检查 Python 版本、tkinter、Node.js、文件完整性、端口占用、管理员权限，并**明确告诉你缺什么、怎么补**，最后给出退出码（0 = 全部满足）。

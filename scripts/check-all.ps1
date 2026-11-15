@@ -408,10 +408,14 @@ if ($Fast) {
         (Join-Path $Repo "scripts\test-standalone.py"),
         (Join-Path $Repo "scripts\test-tk-selfheal.py"),
         (Join-Path $Repo "scripts\test-cli.py"),
+        # 日志脱敏（pre-commit 也跑这一套，全量总检以前漏了它）
+        (Join-Path $Repo "scripts\test-log-mask.py"),
         # 中英双语的完整性（每个 T() 都有译文、换行没被写成 /n、无空译文）
         (Join-Path $Repo "scripts\test-i18n.py"),
         (Join-Path $Repo "scripts\test-move.py"),
         (Join-Path $Repo "scripts\test-log-levels.py"),
+        # 便携包发布一致性：包内 VERSION / CHANGELOG / 引导文件必须与文件名同源
+        (Join-Path $Repo "scripts\test-portable.py"),
         (Join-Path $Repo "tests\test-manager.py"),
         (Join-Path $Repo "scripts\test-manager.py")
     )

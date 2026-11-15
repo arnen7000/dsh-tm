@@ -24,6 +24,12 @@
   `@deepseek-ai` 还是包目录本身。
 - **提示里的 Windows 路径被吃掉**：`\node_modules` 在 Python 字符串里会被解析成
   「换行 + ode_modules」，用户看到的是错乱路径。
+- **发布包里的版本号错成 `0.1.3`**（发布后审计发现）：`make-portable.py` 的文件名与
+  引导文件读**工作区** `VERSION`，源码却用 `git archive HEAD` 导出**已提交快照** ——
+  工作区改成 0.1.4 还没提交就打包，于是包叫 0.1.4、包内 `VERSION` / `CHANGELOG`
+  还是 0.1.3，用户解压后界面标题栏显示旧版本。现在打包前 `preflight()` 要求
+  `HEAD:VERSION` 与工作区一致且 `CHANGELOG` 有对应条目，出包后 `verify_zip()`
+  再核对三处版本号；新增 `scripts/test-portable.py` 进全量门禁。修复后重新生成发布包。
 
 ### 变更
 
@@ -33,6 +39,11 @@
   `build_lnk.py`（README 只有快速开始末尾一句）。现在两种办法都写了，并说明
   便携包用户要用 `runtime\python\python.exe build_lnk.py`。
 - `user-guide.en.md` 同步桌面快捷方式一节。
+- **公开文档补齐双语**：`SECURITY.md` / `CONTRIBUTING.md` 之前只有中文，英文 README
+  却标注为双语；便携包引导文件 `README-FIRST.txt` 也改成「英文在前、中文紧随」。
+- **全量门禁补齐两套**：`test-log-mask.py`（原来只在 pre-commit 里跑）与
+  `test-portable.py`（发布包一致性），现共 16 套；英文 README 的 `check-env`
+  命令改用包内 Python，便携包用户不再需要系统 Python。
 
 ---
 

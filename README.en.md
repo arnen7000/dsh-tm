@@ -43,11 +43,14 @@ Running two dsh versions normally means fighting over one `~/.dsh`, one port, on
 - **No** host Node.js needed — every slot carries its own
 - ~0.7–1.3 GB of disk per version
 
-Check your machine before installing:
+Check your machine before installing. The portable package bundles Python, so there is
+no need to install anything — just call the bundled interpreter:
 
 ```bat
-python scripts\check-env.py --lang en
+runtime\python\python.exe scripts\check-env.py --lang en
 ```
+
+(From a source checkout, use `python scripts\check-env.py --lang en` instead.)
 
 ## Quick start
 
