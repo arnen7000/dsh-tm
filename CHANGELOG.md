@@ -11,6 +11,45 @@
 
 ---
 
+## [0.1.8] — 2026-11-15
+
+继续「**地基优先**」：补上用户实测到的「点修复没修好」，并修掉两处
+「界面语言一变、判定就失效」的问题。没有新增 CLI 能力，接口契约不变。
+
+### 新增
+
+- **「修复」现在会补回缺失的三件 bat**：`dsh.bat` / `dsh-cli.bat` /
+  `kill-<port>.bat`。确认框先列清这次要生成哪几件；实现是「单槽 + 只补缺失」
+  （`_rebuild_bats(keys=…, only_missing=True)`），**已存在、或你手工改过的 bat
+  一律不碰**，其它槽也不动；没配端口时不会凭空生成 `kill-None.bat`。
+- 升级指引补进文档：`README.md` §4.12b、`README.en.md`、`docs/dsh管理器使用说明.md`
+  §3、`docs/user-guide.en.md` 与 FAQ Q19e。核心是「新 zip 解压覆盖原目录」——
+  `config.json` 与槽都不在包里；**先删旧目录再解压**才会丢配置。
+
+### 修复（均为实跑复现）
+
+- **删掉 bat 后点「修复」只弹「无需改动」**：`repair_slot()` 本来就只管
+  `node` 运行时与 `.dsh-home` / `.tmp`（docstring 写明不生成 bat），而缺 bat
+  只报「警告」→ 槽进得了修复下拉，点完却什么都不做。现在 `repair_slot`
+  成功后由管理器补回缺失的 bat；部分失败会明确报「修复未完成」，不再假报成功。
+- **英文界面下安装 / 纳入的形状复核失效**：`slot_shape_problems()` 返回的级别是
+  `T("错误")`（英文下为 `"error"`），而这两条流程拿中文字面量比较 → hard 项全被
+  当成提示，坏槽也报成功。新增语言无关的 `is_hard()`，四处比较统一走它；
+  **返回值本身不变**（GUI 日志、CLI `doctor`、回归断言都依赖它）。
+- **英文界面下 `health`（人读版）有错误却退出 0**：同一个中文字面量问题，
+  `bad` 恒为 0。改用已有的 `_lv_en()` 归一后，中英 × 人读/JSON 四种组合退出码一致。
+
+### 测试
+
+- `scripts/test-manager-logic.py` 新增 C3z28a–g：`_rebuild_bats` 默认行为不变、
+  只补缺失、不产生备份、失败不假报成功、确认框列明文件。
+- `scripts/test-install-ops.py` 新增 F1–F6：`is_hard()` 在中英两种界面下都识别
+  错误级，且 `slot_shape_problems()` 返回值仍是本地化字符串。
+- `scripts/test-slot-ops.py` 新增 I44b：`repair_slot` 仍不写 bat（职责边界不变）。
+- `scripts/test-cli-boundary.py` 新增 E1–E3：`health` 中英 × 人读/JSON 四种组合
+  退出码一致（35 → 41 项）。
+- 18 套离线回归、`check-all.ps1 -Fast` 6 项静态检查全绿；`lang/en.json` 1102 条。
+
 ## [0.1.7] — 2026-11-15
 
 继续按「**地基优先**」推进：动手做扩展功能之前先跑基础层审计，确认的真问题
