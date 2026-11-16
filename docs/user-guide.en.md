@@ -148,9 +148,9 @@ refused with a clear reason instead of "looks fine, explodes on start". **Neithe
 repairs anything** in the source install — adopting only copies and registers a dsh
 that already runs correctly.
 
-When a detached slot is re-attached in place, the manager regenerates **only the
-missing** launch bats afterwards (and rewrites all three if the port changed); bats you
-edited by hand are never overwritten.
+If a re-attached slot keeps its port, the manager fills in only that slot's missing
+scripts and preserves existing files. If it gets a new port, the manager regenerates
+all three scripts for that slot and backs up any files with the same names.
 
 ## 6. Removing slots
 

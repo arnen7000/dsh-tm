@@ -917,12 +917,10 @@ def _rebuild_bats(keys=None, only_missing=False):
     抽出来是因为「临时目录改了要重建 bat」这种场景不该再弹一次汇总框 ——
     设置对话框自己会报结果。gen_bats() 只是它 + 一个 messagebox。
 
-    keys=None         → 全部槽（默认）。gen_bats / 接回 / 改临时目录 / 移动安装
-                        位置这四处都依赖「全槽重写、已存在的也覆盖」的旧行为，
-                        默认参数必须保持原样，不能悄悄改掉。
+    keys=None         → 全部槽（默认）。手动生成、改临时目录和移动安装位置
+                        都使用这个模式重写所有脚本。
     only_missing=True → **只补缺失的文件**：已存在的 bat 一律跳过，既不备份
-                        也不覆盖。2026-11-15 起「槽体检 → 修复…」用这个模式 ——
-                        用户可能手工给 bat 加过环境变量，绝不能冲掉。
+                        也不覆盖。槽体检修复和保留原端口的接回使用这个模式。
     """
     stamp = time.strftime("%Y%m%d-%H%M%S")
     made, failed, skipped = [], [], []
@@ -3260,9 +3258,7 @@ def _health_dialog():
         frow.pack(fill="x", padx=16, pady=(0, 6))
         ttk.Label(frow, text=T("修复")).pack(side="left")
         _fdisp = ["%s（%s）" % (k, VC[k].get("label") or k) for k in fixable]
-        _fvar = tk.StringVar(value=_fdisp[0])
-        _fcb = ttk.Combobox(frow, textvariable=_fvar, values=_fdisp,
-                            state="readonly", width=26)
+        _fcb = ttk.Combobox(frow, values=_fdisp, state="readonly", width=26)
         _fcb.current(0)
         _fcb.pack(side="left", padx=(6, 6))
 
@@ -5343,10 +5339,7 @@ def _bats_missing(key):
 
 
 def _do_readd(roots):
-    """后台把「已移出」的槽重新纳入管理：只改 config.json，磁盘一个字节都不动。
-
-    端口原样保留 —— 槽里的 bat 已经把端口写死在 `--port` 里，改端口就得重写三件
-    bat，那不是"重新纳入"该干的事（ops 层会在端口已被别的槽占用时给出警告）。"""
+    """重新登记已移出的槽，再按每个槽的端口是否变化补齐或重建脚本。"""
     _actions_enabled(False)
     log(T("[纳入] 重新纳入已移出的槽：%s") % ", ".join(roots))
 
@@ -5356,19 +5349,17 @@ def _do_readd(roots):
         if ok:
             log(T("[纳入] 完成：%s") % msg.replace("\n", " | "))
             messagebox.showinfo(T("已重新纳入"), msg)
-            _restart_or_tell(T("槽列表"), _installed_keys_from(payload))
-            # 只在**必要时**重写三件 bat（2026-11-14）：
-            #   · 端口被换过 → bat 里的 --port 必须跟着改，否则一启动就撞车；
-            #   · bat 被删了 → 补回来，「双击 dsh.bat」才还能用。
-            # 用户**改过** bat（加了环境变量之类）时不覆盖 —— 那是他的东西。
-            _keys = _installed_keys_from(payload)
-            _need_bats = bool((payload or {}).get("port_changed")) or any(
-                _bats_missing(k) for k in _keys)
-            if _need_bats:
+            keys = _installed_keys_from(payload)
+            _restart_or_tell(T("槽列表"), keys)
+            port_changed = (payload or {}).get("port_changed") or {}
+            for key in keys:
+                only_missing = key not in port_changed
+                if only_missing and not _bats_missing(key):
+                    continue
                 try:
-                    made, failed, skipped = _rebuild_bats()
-                    log(T("[纳入] 三件 bat 有缺失或端口变了，已重写：成功 %d，失败 %d，跳过 %d")
-                        % (len(made), len(failed), len(skipped)))
+                    made, failed, skipped = _rebuild_bats(keys=[key], only_missing=only_missing)
+                    log(T("[纳入] 槽 %s 的启动脚本：成功 %d，失败 %d，跳过 %d")
+                        % (key, len(made), len(failed), len(skipped)))
                 except Exception as e:
                     log(T("[纳入] 重写 bat 失败（可点「设置 → 维护 → 生成 bat」）：%s") % e)
         else:
