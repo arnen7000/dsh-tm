@@ -1648,17 +1648,16 @@ chk("C3z25d 提示不再说「要换位置请先卸载全部版本」",
 
 # ── C3z28：修复要补回【缺失的】三件 bat（2026-11-15 用户实测缺陷）────────
 # 用户删掉 dsh.bat → 体检报缺陷 → 点「修复」只弹「无需改动」→ 只有
-# 「移出 → 重新纳入」才补回来。根因是 repair_slot 明确不生成 bat，而
-# 接回流程才调 _rebuild_bats()。现在修复成功后也补，但必须只补缺失。
+# 「移出 → 重新纳入」才补回来。repair_slot 不生成 bat，由管理器补齐。
 _rb = _fn_body("_rebuild_bats")
 _hd = _fn_body("_health_dialog")
 chk("C3z28a _rebuild_bats 支持 keys / only_missing，默认仍是全槽重写",
     "def _rebuild_bats(keys=None, only_missing=False)" in src
     and "keys if keys is not None else SLOT_KEYS" in _rb
     and "= _rebuild_bats()" in src)
-chk("C3z28b 四个旧调用点没被改成单槽模式（gen_bats/接回/临时目录/移动位置）",
-    src.count("= _rebuild_bats()") == 4,
-    "实际 %d 处" % src.count("= _rebuild_bats()"))
+chk("C3z28b 手动生成、改临时目录、移动安装位置仍重建全部槽",
+    all("= _rebuild_bats()" in _fn_body(name)
+        for name in ("gen_bats", "_apply_dir_settings", "_do_move_root")))
 chk("C3z28c only_missing 跳过已存在的 bat（不备份、不覆盖用户手改过的）",
     "if only_missing and os.path.isfile(path)" in _rb
     and "continue" in _rb)
@@ -1677,6 +1676,62 @@ chk("C3z28g bat 补全失败时改弹「修复未完成」，绝不弹「已修�
     "if bat_failed:" in _hd
     and _hd.index("if bat_failed:") < _hd.index('T("已修复")')
     and "messagebox.showerror" in _hd)
+
+
+def _check_readd_bat_scope():
+    from pathlib import Path
+    import shutil
+    import tempfile
+    from types import SimpleNamespace
+
+    def ignore(*args):
+        pass
+
+    def run_worker(work, done, _):
+        done(*work())
+
+    with tempfile.TemporaryDirectory(prefix="dsh-readd-bats-") as scratch:
+        roots = {key: Path(scratch) / key for key in ("v1", "v2", "v3")}
+        cfg = {}
+        custom = b"@echo off\r\nREM user changes\r\n"
+        for key, port, old_port in (("v1", 64181, 64180), ("v2", 64180, 64180), ("v3", 62180, 62180)):
+            root = roots[key]
+            root.mkdir()
+            cfg[key] = {"port": port, "bin_js": str(root / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js")}
+            for name in ("dsh.bat", f"kill-{old_port}.bat", "dsh-cli.bat"):
+                if key != "v3" or name != "dsh-cli.bat":
+                    (root / name).write_bytes(custom)
+
+        def files(key):
+            return {p.name: p.read_bytes() for p in roots[key].iterdir()}
+
+        names = ["_do_readd", "_installed_keys_from", "_bats_missing", "_rebuild_bats",
+                 "_version_root", "_bat_unsafe_fields", "_bat_text_start", "_bat_text_kill",
+                 "_bat_text_cli", "_write_bat"]
+        payload = {"added": ["v1", "v3"], "port_changed": {"v1": (64180, 64181)}}
+        env, _ = harvest(names, ["_BAT_UNSAFE_CHARS"], {
+            "VC": cfg, "SLOT_KEYS": list(cfg), "BASE_DIR": scratch, "HOME": scratch,
+            "CONFIG_PATH": os.path.join(scratch, "config.json"), "MAX_SLOTS": 6, "shutil": shutil,
+            "log": ignore, "_actions_enabled": ignore, "_restart_or_tell": ignore,
+            "_versions_root": lambda: scratch, "_taken_ports": lambda: [64180],
+            "_GuiProgress": lambda _title, done: done,
+            "OPS": SimpleNamespace(run_in_thread=run_worker),
+            "UNINST": SimpleNamespace(readd_slots=lambda *args, **kwargs: (True, payload, "")),
+            "messagebox": SimpleNamespace(showinfo=ignore, showerror=ignore),
+        })
+        before_v2, before_v3 = files("v2"), files("v3")
+        env["_do_readd"]([str(roots[key]) for key in ("v1", "v3")])
+        v1, v3 = files("v1"), files("v3")
+        chk("C3z35a 换端口的目标槽重建启动、停止和 CLI 脚本",
+            b"--port 64181" in v1["dsh.bat"] and b'PORT=64181"' in v1.get("kill-64181.bat", b"")
+            and v1["dsh-cli.bat"] != custom)
+        chk("C3z35b 批量接回时未换端口的目标槽只补缺失脚本",
+            set(v3) - set(before_v3) == {"dsh-cli.bat"}
+            and all(v3[name] == content for name, content in before_v3.items()))
+        chk("C3z35c 接回不写入其他在管槽的脚本", files("v2") == before_v2)
+
+
+_check_readd_bat_scope()
 
 
 print()

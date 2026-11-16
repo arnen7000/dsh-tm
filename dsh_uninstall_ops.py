@@ -999,7 +999,7 @@ def repair_slot(root, node_src=""):
 
 def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
                 progress=None, taken_ports=None, probe=None, max_slots=6):
-    """把「已移出」的槽重新纳入管理。只改 config.json，磁盘一个字节都不动。
+    """把「已移出」的槽重新登记到 config.json。管理器负责生成脚本。
 
     **一切以磁盘为准**（2026-11-13 重写）：
       · 槽键从目录名推导（`dshV3` -> `v3`），不沿用记录里的键 ——
@@ -1215,7 +1215,6 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
                 T("写 config.json 失败（磁盘未改动）：%s") % e)
 
     parts = [T("已重新纳入：%s") % ", ".join(added)]
-    parts.append(T("磁盘上一个字节都没动 —— 原来怎么装的还是怎么装的。"))
     for d in details:
         for w in d["warnings"]:
             parts.append("  · %s：%s" % (d["key"] or d["root"], w))
