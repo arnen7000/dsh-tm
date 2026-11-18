@@ -18,6 +18,7 @@ import shutil
 import stat
 import sys
 import tempfile
+from unittest.mock import patch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -619,8 +620,13 @@ try:
     # 连包内都没有才退回系统 node
     O.bundled_node_exe = lambda: ""
     try:
-        chk("包内也没有才退回系统 node",
-            O._pick_node_exe({"v1": {"node_exe": ""}}, base=tmp2) == "node")
+        with patch.object(O.shutil, "which", return_value=_fake_bundled):
+            chk("包内没有时返回 PATH 上实际可复制的 node 路径",
+                O._pick_node_exe({"v1": {"node_exe": ""}}, base=tmp2)
+                == os.path.abspath(_fake_bundled))
+        with patch.object(O.shutil, "which", return_value=None):
+            chk("PATH 也没有 node 时保留原来的缺失运行时提示",
+                O._pick_node_exe({"v1": {"node_exe": ""}}, base=tmp2) == "node")
     finally:
         O.bundled_node_exe = _real_bundled
     # runtime/（约 200MB）被 .gitignore 排除，只有「便携包」才带。
