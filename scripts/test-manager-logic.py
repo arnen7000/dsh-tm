@@ -1130,7 +1130,7 @@ chk("C3z17e 重新纳入走 UNINST.readd_slots",
     "UNINST.readd_slots(" in _fn_body("_do_readd"))
 chk("C3z17f 已移出的槽由「扫描并纳入」原样接回（不再有独立窗口）",
     # 2026-11-12 用户反馈：没必要记住移出了哪个版本，扫描能重新发现。
-    "_do_readd(_readd_roots)" in _fn_body("scan_and_offer_adopt")
+    "_do_readd(_readd_roots, on_done=copy_next)" in _fn_body("scan_and_offer_adopt")
     and "重新纳入勾选的" not in _fn_body("uninstall_versions_dialog"))
 chk("C3z17g 没有在管槽时，卸载窗指引去「扫描并纳入」接回",
     # 2026-11-12：独立入口已移除，统一指向扫描。
@@ -1183,7 +1183,7 @@ _adopt_full = _fn_body("scan_and_offer_adopt")
 chk("C3z17p 扫不到时不再指路已删除的「已移出管理」列表",
     # 那个独立入口 2026-11-12 已删；接回统一走「扫描并纳入」。
     "已移出管理」列表" not in _adopt_full
-    and "没扫到管理范围外的 dsh" in _adopt_full)
+    and "_search_adopt_scope()" in _adopt_full)
 chk("C3z17q 失效记录只进日志，弹窗里一个字都不提",
     "_stale_n = len(_stale_detached_records())" in _adopt_full
     and 'log(T("[检测] 忽略' in _adopt_full
@@ -1284,8 +1284,8 @@ chk("C3z21a 分流只看位置：版本根下→原地接回，别处→复制�
     # 正是 dshV3-2 半成品与幽灵槽 v4 的来源。
     "_is_under_path(_root, _vr)" in _adopt_full
     and "_det_by_nm" not in _adopt_full
-    and "_do_readd(_readd_roots)" in _adopt_full
-    and '_adopt_one(r["version"], r["loc"])' in _adopt_full)
+    and "_do_readd(_readd_roots, on_done=copy_next)" in _adopt_full
+    and '_adopt_one(item["version"], item["loc"], on_done=copy_next)' in _adopt_full)
 _pk2 = _fn_body("_adopt_picker_dialog")
 chk("C3z21b 纳入候选对话框按**位置**说明：原地接回 / 复制一份",
     # 2026-11-14：说明压成一句，并且**每一行**都标出自己属于哪种。
@@ -1502,7 +1502,7 @@ chk("C3z29e 杀完进程立刻刷新探测缓存（否则日志里「已停止�
 
 # ── C3z26：纳入对话框的尺寸按内容算（2026-11-14「这个界面不太合理」）────────
 chk("C3z26a 窗口高度按行数算，不再用 126px/行 的粗估（单行不再撑出大片空白）",
-    "_row_h = sum(34 if r[\"ok\"] else 72 for r in rows)" in _pk2
+    "_row_h = sum(54 if r[\"ok\"] else 92 for r in rows)" in _pk2
     and "_list_h = max(34, min(300, _row_h))" in _pk2
     and "_h = 150 + _list_h" in _pk2
     and "126 *" not in _pk2)

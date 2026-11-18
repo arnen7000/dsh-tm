@@ -203,7 +203,7 @@ def check_slot(key, cfg, base="", home="", self_dir="", deep=False, node_version
     elif node_exe.strip().lower() in ("node", "node.exe"):
         out.append((LEVEL_WARN, "node",
                     T("用的是系统 PATH 上的 node（没有自带 node\\，与其它槽不同构；"
-                    "系统 node 一升级，这个槽可能因原生模块 ABI 不匹配而崩）")))
+                    "系统 node 一升级，这个槽可能因原生模块 ABI 不匹配而崩；停止槽后可点「修复…」固定当前 Node.js）")))
     elif not os.path.isfile(node_exe):
         out.append((LEVEL_ERROR, "node", T("找不到 %s") % node_exe))
 

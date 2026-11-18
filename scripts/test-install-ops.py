@@ -541,7 +541,7 @@ try:
     ports_all = [v["port"] for v in d7["versions"].values()]
     chk("重名槽端口不与原槽相同", len(set(ports_all)) == len(ports_all),
         str(ports_all))
-    # 纳入管理走 adopt_plan 时同样要避让
+    # 纳入不能用旧编号覆盖一个已经登记的槽
     nm_again = os.path.join(tmp, "npm-again", "node_modules")
     make_dsh(nm_again, "0.1.5-rc.2")
     node_again = make_node(os.path.join(tmp, "node-runtime-2"))
@@ -549,8 +549,9 @@ try:
     ok7, _k7, m7 = O.adopt_existing(A, nm_again, vroot, cfgp, "v2", ports_all,
                                     node_exe_source=node_again, progress=r2,
                                     max_slots=9)
-    chk("纳入管理也能再建一个重名槽", ok7 is True, m7)
+    chk("纳入不能覆盖已有槽号", ok7 is False, m7)
     d8 = O.read_config(cfgp)
+    chk("被拒的纳入保留已有配置", d8 == d7)
     p8 = [v["port"] for v in d8["versions"].values()]
     chk("纳入管理后端口仍互不相同", len(set(p8)) == len(p8), str(p8))
 finally:

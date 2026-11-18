@@ -3268,6 +3268,10 @@ def _health_dialog():
                 return
             key = fixable[i]
             root_ = _version_root(VC[key])
+            pin_node = str(VC[key].get("node_exe") or "").strip().lower() in ("node", "node.exe")
+            if pin_node and (proc_alive(procs.get(key)) or port_open(VC[key]["port"])):
+                messagebox.showwarning(T("修复未完成"), T("请先停止该槽，再固定当前 Node.js。"))
+                return
             # 只读列出这个槽缺哪几件 bat（判据与 _bats_missing 一致）：
             # 确认框必须说清「到底会生成什么」，不能让用户点完才发现多了文件。
             _need = ["dsh.bat", "dsh-cli.bat"]
@@ -3276,6 +3280,7 @@ def _health_dialog():
             _missing = [n for n in _need
                         if not os.path.isfile(os.path.join(root_, n))]
             _what = "、".join(_missing) or "—"
+            _node_note = T("将复制当前 PATH 中的 Node.js，并更新本槽 node_exe。") if pin_node else ""
             if not messagebox.askyesno(
                     T("修复这个槽？"),
                     T("只会**补上缺的东西**，不会删除或覆盖你已有的文件：\n"
@@ -3283,14 +3288,21 @@ def _health_dialog():
                       "  · 缺失的启动脚本：%s\n\n"
                       "已经存在、或你手工改过的 bat 一律不碰。\n\n"
                       "%s（%s）\n%s\n\n继续？")
-                    % (_what, key, VC[key].get("label") or key, root_),
+                    % (_what, key, VC[key].get("label") or key, root_) + "\n" + _node_note,
                     default="yes"):
                 return
 
             def work():
                 try:
-                    ok, acts, err = UNINST.repair_slot(
-                        root_, _pick_node_source(T("修复")))
+                    if pin_node:
+                        changed = OPS.pin_path_node(CONFIG_PATH, key, root_, INSTALL_BASE)
+                        ok, acts, err = UNINST.repair_slot(
+                            root_, os.path.join(root_, "node", "node.exe"))
+                        if changed:
+                            acts.insert(0, T("已固定当前 Node.js，并更新槽配置。"))
+                    else:
+                        ok, acts, err = UNINST.repair_slot(
+                            root_, _pick_node_source(T("修复")))
                 except Exception as e:
                     ok, acts, err = False, [], str(e)
                 win.after(0, lambda: _after_fix(ok, acts, err, key))
@@ -3302,6 +3314,7 @@ def _health_dialog():
                 messagebox.showerror(T("修复未完成"), err or T("原因未知"))
                 return
             acts = list(acts or [])
+            _restart_or_tell(T("槽列表"))
             # 2026-11-15：repair_slot 只补 node / 空目录，bat 归管理器。
             # 这里在主线程补（log / T / tkinter 不是线程安全的），且只补本槽
             # 缺失的文件 —— 全量 _rebuild_bats() 会备份并覆盖所有槽的 bat，
@@ -4351,33 +4364,57 @@ def _make_autohide_scroll(canvas, sb):
     return _cb
 
 
-def _resolve_dsh_nm(pick):
-    r"""把用户随手选的目录解析成**含 @deepseek-ai/dsh 的 node_modules 层**。
+def _search_adopt_scope():
+    path = filedialog.askdirectory(
+        title=T("选择要扫描的盘符、上层目录或 dsh 安装目录"), mustexist=True)
+    if not path:
+        return None
 
-    用户选目录时不知道"该选哪一层"，可能选到：
-      · `...\node_modules`                  ← 正确
-      · `...\`（node_modules 的父目录）      ← 常见
-      · `...\node_modules\@deepseek-ai\dsh` ← 也可能
-      · `...\@deepseek-ai`                   ← 也可能
-    这里挨个试，认出来就返回那一层；认不出返回空串。
-    """
-    if not pick or not os.path.isdir(pick):
-        return ""
-    pick = os.path.abspath(pick)
-    cands = [
-        pick,
-        os.path.join(pick, "node_modules"),
-        os.path.join(pick, "@deepseek-ai"),
-        os.path.join(pick, "node_modules", "@deepseek-ai"),
-    ]
-    # 用户直接选了包目录（.../@deepseek-ai/dsh）→ 往上退到 node_modules
-    if os.path.basename(pick).lower() == "dsh" and os.path.isfile(
-            os.path.join(pick, "package.json")):
-        cands.insert(0, os.path.dirname(os.path.dirname(pick)))
-    for c in cands:
-        if os.path.isdir(os.path.join(c, "@deepseek-ai", "dsh")):
-            return c
-    return ""
+    win = tk.Toplevel(root)
+    win.title(T("扫描已安装的 dsh"))
+    win.transient(root)
+    ttk.Label(win, text=T("正在扫描 %s…") % path, wraplength=460).pack(padx=20, pady=12)
+    cancelled = threading.Event()
+    result = []
+
+    def cancel():
+        cancelled.set()
+        win.destroy()
+
+    ttk.Button(win, text=T("取消"), command=lambda: cancel()).pack(pady=(0, 12))
+    win.protocol("WM_DELETE_WINDOW", cancel)
+    win.bind("<Escape>", lambda _e: cancel())
+    win.grab_set()
+    known = _managed_roots()
+
+    def work():
+        try:
+            result.append(dsh_adopt.search_installations(path, known, cancelled.is_set))
+        except Exception as exc:
+            result.append(exc)
+
+    def poll():
+        if result:
+            win.destroy()
+        else:
+            win.after(100, poll)
+
+    threading.Thread(target=work, daemon=True).start()
+    win.after(100, poll)
+    win.wait_window()
+    if cancelled.is_set():
+        return None
+    outcome = result[0]
+    if isinstance(outcome, Exception):
+        messagebox.showerror(T("无法扫描"), str(outcome))
+        return None
+    hits, inaccessible, _ = outcome
+    if inaccessible:
+        messagebox.showwarning(T("扫描已安装的 dsh"),
+                               T("有 %d 个目录无法读取，已跳过。") % inaccessible)
+    if not hits:
+        messagebox.showinfo(T("没找到 dsh"), T("所选范围内没有找到未纳入的 dsh 安装。"))
+    return hits
 
 
 def _adopt_picker_dialog(found):
@@ -4401,7 +4438,7 @@ def _adopt_picker_dialog(found):
     # 列表下面一大片空白；宽度还写死 700，短内容显得空荡。
     # 现在按**实际内容**算：可纳入的行 34px，不可纳入的多一行原因（52px），
     # 列表最高 300px（超出滚动），窗口高度 = 头部 + 列表 + 按钮。
-    _row_h = sum(34 if r["ok"] else 72 for r in rows)
+    _row_h = sum(54 if r["ok"] else 92 for r in rows)
     _list_h = max(34, min(300, _row_h))
     _h = 150 + _list_h
     # 2026-11-14：宽 520 时「画布 484 + 滚动条 17 + 左右各 18」= 537 > 520，
@@ -4481,6 +4518,8 @@ def _adopt_picker_dialog(found):
         # 现在：
         #   · 正常可纳入 → 只显示版本号（标题行已含），不追加任何说明
         #   · **不可纳入** → 才多显示一行原因（用户需要知道为什么点不了）
+        ttk.Label(box, text=r["root"], foreground=_MUTED, wraplength=460,
+                  justify="left").pack(anchor="w", padx=(22, 0))
         if not r["ok"]:
             _why = (r.get("problems") or [T("安装文件不完整")])[0]
             # 换行宽度必须小于画布宽（484）减去左边缩进（22）—— 原来写 600，
@@ -4520,10 +4559,16 @@ def _adopt_picker_dialog(found):
         res["picked"] = None
         win.destroy()
 
+    def on_search():
+        res["picked"] = "search"
+        win.destroy()
+
     btns = ttk.Frame(win)
     btns.pack(padx=18, pady=(4, 14), fill="x")
     ttk.Button(btns, text=T("纳入勾选的"), command=on_ok).pack(side="left", padx=(0, 6))
     ttk.Button(btns, text=T("取消"), command=on_cancel).pack(side="left")
+
+    ttk.Button(btns, text=T("扫描其他位置…"), command=lambda: on_search()).pack(side="left", padx=6)
 
     win.protocol("WM_DELETE_WINDOW", on_cancel)
     win.bind("<Escape>", lambda e: on_cancel())
@@ -4560,7 +4605,7 @@ def scan_and_offer_adopt():
             % (_vroot, _npm_g or T("（未探测到：npm 不在 PATH 上，或没装过全局包）")))
         if not _npm_g:
             log(T("[检测] npm 全局没探测到 —— 如果你的 dsh 是用 npm -g 装的，"
-                  "说明 npm 不在 PATH 上；可以用下面的「手动指定目录…」直接指过去"))
+                  "说明 npm 不在 PATH 上；可以用「扫描其他位置…」直接选择范围"))
         found = dsh_adopt.detect_existing_installs(
             [_npm_g] if _npm_g else [],
             _vroot,
@@ -4610,59 +4655,31 @@ def scan_and_offer_adopt():
         return
 
     if not found:
-        log(T("[检测] 本机没有发现（新的）管理范围外的 dsh 安装。"))
         _stale_n = len(_stale_detached_records())
         if _stale_n:
-            # 只在日志里留个数：界面上**一个字都不提**已删掉的旧版本，
-            # 用户要的是「重新搜索」，不是被告知「我替你忽略了什么」。
             log(T("[检测] 忽略 %d 条目录已不存在的移出记录（config 保留，"
-                "移动盘 / 网络盘接回后仍有效）。") % _stale_n)
-        # 没扫到就给一条出路：dsh 可能装在别处（自己解压到 D 盘、另一块盘、
-        # 或者 npm 不在 PATH 上导致全局目录没被探测到）。
-        # 2026-11-14 用户反馈：新机器上明明有 dsh，点了扫描什么都没有 —— 就是这种情况。
-        if not messagebox.askyesno(
-                T("没有可纳入的 dsh"),
-                T("没扫到管理范围外的 dsh。\n\n"
-                  "自动扫描只看两处：**版本根** 和 **npm 全局 node_modules**。\n"
-                  "如果你的 dsh 装在别的地方（自己解压的、在另一块盘、"
-                  "或者 npm 不在 PATH 上），可以手动指定。\n\n"
-                  "要手动指定一个 dsh 目录吗？")):
-            return
-        _pick = filedialog.askdirectory(
-            title=T("选择 dsh 的安装目录（选含 node_modules 的那层，或它的上一层）"))
-        if not _pick:
-            return
-        _nm = _resolve_dsh_nm(_pick)
-        if not _nm:
-            messagebox.showerror(
-                T("没找到 dsh"),
-                T("在 %s 里没找到 @deepseek-ai/dsh。\n\n"
-                  "请选**含 node_modules 的那一层**（或它的上一层）。\n"
-                  "典型的正确路径长这样：\n"
-                  "  ...\\node_modules\\@deepseek-ai\\dsh\\package.json") % _pick)
-            return
-        try:
-            _info = dsh_adopt.inspect_adopt_source(_nm)
-        except Exception as e:
-            messagebox.showerror(T("体检失败"), T("%s") % e)
-            return
-        if not _info.get("version"):
-            messagebox.showerror(
-                T("没找到 dsh"),
-                T("这个目录里没有可识别的 dsh 版本号，可能不是 dsh 的安装目录。"))
-            return
-        log(T("[检测] 手动指定：%s（版本 %s）") % (_nm, _info.get("version")))
-        found = [{"version": _info.get("version"),
-                  "locations": [{"kind": "versions-dir",
-                                 "path": os.path.join(_nm, "@deepseek-ai", "dsh"),
-                                 "node_modules": _nm}]}]
+                  "移动盘 / 网络盘接回后仍有效）。") % _stale_n)
 
-    log(T("[检测] 发现 %d 个管理范围外的版本：%s")
-        % (len(found), ", ".join(b.get("version") or "?" for b in found)))
-    picked = _adopt_picker_dialog(found)
+    while True:
+        if found:
+            log(T("[检测] 发现 %d 个管理范围外的版本：%s")
+                % (len(found), ", ".join(b.get("version") or "?" for b in found)))
+            picked = _adopt_picker_dialog(found)
+            if picked != "search":
+                break
+        hits = _search_adopt_scope()
+        if hits is None:
+            return
+        seen = {os.path.normcase(os.path.realpath(_adopt_loc_nm(loc)))
+                for group in found for loc in group.get("locations", [])}
+        for hit in hits:
+            identity = os.path.normcase(os.path.realpath(hit["node_modules"]))
+            if identity not in seen:
+                found.append({"version": hit["version"], "locations": [hit]})
+                seen.add(identity)
+        if not found:
+            return
     if not picked:
-        # 取消 / 关窗口 = 这次不纳入，什么都不记
-        log(T("[检测] 用户没有勾选任何版本，本次不纳入。"))
         return
     # 第一次纳入（一个槽都没有）→ 先确认版本放哪（纳入会把程序复制进这个根）。
     # 必须在循环之前问一次：放进循环就会为每个安装各问一遍。
@@ -4681,12 +4698,17 @@ def scan_and_offer_adopt():
             _readd_roots.append(_root)
         else:
             _adopt_items.append(r)
+    def copy_next():
+        if _adopt_items:
+            item = _adopt_items.pop(0)
+            _adopt_one(item["version"], item["loc"], on_done=copy_next)
+
     if _readd_roots:
         log(T("[纳入] %d 个是版本根下的槽目录，按原样接回（不复制）")
             % len(_readd_roots))
-        _do_readd(_readd_roots)
-    for r in _adopt_items:
-        _adopt_one(r["version"], r["loc"])
+        _do_readd(_readd_roots, on_done=copy_next)
+    else:
+        copy_next()
 
 
 def _pick_node_source(tag="纳入"):
@@ -4719,57 +4741,50 @@ def _pick_node_source(tag="纳入"):
     return node_src        # "" = 没有可复制的，交给调用方决定
 
 
-def _adopt_one(version, loc):
-    """纳入单个安装。容量/耗时都大，走后台线程 + 进度窗。"""
+def _adopt_one(version, loc, on_done=None):
+    """复制并登记一份安装，界面刷新后才继续队列。"""
     if OPS is None or dsh_adopt is None:
         messagebox.showerror(T("无法纳入"), T("缺少 dsh_install_ops.py / dsh_adopt.py 模块。"))
         return
-    if not _free_slot_keys():
+    slot_key = _next_free_slot_key()
+    if not slot_key:
         messagebox.showwarning(T("槽位已满"), _slot_full_reason())
         return
 
-    slot_key = _next_free_slot_key()
-    # 2026-11-01 修 bug（用户实测「纳入失败」）：
-    # 原逻辑只在**已有槽**里找 node；零槽时退化成裸 "node"，被当成相对路径
-    # `<self>/node`，于是复制阶段报「找不到可用的 node 运行时」。
-    # 正确做法：走 OPS._pick_node_exe() —— 先找既有槽，再找包内自带的
-    # runtime/node/node.exe（发布包必带），两者都没有才退回系统 PATH。
     node_src = _pick_node_source("纳入")
-    if not node_src:
-        node_src = "node"       # 交给系统 PATH；复制阶段会如实报缺
-
-    # 纳入要复制的是整个 node_modules，不是 @deepseek-ai/dsh 包目录 ——
-    # detect_existing_installs 的 path 是后者，必须经 _adopt_loc_nm 换过来。
-    # （2026-10-30 修：之前直接传 path，体检必然报「这里没有 @deepseek-ai/dsh」。）
     nm_src = _adopt_loc_nm(loc)
     log(T("[纳入] 开始：%s <- %s") % (version, nm_src))
+    _actions_enabled(False)
 
     def work():
-        ok, payload, msg = OPS.adopt_existing(
+        # Only relay steps. run_in_thread owns the GUI completion callback.
+        steps = OPS.Progress()
+        steps.on_step = prog.on_step
+        ok, key, msg = OPS.adopt_existing(
             dsh_adopt, nm_src, _versions_root(),
             CONFIG_PATH, slot_key, _taken_ports(),
             node_exe_source=node_src, max_slots=MAX_SLOTS,
-            install_base=INSTALL_BASE, temp_root=_temp_root())
-        # 说明塞进 payload：下面只让进度窗的 done_cb 回调一次。同一个 done
-        # 同时传给 run_in_thread 会被调两次（工作线程一次 + 主线程一次）
-        # → 两个「纳入成功」弹框 + 两次重启。2026-10-29 统一改成这种写法。
-        if isinstance(payload, dict):
-            payload["message"] = msg
-        return (ok, payload, msg)
+            install_base=INSTALL_BASE, temp_root=_temp_root(), progress=steps)
+        return (ok, {"slot_key": key, "message": msg}, msg)
 
     def done(ok, payload, msg):
+        _actions_enabled(True)
         msg = (payload or {}).get("message") or msg or ""
         if ok:
             log(T("[纳入] 成功：%s") % msg)
+            key = payload["slot_key"]
+            _restart_or_tell(T("槽列表"), [key])
+            slot = VC.get(key) or {}
             messagebox.showinfo(T("纳入成功"),
                                 T("%s\n\n槽：%s（%s）\n端口：%d\n数据目录：%s\n\n"
-                                "原安装未做任何改动。")
-                                % (msg, payload["slot_key"], payload["label"],
-                                   payload["port"], payload["dsh_home"]))
-            _restart_or_tell(T("槽列表"), [payload.get("slot_key")])
+                                  "原安装未做任何改动。")
+                                % (msg, key, slot.get("label", key),
+                                   slot.get("port", 0), slot.get("dsh_home") or "—"))
         else:
             log(T("[纳入] 失败：%s") % msg)
             messagebox.showerror(T("纳入失败"), msg)
+        if on_done:
+            root.after_idle(on_done)
 
     prog = _GuiProgress(T("纳入 dsh %s") % version, done)
     OPS.run_in_thread(work, prog, None)
@@ -5338,7 +5353,7 @@ def _bats_missing(key):
     return any(not os.path.isfile(os.path.join(root, n)) for n in need)
 
 
-def _do_readd(roots):
+def _do_readd(roots, on_done=None):
     """重新登记已移出的槽，再按每个槽的端口是否变化补齐或重建脚本。"""
     _actions_enabled(False)
     log(T("[纳入] 重新纳入已移出的槽：%s") % ", ".join(roots))
@@ -5365,6 +5380,9 @@ def _do_readd(roots):
         else:
             log(T("[纳入] 未完成：%s") % msg.replace("\n", " | "))
             messagebox.showerror(T("重新纳入未完成"), msg or T("原因未知"))
+
+        if on_done:
+            root.after_idle(on_done)
 
     prog = _GuiProgress(T("重新纳入"), done)
 
