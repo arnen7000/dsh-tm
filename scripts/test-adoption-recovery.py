@@ -10,10 +10,15 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dsh_adopt as adopt
 import dsh_install_ops as ops
+import dsh_platform as platform
 
 
 class AdoptionRecovery(unittest.TestCase):
     def setUp(self):
+        # The portable fixtures use a Windows node.exe and DLLs.
+        layout = patch.multiple(platform, IS_MAC=False, IS_WINDOWS=True, NODE_NAME="node.exe")
+        layout.start()
+        self.addCleanup(layout.stop)
         scratch = tempfile.TemporaryDirectory(prefix="dsh-adoption-")
         self.addCleanup(scratch.cleanup)
         self.root = Path(scratch.name)

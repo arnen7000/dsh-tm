@@ -27,6 +27,7 @@ import os
 import sys
 import tempfile
 import types
+from unittest.mock import patch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, os.pardir))
@@ -157,6 +158,24 @@ try:
 finally:
     import shutil
     shutil.rmtree(TMP, ignore_errors=True)
+
+if sys.platform == "win32":
+    import dsh_platform as platform
+
+    with tempfile.TemporaryDirectory(prefix="dsh-config-portable-") as folder:
+        template = os.path.join(folder, "template.json")
+        config = os.path.join(folder, "config.json")
+        with open(template, "wb") as handle:
+            handle.write(b"original")
+        with patch.object(os, "link", side_effect=OSError("hard links unsupported")):
+            platform.bootstrap_config(config, template)
+            with open(template, "wb") as handle:
+                handle.write(b"replacement")
+            platform.bootstrap_config(config, template)
+        with open(config, "rb") as handle:
+            chk("D1 Windows 无硬链接也能引导且保留已有配置",
+                handle.read() == b"original")
+
 
 print()
 if FAILS:

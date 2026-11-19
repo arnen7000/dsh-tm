@@ -27,6 +27,7 @@ import json
 import os
 import subprocess
 from dsh_i18n import T
+import dsh_platform as PLATFORM
 
 try:
     import dsh_install_ops as _OPS
@@ -201,9 +202,12 @@ def check_slot(key, cfg, base="", home="", self_dir="", deep=False, node_version
     if not node_exe:
         out.append((LEVEL_ERROR, "node", T("config.json 里没配 node_exe")))
     elif node_exe.strip().lower() in ("node", "node.exe"):
-        out.append((LEVEL_WARN, "node",
-                    T("用的是系统 PATH 上的 node（没有自带 node\\，与其它槽不同构；"
-                    "系统 node 一升级，这个槽可能因原生模块 ABI 不匹配而崩；停止槽后可点「修复…」固定当前 Node.js）")))
+        if PLATFORM.IS_MAC:
+            out.append((LEVEL_WARN, "node", T("该槽使用共享的 Node.js 运行时。")))
+        else:
+            out.append((LEVEL_WARN, "node",
+                        T("用的是系统 PATH 上的 node（没有自带 node\\，与其它槽不同构；"
+                        "系统 node 一升级，这个槽可能因原生模块 ABI 不匹配而崩；停止槽后可点「修复…」固定当前 Node.js）")))
     elif not os.path.isfile(node_exe):
         out.append((LEVEL_ERROR, "node", T("找不到 %s") % node_exe))
 
@@ -221,49 +225,58 @@ def check_slot(key, cfg, base="", home="", self_dir="", deep=False, node_version
 
     # ── 4. 三件 bat（缺了不影响管理器，但双击启动会失效）───────
     if root and os.path.isdir(root):
-        for n in _BAT_NAMES:
-            if not os.path.isfile(os.path.join(root, n)):
-                out.append((LEVEL_WARN, T("启动脚本"),
-                            T("缺 %s（可在管理器里点「生成启动/kill/CLI bat」补）") % n))
-        if port:
-            kb = os.path.join(root, "kill-%s.bat" % port)
-            if not os.path.isfile(kb):
-                out.append((LEVEL_WARN, T("启动脚本"),
-                            T("缺 kill-%s.bat（同上）") % port))
-            else:
-                txt = ""
+        if PLATFORM.IS_MAC:
+            for path in PLATFORM.slot_launcher_paths(root, port).values():
+                if not os.path.isfile(path):
+                    out.append((LEVEL_WARN, T("启动脚本"),
+                                T("缺 %s") % os.path.basename(path)))
+            launcher_port = PLATFORM.read_slot_port(root)
+            if launcher_port and launcher_port != port:
+                out.append((LEVEL_WARN, T("启动脚本"), T("启动脚本的端口与配置不一致")))
+        else:
+            for n in _BAT_NAMES:
+                if not os.path.isfile(os.path.join(root, n)):
+                    out.append((LEVEL_WARN, T("启动脚本"),
+                                T("缺 %s（可在管理器里点「生成启动/kill/CLI bat」补）") % n))
+            if port:
+                kb = os.path.join(root, "kill-%s.bat" % port)
+                if not os.path.isfile(kb):
+                    out.append((LEVEL_WARN, T("启动脚本"),
+                                T("缺 kill-%s.bat（同上）") % port))
+                else:
+                    txt = ""
+                    try:
+                        with open(kb, "r", encoding="gbk", errors="replace") as f:
+                            txt = f.read()
+                    except Exception:
+                        pass
+                    if txt and (":%d" % int(port)) not in txt and str(port) not in txt:
+                        out.append((LEVEL_WARN, T("启动脚本"),
+                                    T("kill-%s.bat 里没写端口 %s —— 可能改过端口没重新生成 bat")
+                                    % (port, port)))
+
+            # 4b) dsh.bat 里的 TEMP 是否与 config 的 temp_dir 一致（2026-10-31）
+            # 为什么查这个：临时目录改过之后，若没重建 bat，双击启动仍然用旧 TEMP ——
+            # 界面/日志全对，只有「临时文件到底落在哪」是错的，几乎无法自查。
+            # 只报不修（重建 bat 是用户的动作）。
+            bat_start = os.path.join(root, "dsh.bat")
+            if temp_dir and os.path.isfile(bat_start):
+                btxt = ""
                 try:
-                    with open(kb, "r", encoding="gbk", errors="replace") as f:
-                        txt = f.read()
+                    with open(bat_start, "r", encoding="gbk", errors="replace") as f:
+                        btxt = f.read()
                 except Exception:
                     pass
-                if txt and (":%d" % int(port)) not in txt and str(port) not in txt:
-                    out.append((LEVEL_WARN, T("启动脚本"),
-                                T("kill-%s.bat 里没写端口 %s —— 可能改过端口没重新生成 bat")
-                                % (port, port)))
-
-        # 4b) dsh.bat 里的 TEMP 是否与 config 的 temp_dir 一致（2026-10-31）
-        # 为什么查这个：临时目录改过之后，若没重建 bat，双击启动仍然用旧 TEMP ——
-        # 界面/日志全对，只有「临时文件到底落在哪」是错的，几乎无法自查。
-        # 只报不修（重建 bat 是用户的动作）。
-        bat_start = os.path.join(root, "dsh.bat")
-        if temp_dir and os.path.isfile(bat_start):
-            btxt = ""
-            try:
-                with open(bat_start, "r", encoding="gbk", errors="replace") as f:
-                    btxt = f.read()
-            except Exception:
-                pass
-            got = ""
-            for ln in btxt.splitlines():
-                s = ln.strip()
-                if s.lower().startswith('set "temp='):
-                    got = s.split("=", 1)[1].strip().strip('"')
-                    break
-            if got and _norm(got) != _norm(temp_dir):
-                out.append((LEVEL_WARN, T("临时目录"),
-                            T("dsh.bat 里的 TEMP 与配置不符（bat: %s / 配置: %s）—— "
-                            "点「生成启动/kill/CLI bat」重建") % (got, temp_dir)))
+                got = ""
+                for ln in btxt.splitlines():
+                    s = ln.strip()
+                    if s.lower().startswith('set "temp='):
+                        got = s.split("=", 1)[1].strip().strip('"')
+                        break
+                if got and _norm(got) != _norm(temp_dir):
+                    out.append((LEVEL_WARN, T("临时目录"),
+                                T("dsh.bat 里的 TEMP 与配置不符（bat: %s / 配置: %s）—— "
+                                "点「生成启动/kill/CLI bat」重建") % (got, temp_dir)))
 
         # 4c) 槽内 .tmp：只有**确实不是当前 TEMP、且里面还有东西**才叫历史遗留。
         # 2026-11-11 修：11-02 起新规则就是把临时文件放各槽 `.tmp`，

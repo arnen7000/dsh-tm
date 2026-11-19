@@ -49,7 +49,7 @@ chk("A5 有 __main__ 入口且返回退出码",
 
 print()
 print("== B. 与 GUI 同一套配置语义 ==")
-chk("B1 读同一份 config.json", 'CONFIG_PATH = os.path.join(BASE_DIR, "config.json")' in src)
+chk("B1 读同一份 config.json", 'CONFIG_PATH = PLATFORM.default_config_path()' in src)
 chk("B2 支持全部四个占位符",
     all(t in src for t in ("<base>", "<home>", "<self>", "<npm_global>")))
 chk("B3 读 config 用 utf-8-sig（容忍 BOM）", "utf-8-sig" in src)
@@ -63,19 +63,19 @@ chk("B4 槽上限 CLI 与 GUI 一致（MAX_SLOTS）",
     bool(_cli_max and _gui_max and _cli_max.group(1) == _gui_max.group(1)),
     "cli=%s gui=%s" % (_cli_max.group(1) if _cli_max else "?",
                        _gui_max.group(1) if _gui_max else "?"))
-chk("B5 每槽注入 DSH_HOME（绝不能读串数据）", 'env["DSH_HOME"]' in src)
-chk("B6 每槽注入 TEMP/TMP", 'env["TEMP"]' in src and 'env["TMP"]' in src)
+chk("B5 每槽注入 DSH_HOME（绝不能读串数据）", "PLATFORM.slot_env(" in src)
+chk("B6 每槽注入 TEMP/TMP", "PLATFORM.slot_env(" in src)
 chk("B7 启动参数取自 config 的 extra_args",
     "extra_args" in src and "_build_start_cmd" in src)
 
 print()
 print("== C. 安全边界（与 GUI 同一条门控） ==")
 chk("B8 缺 config 时 CLI 从模板自动生成（与 GUI 行为一致）",
-    "EXAMPLE_PATH" in src and "shutil.copyfile(EXAMPLE_PATH, path)" in src)
+    "EXAMPLE_PATH" in src and "PLATFORM.bootstrap_config(path, EXAMPLE_PATH)" in src)
 
 
-chk("C1 停止走 dsh_kill.kill_version（签名 + 端口门控，不误杀别的 node）",
-    "kill_version" in src)
+chk("C1 停止走共享进程门控（签名 + 端口门控，不误杀别的 node）",
+    "SLOT_PROCESS.stop_slot(" in src)
 chk("C2 签名取 bin_js 里 /node_modules/ 之前那段（与 GUI 的 _make_sig 同义）",
     "/node_modules/" in src and "_make_sig" in src)
 chk("C3 不自己 taskkill / tasklist（必须复用门控模块）",

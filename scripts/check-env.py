@@ -20,6 +20,7 @@ ROOT = os.path.dirname(HERE)
 #   或环境变量 DSH_LANG=en（管理器就是这样调的）
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+import dsh_platform as PLATFORM
 from dsh_i18n import T, set_lang   # noqa: E402
 
 _lang = os.environ.get("DSH_LANG") or "zh"
@@ -73,6 +74,9 @@ def check_tkinter():
     print(T("== 2. tkinter（图形界面，必需）=="))
     try:
         import tkinter
+        if PLATFORM.IS_MAC and tkinter.TkVersion < 8.6:
+            bad("macOS needs a Python build with Tk 8.6 or newer.")
+            return
         ok(T("tkinter 可用（Tcl/Tk %s）") % tkinter.TkVersion)
     except ImportError as e:
         bad(T("缺少 tkinter：%s") % e)
@@ -99,6 +103,8 @@ def check_stdlib():
 
 
 def check_optional():
+    if PLATFORM.IS_MAC:
+        return
     print(T("== 4. 可选依赖 =="))
     try:
         import winreg
@@ -148,6 +154,8 @@ def check_node():
     #    node-pty 匹配）。有它就等于「不需要用户装 node」。
     bundled = os.path.join(ROOT, "runtime", "node",
                            "node.exe" if os.name == "nt" else "node")
+    if PLATFORM.IS_MAC:
+        bundled = PLATFORM.bundled_node()
     has_bundled = os.path.isfile(bundled)
     if has_bundled:
         v = _node_version(bundled)
@@ -171,7 +179,9 @@ def check_node():
     # ② 系统 PATH 里的 node —— 只在「用户自己动手跑 dsh / 改配置去用系统 node」时
     #    才相关，所以包内那份健康时它只是信息项。
     node = None
-    for cand in ("node", "node.exe"):
+    for cand in ((PLATFORM.resolve_node(),) if PLATFORM.IS_MAC else ("node", "node.exe")):
+        if not cand:
+            continue
         node = _node_version(cand)
         if node:
             break
@@ -208,7 +218,7 @@ def check_files():
         bad(T("缺少文件：%s") % ", ".join(miss))
     else:
         ok(T("%d 个核心文件齐备") % len(need))
-    if os.path.isfile(os.path.join(ROOT, "config.json")):
+    if os.path.isfile(PLATFORM.default_config_path()):
         ok(T("config.json 已生成"))
     else:
         warn(T("config.json 不存在（首次启动会自动从 "
@@ -325,6 +335,8 @@ def check_scope():
 
 
 def check_privilege():
+    if PLATFORM.IS_MAC:
+        return
     print(T("== 9. 权限（非管理员会缺哪些能力）=="))
     try:
         import ctypes

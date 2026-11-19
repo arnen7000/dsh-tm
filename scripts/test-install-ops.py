@@ -32,6 +32,11 @@ os.environ["DSH_TEMP_NO_REAL_DISK"] = "1"
 
 import dsh_adopt as A          # noqa: E402
 import dsh_install_ops as O    # noqa: E402
+import dsh_platform as platform
+
+# These fixtures model the published Windows layout on any test host.
+platform.IS_MAC, platform.IS_WINDOWS, platform.NODE_NAME = False, True, "node.exe"
+
 
 # 快照真实候选盘上的 dsh-temp，跑完再比一次 —— 万一以后有人把上面那行删了，
 # 这条断言会立刻炸，而不是等用户发现 D 盘又长出一堆空文件夹。
@@ -342,8 +347,10 @@ try:
         chk("接受版本号写法 %r（非格式问题）" % raw,
             ok is False and "版本号" not in msg, msg)
 
-    ok, key, msg = O.run_official_install(A, "0.2.0-rc.2", cfgp, tmp, "v2", [],
-                                          versions_root=os.path.join(tmp, "vr"))
+    # The fixture simulates Windows and must not select a host's macOS Node.
+    with patch.object(O.shutil, "which", return_value=None):
+        ok, key, msg = O.run_official_install(A, "0.2.0-rc.2", cfgp, tmp, "v2", [],
+                                              versions_root=os.path.join(tmp, "vr"))
     # 2026-10-30 改了语义：安装失败当场把「装到一半」的目录收回，并把槽从
     # config 撤掉。原因：失败时目录里已经有 npm init 生成的 package.json，
     # 它不满足「零文件」的空壳判据 → `_reuse_empty_shell` 不复用 →
