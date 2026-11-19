@@ -1,0 +1,131 @@
+name: Windows portable v0.1.10
+
+on:
+  push:
+    branches: [main]
+    paths: [VERSION]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: windows-portable-v0.1.10
+
+env:
+  PORTABLE_TAG: v0.1.10
+  PORTABLE_ZIP: dsh-tm-0.1.10-portable.zip
+
+jobs:
+  test-and-build:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.head_commit.message, 'chore(release): 0.1.10'))
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Windows regression tests
+        shell: pwsh
+        run: |
+          if ((Get-Content VERSION -Raw).Trim() -ne $env:PORTABLE_TAG.Substring(1)) {
+            throw 'VERSION does not match the release tag.'
+          }
+          Copy-Item config/config.example.json config.json
+          $env:PYTHONIOENCODING = 'utf-8'
+          & ./scripts/check-all.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build with the verified v0.1.9 Windows runtime
+        shell: pwsh
+        run: |
+          $previous = Join-Path $env:RUNNER_TEMP previous-portable.zip
+          $source = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/v0.1.9/dsh-tm-0.1.9-portable.zip"
+          curl.exe --fail --silent --show-error --location --retry 3 --max-time 240 --output $previous $source
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $expected = 'b5e5a6a6c4daaf2dcf44f1083f462f044bf2c9e45ac4962a1f4afa60a09ad66e'
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $previous).Hash.ToLowerInvariant() -ne $expected) {
+            throw 'The previous release ZIP failed SHA-256 verification.'
+          }
+          $previousRoot = Join-Path $env:RUNNER_TEMP previous-portable
+          Expand-Archive -LiteralPath $previous -DestinationPath $previousRoot
+          Copy-Item -LiteralPath (Join-Path $previousRoot 'dsh-tm/runtime') -Destination . -Recurse
+          python scripts/make-portable.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test the extracted portable package
+        shell: pwsh
+        run: |
+          python scripts/test-portable.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $zip = Join-Path dist $env:PORTABLE_ZIP
+          $smoke = Join-Path $env:RUNNER_TEMP 'Portable 验收'
+          Expand-Archive -LiteralPath $zip -DestinationPath $smoke
+          Push-Location -LiteralPath (Join-Path $smoke dsh-tm)
+          try {
+            $version = & ./runtime/python/python.exe ./dsh-tm.py --version
+            if ($LASTEXITCODE -ne 0 -or $version -ne "dsh-tm $($env:PORTABLE_TAG.Substring(1))") {
+              throw "The bundled CLI reported an unexpected version: $version"
+            }
+            & ./runtime/python/python.exe -c "import tkinter; print(tkinter.Tcl().eval('info patchlevel'))"
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path ./runtime/python/pythonw.exe)) {
+              throw 'The Python/Tk launcher prerequisites are missing.'
+            }
+            $node = & ./runtime/node/node.exe --version
+            if ($LASTEXITCODE -ne 0 -or $node -ne 'v24.21.0') { throw "Unexpected Node: $node" }
+            & ./runtime/node/node.exe ./runtime/node/node_modules/npm/bin/npm-cli.js --version
+            if ($LASTEXITCODE -ne 0) { throw 'The bundled npm failed.' }
+            if (Test-Path ./config.json) { throw 'The ZIP contains a local configuration.' }
+          } finally {
+            Pop-Location
+          }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+          "$hash  $env:PORTABLE_ZIP" | Set-Content -LiteralPath "$zip.sha256" -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable
+          path: |
+            dist/${{ env.PORTABLE_ZIP }}
+            dist/${{ env.PORTABLE_ZIP }}.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: test-and-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-portable
+      - name: Publish the tested ZIP and its checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          sha256sum --check "$PORTABLE_ZIP.sha256"
+          if gh release view "$PORTABLE_TAG" --json isDraft >/dev/null 2>&1; then
+            echo "Release $PORTABLE_TAG already exists. Inspect it before rerunning."
+            exit 1
+          fi
+          cat > release-notes.md <<'EOF'
+          ## Windows 便携包
+
+          - 可从盘符、上层目录或安装目录查找并分别纳入多份 dsh 安装。
+          - 纳入时优先使用源安装自带的 Node 和 DLL，并识别相邻的 `-home` 数据目录。
+          - 新装槽优先配备独立 Node。依赖系统 PATH 的旧槽可在停止后通过体检修复。
+
+          已装旧版的用户可将 ZIP 解压覆盖原管理器目录。保留现有 `config.json` 和槽目录。
+          EOF
+          printf '\nSHA-256 `%s`\n\n[Windows 测试和构建记录](%s/%s/actions/runs/%s)\n' \
+            "$(cut -d ' ' -f 1 "$PORTABLE_ZIP.sha256")" "$GITHUB_SERVER_URL" \
+            "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> release-notes.md
+          gh release create "$PORTABLE_TAG" "$PORTABLE_ZIP" "$PORTABLE_ZIP.sha256" \
+            --target "$GITHUB_SHA" --title "$PORTABLE_TAG" --notes-file release-notes.md --draft
+          gh release edit "$PORTABLE_TAG" --draft=false --latest
