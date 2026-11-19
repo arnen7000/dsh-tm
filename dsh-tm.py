@@ -50,9 +50,11 @@ import time
 import dsh_i18n as I18N
 from dsh_i18n import T
 import dsh_config_guard as G
+import dsh_platform as PLATFORM
+import dsh_slot_process as SLOT_PROCESS
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+BASE_DIR = str(PLATFORM.RESOURCE_DIR)
+CONFIG_PATH = PLATFORM.default_config_path()
 
 
 def _adopt_config_lang(path=None):
@@ -134,6 +136,8 @@ def _gate_registry(handlers):
 def _probe_npm_global():
     """npm 全局 node_modules（供 <npm_global> 占位符用）。失败返回空串。"""
     try:
+        if PLATFORM.IS_MAC:
+            return PLATFORM.probe_npm_global()
         if os.name != "nt":
             return ""
         appdata = os.environ.get("APPDATA") or ""
@@ -236,11 +240,13 @@ def _usage_emit(command, err):
 def _slot_json(ctx, key):
     """一个槽的机器可读快照。只读，不启动任何东西。"""
     c = ctx.slot(key) or {}
+    state = _slot_state(ctx, key)
     return {
         "key": key,
         "label": c.get("label") or key,
         "port": c.get("port"),
-        "state": "running" if _is_running(ctx, key) else "stopped",
+        "state": "running" if state == "owned" else "stopped",
+        "port_conflict": state == "conflict",
         "version": _installed_version(c) or None,
         "bin_js": c.get("bin_js"),
         "dsh_home": c.get("dsh_home"),
@@ -267,9 +273,7 @@ class Ctx(object):
         self.cfg = cfg
         # 先展开 install_base 自身：它可能出现 <home> / <self>，但不会出现 <base>
         # （旧实现直接调 _norm，而 _norm 里要读 self.install_base → AttributeError）
-        _raw_base = cfg.get("install_base") or HOME
-        if isinstance(_raw_base, str):
-            _raw_base = _raw_base.replace("<home>", HOME).replace("<self>", BASE_DIR)
+        _raw_base = PLATFORM.config_base(cfg)
         self.install_base = os.path.normpath(_raw_base) if _raw_base else HOME
         self.npm_global = _probe_npm_global()
         self.versions = cfg.get("versions") or {}
@@ -278,10 +282,7 @@ class Ctx(object):
     def _norm(self, p):
         if not isinstance(p, str):
             return p
-        p = p.replace("<home>", HOME).replace("<self>", BASE_DIR)
-        p = p.replace("<base>", self.install_base)
-        if "<npm_global>" in p:
-            p = p.replace("<npm_global>", self.npm_global or "")
+        p = PLATFORM.resolve_path(p, self.install_base, HOME, BASE_DIR, self.npm_global)
         return os.path.normpath(p) if p else p
 
     def slot(self, key):
@@ -331,8 +332,7 @@ def _cfg_or_die(path=CONFIG_PATH, json_mode=False, command="", auto_create=True)
     """
     if not os.path.exists(path) and auto_create and os.path.exists(EXAMPLE_PATH):
         try:
-            import shutil
-            shutil.copyfile(EXAMPLE_PATH, path)
+            PLATFORM.bootstrap_config(path, EXAMPLE_PATH)
             sys.stderr.write(T("[提示] 未找到 config.json，已从 config/config.example.json "
                              "生成默认配置。\n"))
         except Exception as e:
@@ -385,15 +385,13 @@ def _port_open(port, timeout=0.25):
             pass
 
 
+def _slot_state(ctx, key):
+    config = ctx.slot(key) or {}
+    return SLOT_PROCESS.slot_state(config.get("bin_js"), config.get("port"))
+
+
 def _is_running(ctx, key):
-    """该槽是否在运行：端口在听即视为运行（与 GUI 判定一致）。"""
-    c = ctx.slot(key)
-    if not c:
-        return False
-    try:
-        return _port_open(c["port"])
-    except Exception:
-        return False
+    return _slot_state(ctx, key) == "owned"
 
 
 def _build_start_cmd(ctx, key):
@@ -407,89 +405,46 @@ def _build_start_cmd(ctx, key):
 
 
 def _slot_env(ctx, key):
-    """每槽的隔离环境：DSH_HOME + TEMP/TMP（与 GUI、与槽内 bat 完全一致）。"""
-    c = ctx.slot(key)
-    env = os.environ.copy()
-    if c.get("dsh_home"):
-        env["DSH_HOME"] = c["dsh_home"]
-    if c.get("temp_dir"):
-        # 纯函数：这里**不建目录**。以前在这里 makedirs，任何调用方
-        # （包括 test-cli.py 这种只读回归）都会在真实盘上留下
-        # `<home>/dsh-versions/dsh-temp/<槽>`，总检的卫生闸因此报红
-        # （2026-11-12 定位到 test-cli）。建目录挪到 _spawn。
-        env["TEMP"] = c["temp_dir"]
-        env["TMP"] = c["temp_dir"]
-    try:
-        env["NODE_OPTIONS"] = env.get("NODE_OPTIONS", "")
-    except Exception:
-        pass
-    return env
+    return PLATFORM.slot_env(ctx.slot(key))
 
 
 def _spawn(ctx, key):
-    """后台启动一个槽。返回 (ok, 说明)。"""
-    c = ctx.slot(key)
-    if c is None:
+    config = ctx.slot(key)
+    if config is None:
         return False, T("没有这个槽：%s") % key
-    if _is_running(ctx, key):
-        return True, T("已在运行（端口 %s）") % c.get("port")
-    bin_js = c.get("bin_js")
-    if not bin_js or not os.path.exists(bin_js):
-        return False, T("bin.js 不存在：%s") % bin_js
-    node = c.get("node_exe")
-    if node and not os.path.exists(node):
-        return False, T("node.exe 不存在：%s") % node
-    cmd = _build_start_cmd(ctx, key)
-    # 真正启动前才建 TEMP（见 _slot_env 的说明：算环境变量不该有副作用）
-    _td = c.get("temp_dir")
-    if _td:
-        try:
-            os.makedirs(_td, exist_ok=True)
-        except Exception:
-            pass
-    env = _slot_env(ctx, key)
-    flags = 0
-    if os.name == "nt":
-        flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | \
-                getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    state = _slot_state(ctx, key)
+    if state == "owned":
+        return True, T("已在运行（端口 %s）") % config.get("port")
+    if state == "conflict":
+        return False, T("端口 %s 已被占用。") % config["port"]
+    node, entry, *args = _build_start_cmd(ctx, key)
+    node = PLATFORM.resolve_node(node)
+    if not node or not entry or not os.path.isfile(entry):
+        return False, T("未找到可用的 Node.js 或 dsh 入口。")
     try:
-        subprocess.Popen(cmd, cwd=c.get("dsh_home") or BASE_DIR, env=env,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         stdin=subprocess.DEVNULL, creationflags=flags)
-    except Exception as e:
-        return False, T("启动失败：%s") % e
-    return True, T("已发出启动指令（端口 %s）") % c.get("port")
+        for field in ("dsh_home", "temp_dir"):
+            if config.get(field):
+                os.makedirs(config[field], exist_ok=True)
+        launcher = [sys.executable, "--run-slot-supervisor"] if PLATFORM.FROZEN else None
+        SLOT_PROCESS.spawn_slot(node, entry, config["port"],
+                                cwd=config.get("dsh_home") or BASE_DIR,
+                                env=PLATFORM.slot_env(dict(config, node_exe=node)),
+                                output_path=PLATFORM.log_path(getattr(ctx, "config_path", None)),
+                                extra_args=args, launcher=launcher, capture_url=False)
+    except (OSError, ValueError) as exc:
+        return False, T("启动失败：%s") % exc
+    return True, T("已发出启动指令（端口 %s）") % config["port"]
 
 
 def _stop(ctx, key):
-    """走 dsh_kill 的签名门控停止（与 GUI「停止」同一条路，不误杀别的 node）。"""
-    c = ctx.slot(key)
-    if c is None:
+    config = ctx.slot(key)
+    if config is None:
         return False, T("没有这个槽：%s") % key
-    if not _is_running(ctx, key):
-        return True, T("本来就没在运行")
-    try:
-        sys.path.insert(0, BASE_DIR)
-        import dsh_kill
-    except Exception as e:
-        return False, T("无法加载 dsh_kill：%s") % e
-    # dsh_kill 的 LOG 默认是 print：GUI 里那叫"日志区"，CLI 里就只是噪音。
-    # 静音后由本模块自己输出一行结论；--verbose 时才恢复详细过程。
-    if not _VERBOSE.get("on"):
-        dsh_kill.LOG = lambda *_a, **_k: None
-    try:
-        res = dsh_kill.kill_version(key, _make_sig(c), c.get("port"))
-    except TypeError:
-        # 老签名兼容
-        try:
-            res = dsh_kill.kill_version(_make_sig(c), c.get("port"))
-        except Exception as e:
-            return False, T("停止失败：%s") % e
-    except Exception as e:
-        return False, T("停止失败：%s") % e
-    time.sleep(0.6)
+    if _slot_state(ctx, key) == "conflict":
+        return False, T("端口 %s 已被占用，无法确认归属。") % config["port"]
+    SLOT_PROCESS.stop_slot(config.get("bin_js"), config["port"])
     if _is_running(ctx, key):
-        return False, T("已发出停止指令，但端口 %s 仍被占用") % c.get("port")
+        return False, T("停止失败：该槽仍在监听。")
     return True, T("已停止")
 
 
@@ -501,33 +456,8 @@ def _make_sig(cfg):
 
 
 def _entry_url(ctx, key):
-    """从日志里捞该槽最近一条入口 URL（拿不到完整 token 时返回空串）。"""
-    c = ctx.slot(key)
-    if not c or not os.path.exists(LOG_FILE):
-        return ""
-    marker = ("dsh web: http://127.0.0.1:%d" % c["port"]).encode()
-    try:
-        with open(LOG_FILE, "rb") as f:
-            blob = f.read()
-    except Exception:
-        return ""
-    pos = 0
-    last = ""
-    while True:
-        i = blob.find(marker, pos)
-        if i < 0:
-            break
-        j = blob.find(b"\n", i)
-        line = blob[i: j if j >= 0 else len(blob)]
-        m = re.search(rb"https?://\S+", line)
-        if m:
-            last = m.group(0).decode("utf-8", "replace")
-        pos = (j + 1) if j >= 0 else len(blob)
-    # 管理器把日志里的 token 等长掩码成 `abcd********`。这种 URL 复制到
-    # 浏览器也登不进去，绝不能当成「带 token 的入口」返回。
-    if "*" in last:
-        return ""
-    return last
+    """Authenticated URLs are available only to the GUI that launched the slot."""
+    return ""
 
 
 # ─────────────────────────── 子命令 ───────────────────────────
@@ -581,7 +511,7 @@ def cmd_start(ctx, args):
         if err:
             return _usage_emit("start", err)
         blocked = _blocked_by_config(keys)
-        work = [k for k in keys if k not in blocked]
+        work = []
         before = {k: _is_running(ctx, k) for k in keys}
         rows = []
         for k in keys:
@@ -592,6 +522,8 @@ def cmd_start(ctx, args):
                              "_spawn_ok": False, "_refused": True})
                 continue
             ok, msg = _spawn(ctx, k)
+            if ok:
+                work.append(k)
             # `_spawn_ok` 是中间量，输出前会摘掉；`ok` 留给"目标状态是否达成"
             rows.append({"key": k, "action": "start", "detail": msg,
                          "_spawn_ok": bool(ok)})
@@ -611,6 +543,7 @@ def cmd_start(ctx, args):
             r["ok"] = spawn_ok and now
             if not r["ok"]:
                 r["error_code"] = ("config_port_invalid" if refused
+                                   else "port_conflict" if _slot_state(ctx, k) == "conflict"
                                    else "spawn_failed" if not spawn_ok
                                    else "port_not_listening")
             if before[k] != now:
@@ -629,15 +562,19 @@ def cmd_start(ctx, args):
             rc = EXIT_FAIL
             continue
         todo.append(k)
+    waiting = []
     for k in todo:
         ok, msg = _spawn(ctx, k)
+        if ok:
+            waiting.append(k)
         print("%-6s %s  %s" % (k, "OK  " if ok else "FAIL", msg))
         if not ok:
             rc = EXIT_FAIL
     if todo:
         # 等端口真正开始监听再回报。dsh 从 spawn 到 listen 实测要 5~8 秒
         # （0.2.x 要加载插件树），固定 sleep 1.5s 会把"已启动"误报成"已停止"。
-        _wait_until_listening(ctx, todo, timeout=float(getattr(args, "wait", 20)))
+        if _wait_until_listening(ctx, waiting, timeout=float(getattr(args, "wait", 20))):
+            rc = EXIT_FAIL
         print(T("\n实际状态："))
         rc |= cmd_list(ctx, args)
     return rc
@@ -690,7 +627,8 @@ def cmd_stop(ctx, args):
                    "state": "running" if now else "stopped",
                    "listening": now, "detail": msg}
             if not reached:
-                row["error_code"] = ("stop_failed" if not ok else "still_running")
+                row["error_code"] = ("port_conflict" if _slot_state(ctx, k) == "conflict"
+                                 else "stop_failed" if not ok else "still_running")
             rows.append(row)
             if before[k] != now:
                 changed.append(k)
@@ -1055,7 +993,7 @@ def cmd_kill_stray(ctx, args):
     versions = {}
     for k in ctx.keys:
         c = ctx.slot(k)
-        versions[k] = {"sig": _make_sig(c), "port": c.get("port")}
+        versions[k] = {"entrypoint": c.get("bin_js"), "port": c.get("port")}
     sig_any = "@deepseek-ai/dsh"
     if not getattr(args, "yes", False):
         if _json:
@@ -1251,6 +1189,7 @@ def main(argv=None):
     ctx = Ctx(_cfg_or_die(args.config,
                           json_mode=bool(getattr(args, "json", False)),
                           command=args.cmd, auto_create=not _explicit_cfg))
+    ctx.config_path = os.path.abspath(args.config)
     handlers = {
         "list": cmd_list, "status": cmd_status, "start": cmd_start,
         "stop": cmd_stop, "url": cmd_url, "health": cmd_health,

@@ -260,7 +260,7 @@ chk("C3v 换版本功能已移除（按钮/对话框/取消按钮/脚本）",
     and not os.path.isfile(os.path.join(os.path.dirname(HERE),
                                         "scripts", "switch-version.ps1")))
 chk("C3w 卸载前走 dsh_kill 门控（不裸 taskkill）",
-    "dsh_kill.kill_version(key, SIG[key], port, tracked_pid=tracked)" in src)
+    "SLOT_PROCESS.stop_slot(cfg.get(\"bin_js\"), port, tracked)" in src)
 chk("C3x 卸载确认默认「否」",
     re.search(r'确认卸载.*?default="no"', src, re.S) is not None)
 chk("C3y 长操作期间冻结按钮（走通用的 _actions_enabled）",
@@ -391,7 +391,7 @@ chk("C4b kill_one 调用了复查", "_report_port_after_kill(key, port," in src,
 chk("C4c 复查用 format_port_owners（能区分是否 dsh）",
     "dsh_kill.format_port_owners(port)" in src)
 chk("C4d 区分自家 dsh 与非 dsh 残留",
-    'dsh_left' in src and 'other_left' in src)
+    'owned_pid = _dsh_pid_on_port(key)' in src)
 chk("C4e 非 dsh 占用时弹框告知", "端口被其它程序占用" in src)
 chk("C4f 自家 dsh 残留时提示再点一次", "停止未完全成功" in src)
 chk("C4g 明确说明不代杀别人的程序",
@@ -400,7 +400,7 @@ chk("C4h 端口空闲时只写日志不打扰", "已释放" in src)
 # 停不掉就静默返回是最糟的：必须能弹框。确认 kill_one 里不再只有一行 kill_version
 m = re.search(r"def kill_one.*?(?=\ndef )", src, re.S)
 chk("C4i kill_one 不再只有一行裸调用",
-    bool(m) and "killed = dsh_kill.kill_version" in m.group(0),
+    bool(m) and "count = SLOT_PROCESS.stop_slot" in m.group(0),
     "应接住返回值并复查端口")
 
 print("== C5 卡片标题不再重复浏览器名 ==")
@@ -917,9 +917,11 @@ chk("C3z10d 183 = ERROR_ALREADY_EXISTS，注释写清（后来人别改回去）
     "ERROR_ALREADY_EXISTS" in src and "use_last_error" in src.split("ERROR_ALREADY_EXISTS")[0][-400:])
 # 注意：dsh_kill 的**注释里**会提到 ctypes.GetLastError()（解释为什么不这么写），
 # 所以只能断言"不再通过 windll.kernel32 句柄调 API"这个行为特征。
-chk("C3z10e dsh_kill 的 last-error 同样走 use_last_error（诊断文本别报错数）",
-    'ctypes.WinDLL("kernel32", use_last_error=True)' in _ks
-    and "ctypes.windll.kernel32" not in _ks)
+_proc_src = io.open(
+    os.path.join(os.path.dirname(HERE), "dsh_slot_process.py"), encoding="utf-8").read()
+chk("C3z10e 进程终止使用 Windows 句柄",
+    "OpenProcess" in _proc_src and "TerminateProcess" in _proc_src
+    and "bool(api.TerminateProcess(handle, 1))" in _proc_src)
 
 # ── 浏览器可选（2026-10-31）—— 默认系统默认浏览器，每槽可改 ──────────
 print("== C3z11 每个槽用哪个浏览器（默认=系统默认）==")
@@ -1565,7 +1567,7 @@ chk("C3z22d 单槽刷新有异常隔离（一个槽坏了不影响其它槽显�
 chk("C3z22e 日志扫描偏移随软刷新重建（新槽不会 KeyError）",
     "_scan_pos.update({k: _old_scan.get(k) for k in SLOT_KEYS})"
     in _fn_body("_reload_config_after_change")
-    and "_scan_pos.get(key) is None" in _fn_body("_scan_slot"))
+    and "procs.get(key)" in _fn_body("_scan_slot"))
 
 
 # ── C3z23：槽编号与目录一一对应（2026-11-13「为什么会有 dshV3-2」）──────────
@@ -1669,8 +1671,7 @@ chk("C3z28e 修复成功后在主线程补本槽缺失的 bat",
     and "keys=[key], only_missing=True" in _hd
     and "UNINST.repair_slot(" in _hd)
 chk("C3z28f 确认框列明将补哪几件 bat（不让用户点完才发现多了文件）",
-    '"dsh.bat", "dsh-cli.bat"' in _hd
-    and "kill-%s.bat" in _hd
+    "PLATFORM.slot_launcher_paths(" in _hd
     and "缺失的启动脚本" in _hd)
 chk("C3z28g bat 补全失败时改弹「修复未完成」，绝不弹「已修复」",
     "if bat_failed:" in _hd
@@ -1711,6 +1712,12 @@ def _check_readd_bat_scope():
         payload = {"added": ["v1", "v3"], "port_changed": {"v1": (64180, 64181)}}
         env, _ = harvest(names, ["_BAT_UNSAFE_CHARS"], {
             "VC": cfg, "SLOT_KEYS": list(cfg), "BASE_DIR": scratch, "HOME": scratch,
+            "PLATFORM": SimpleNamespace(
+                IS_MAC=False, slot_launcher_paths=lambda root, port: {
+                    kind: os.path.join(root, file) for kind, file in (
+                        ("start", "dsh.bat"), ("cli", "dsh-cli.bat"),
+                        ("stop", "kill-%s.bat" % port))}),
+
             "CONFIG_PATH": os.path.join(scratch, "config.json"), "MAX_SLOTS": 6, "shutil": shutil,
             "log": ignore, "_actions_enabled": ignore, "_restart_or_tell": ignore,
             "_versions_root": lambda: scratch, "_taken_ports": lambda: [64180],

@@ -32,6 +32,11 @@ os.environ["DSH_TEMP_NO_REAL_DISK"] = "1"
 
 import dsh_adopt as A          # noqa: E402
 import dsh_install_ops as O    # noqa: E402
+import dsh_platform as platform
+
+# These fixtures model the published Windows layout on any test host.
+platform.IS_MAC, platform.IS_WINDOWS, platform.NODE_NAME = False, True, "node.exe"
+
 
 # 快照真实候选盘上的 dsh-temp，跑完再比一次 —— 万一以后有人把上面那行删了，
 # 这条断言会立刻炸，而不是等用户发现 D 盘又长出一堆空文件夹。

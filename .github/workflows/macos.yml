@@ -1,0 +1,125 @@
+name: macOS app
+
+on:
+  pull_request:
+  push:
+    branches: [main, codex/macos-support]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build macOS (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    env:
+      ARCH: ${{ matrix.arch }}
+      UV_PYTHON_PREFERENCE: only-managed
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: '0.12.23'
+          enable-cache: false
+      - name: Install native Python with Tcl/Tk and PyInstaller
+        run: |
+          uv venv --python 3.12.15 "$RUNNER_TEMP/dsh-build-env"
+          uv pip install --python "$RUNNER_TEMP/dsh-build-env/bin/python" PyInstaller==6.22.3
+          echo "$RUNNER_TEMP/dsh-build-env/bin" >> "$GITHUB_PATH"
+      - name: Build, ZIP, and verify the packaged app
+        run: |
+          python scripts/build-macos.py --arch "$ARCH" --output "$RUNNER_TEMP/build"
+          zip="DS-Manager-$(cat VERSION)-macos-$ARCH-unsigned.zip"
+          python scripts/package-macos.py --app "$RUNNER_TEMP/build/DS-Manager.app" \
+            --arch "$ARCH" --output "$RUNNER_TEMP/artifacts/$zip"
+          (cd "$RUNNER_TEMP/artifacts" && shasum -a 256 -c "$zip.sha256")
+          ditto -x -k "$RUNNER_TEMP/artifacts/$zip" "$RUNNER_TEMP/extracted"
+          python scripts/test-macos-platform.py
+          python scripts/test-storage-safety.py
+          for suite in test-adopt-logic test-adoption-recovery test-cli test-config-compat test-health test-install-ops test-i18n test-manager-logic test-move test-slot-ops; do
+            python "scripts/$suite.py"
+          done
+          DSH_TEST_NODE="$RUNNER_TEMP/extracted/DS-Manager.app/Contents/Resources/runtime/node/bin/node" \
+            python scripts/test-slot-process.py
+          python scripts/test-macos-app.py --app "$RUNNER_TEMP/extracted/DS-Manager.app"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-${{ matrix.arch }}-unsigned
+          path: ${{ runner.temp }}/artifacts/
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+
+  verify-windows:
+    name: Verify Windows before signing
+    if: >-
+      github.repository == 'arnen7000/dsh-tm' &&
+      github.event_name == 'push' && github.ref == 'refs/heads/codex/macos-support' &&
+      vars.DSH_TM_MACOS_SIGNING == 'true'
+    uses: ./.github/workflows/ci.yml
+
+  sign:
+    name: Sign and notarize macOS (${{ matrix.arch }})
+    needs: [package, verify-windows]
+    environment: macos-signing
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    env:
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macos-${{ matrix.arch }}-unsigned
+          path: ${{ runner.temp }}/unsigned
+      - name: Verify and extract the same-run build
+        run: |
+          zip="DS-Manager-$(cat VERSION)-macos-$ARCH-unsigned.zip"
+          (cd "$RUNNER_TEMP/unsigned" && shasum -a 256 -c "$zip.sha256")
+          ditto -x -k "$RUNNER_TEMP/unsigned/$zip" "$RUNNER_TEMP/build"
+          codesign --verify --deep --strict "$RUNNER_TEMP/build/DS-Manager.app"
+      - name: Sign, submit to Apple, and staple
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: bash scripts/sign-macos.sh "$RUNNER_TEMP/build/DS-Manager.app" "$ARCH"
+      - name: Verify the signed, notarized ZIP
+        run: |
+          zip="DS-Manager-$(cat VERSION)-macos-$ARCH.zip"
+          /usr/bin/python3 scripts/package-macos.py --app "$RUNNER_TEMP/build/DS-Manager.app" \
+            --arch "$ARCH" --signed --output "$RUNNER_TEMP/artifacts/$zip"
+          (cd "$RUNNER_TEMP/artifacts" && shasum -a 256 -c "$zip.sha256")
+          ditto -x -k "$RUNNER_TEMP/artifacts/$zip" "$RUNNER_TEMP/extracted"
+          /usr/bin/python3 scripts/test-macos-app.py --app "$RUNNER_TEMP/extracted/DS-Manager.app"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-${{ matrix.arch }}-signed
+          path: ${{ runner.temp }}/artifacts/
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error

@@ -14,6 +14,28 @@
 # 下面「tkinter 缺失」的提示语本身也要翻译（用户可能只看得懂英文），
 # 所以 T() 在这里就得可用。放在普通 import 区（87 行）会让 70 行报
 # `NameError: name 'T' is not defined` —— 2026-11-14 被 test-tk-selfheal 抓到。
+import argparse
+import os
+import runpy
+import sys
+
+import dsh_platform as PLATFORM
+
+if __name__ == "__main__" and len(sys.argv) > 1:
+    command = sys.argv[1]
+    if command == "--run-slot-supervisor":
+        from dsh_slot_process import main
+        raise SystemExit(main(sys.argv[2:]))
+    if command == "--kill-slot":
+        from dsh_kill import main
+        raise SystemExit(main(sys.argv[2:]))
+    entry = {"--cli": "dsh-tm.py", "--check-env": "scripts/check-env.py"}.get(command)
+    if entry:
+        script = str(PLATFORM.RESOURCE_DIR / entry)
+        sys.argv = [script] + sys.argv[2:]
+        runpy.run_path(script, run_name="__main__")
+        raise SystemExit(0)
+
 import dsh_i18n as I18N
 from dsh_i18n import T
 
@@ -91,11 +113,26 @@ except ImportError as _e:
     _sys.stderr.write(_msg + "\n")
     _sys.exit(1)
 import subprocess, os, time, socket, json, sys, shutil, threading, re, csv, io
+import dsh_slot_process as SLOT_PROCESS
 
-BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+BASE_DIR = str(PLATFORM.RESOURCE_DIR)
+CONFIG_PATH = PLATFORM.default_config_path()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=T("DSH 版本管理器"))
+    parser.add_argument("--config", default=CONFIG_PATH)
+    CONFIG_PATH = os.path.abspath(os.path.expanduser(parser.parse_args().config))
 EXAMPLE_PATH = os.path.join(BASE_DIR, "config", "config.example.json")
-LOG_FILE    = os.path.join(BASE_DIR, "dsh-manager.log")
+LOG_FILE = PLATFORM.log_path(CONFIG_PATH)
+if PLATFORM.IS_MAC:
+    import fcntl
+    os.makedirs(os.path.dirname(CONFIG_PATH), mode=0o700, exist_ok=True)
+    _lock_fd = os.open(os.path.realpath(CONFIG_PATH) + ".manager.lock",
+                       os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.stderr.write(T("该配置已由另一管理器窗口打开。") + "\n")
+        raise SystemExit(0)
 # 管理器自己的入口文件。重启要重开它 —— **不能依赖 __file__**：
 # pythonw 下 __file__ 可能是相对路径，destroy() 之后更不安全（2026-11-01 实测
 # 「说重启但没重启」的根因之一）。这里在模块加载时就固化成绝对路径。
@@ -105,7 +142,7 @@ MANAGER_ENTRY = os.path.abspath(__file__)
 # 只改这一处即可换仓库地址。
 PROJECT_URL = "https://github.com/arnen7000/dsh-tm"
 
-CREATE_NO_WINDOW = 0x08000000   # 隐藏 node/taskkill 子进程的控制台窗口
+CREATE_NO_WINDOW = PLATFORM.CREATE_NO_WINDOW   # 隐藏 node/taskkill 子进程的控制台窗口
 
 # 日志脱敏：dsh 启动时会打印带 token 的入口 URL，那是该实例的唯一认证凭据，
 # 而 README 鼓励用户把日志发出来排查，所以落盘前必须掩码。
@@ -214,7 +251,7 @@ except FileNotFoundError:
     # 示例用的是 <base>/<home>/<npm_global> 可移植占位符，直接复制即可用，避免一上来就报错。
     if os.path.exists(EXAMPLE_PATH):
         try:
-            shutil.copyfile(EXAMPLE_PATH, CONFIG_PATH)
+            PLATFORM.bootstrap_config(CONFIG_PATH, EXAMPLE_PATH)
             with open(CONFIG_PATH, "r", encoding="utf-8-sig") as _f:
                 CFG = json.load(_f)
             print(T("[info] 未找到 config.json，已用 config/config.example.json 自动生成默认配置。"))
@@ -225,6 +262,8 @@ except FileNotFoundError:
 except Exception as e:
     # 解析失败也自愈：备份坏文件、再从示例重建。
     # 否则 config.json 一旦被写成半截，管理器就再也打不开了。
+    if PLATFORM.IS_MAC:
+        _fatal(T("config.json 解析失败：%s\n%s") % (CONFIG_PATH, e))
     _bad = "%s.bad-%s" % (CONFIG_PATH, time.strftime("%Y%m%d-%H%M%S"))
     try:
         shutil.move(CONFIG_PATH, _bad)
@@ -263,14 +302,14 @@ except Exception as e:
 HOME = os.path.expanduser("~")
 # <self> = 本文件（dsh_manager.pyw）所在目录 = 整个管理器/离线包根目录。
 # 离线包用它做占位符，就能整目录搬家用（拷到 U 盘、换盘符都不会断链）。
-INSTALL_BASE = os.path.expanduser(
-    str(CFG.get("install_base", "<home>"))
-    .replace("<self>", BASE_DIR).replace("<home>", HOME))
+INSTALL_BASE = PLATFORM.config_base(CFG)
 
 # <npm_global> 解析一次（定位全局 dsh 的 lib/bin.js）
 def _probe_npm_global():
     """探测 npm 全局包目录，优先返回**真正装着 @deepseek-ai/dsh** 的那个。
     （直接信 npm root -g 有坑：它可能命中被 PATH 污染的其它 node，或压根探测不到。）"""
+    if PLATFORM.IS_MAC:
+        return PLATFORM.probe_npm_global()
     # 1) 静态默认位置优先 —— 完全不起子进程。
     #    （关键：pythonw 无控制台时，npm.cmd 会派生 node 孙进程继承管道，
     #     即使 timeout 杀掉子进程，读管道仍会永久阻塞 → 管理器卡死在出窗口前。）
@@ -320,11 +359,7 @@ def resolve(p):
     """把 <base>/<home>/<npm_global>/<self> 占位符替换成实际路径；None 原样返回。"""
     if p is None or not isinstance(p, str):
         return p
-    p = p.replace("<self>", BASE_DIR)
-    p = p.replace("<base>", INSTALL_BASE).replace("<home>", HOME)
-    if "<npm_global>" in p:
-        p = p.replace("<npm_global>", NPM_GLOBAL or "")
-    return p
+    return PLATFORM.resolve_path(p, INSTALL_BASE, HOME, BASE_DIR, NPM_GLOBAL)
 
 ICON_PATH = resolve(CFG.get("icon", "assets/dsh-icon.ico"))
 if ICON_PATH and not os.path.isabs(ICON_PATH):
@@ -635,6 +670,14 @@ def _pid_alive(pid):
     查不到（tasklist 非 0 返回，例如"无匹配任务"或没有权限）= 认为不存在。
     这样判"死"是安全的：_clean_stale_lock 还有 _holder_is_this_slot() 兜底，
     命令行核对失败时会保守地保留锁，不会因为这里判死就误删有效锁。"""
+    if PLATFORM.IS_MAC:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
     try:
         rc, out, _ = run_capture(["tasklist", "/FI", "PID eq %d" % pid, "/FO", "CSV", "/NH"])
     except Exception:
@@ -680,20 +723,9 @@ def _clean_stale_lock(key):
 
 
 def _holder_is_this_slot(key, pid):
-    """锁的持有者是本槽的 dsh 吗？用命令行签名核对。
-    dsh_kill 不可用/查询失败时一律判为"是"，宁可漏清也不误删。
-    commandline 偶发为空（CIM 未返回）时降级为 node 进程判定，避免误判「非本槽」
-    而漏清陈旧 lock、卡住下次启动。"""
-    if dsh_kill is None:
-        return True
-    try:
-        cmd = (dsh_kill._node_map() or {}).get(int(pid), "")
-        if SIG[key](cmd):
-            return True
-        # commandline 取空 -> 降级：确为 node 进程则视为本槽 dsh
-        return dsh_kill._is_node_exe(pid)
-    except Exception:
-        return True
+    # Unknown identity is insufficient evidence to remove an active lock.
+    process = SLOT_PROCESS.process_info(pid)
+    return process is None or SLOT_PROCESS.process_matches(pid, VC[key].get("bin_js"))
 
 def _build_cmd(key):
     cfg = VC[key]
@@ -773,7 +805,7 @@ def _bat_text_start(key, cfg, root):
     #    用户要的是「删了管理器，dsh 照样自己跑」，不是每次启动都被念一句。
     #    说明放在下面的 REM 里，文件自己会解释。
     L.append('if exist "%PRECHK_PY%" if exist "%PRECHK%" (')
-    L.append('  "%%PRECHK_PY%%" "%%PRECHK%%" --port %s --precheck-start %s' % (port, key))
+    L.append('  "%%PRECHK_PY%%" "%%PRECHK%%" --port %s --precheck-start %s --entrypoint "%s"' % (port, key, binjs))
     L.append("  if errorlevel 1 goto :eof")
     L.append(")")
     L.append("REM 预检脚本不存在时（例如 dsh-tm 管理器已卸载）静默跳过，直接启动 —— dsh 本身不依赖管理器。")
@@ -819,7 +851,7 @@ def _bat_text_kill(key, cfg, root):
     L.append("  goto :eof")
     L.append(")")
     L.append('echo [kill-%PORT%] 先查询端口 %PORT% 的占用者（不会立即杀，会先告诉你是谁）...')
-    L.append('"%PY%" "%KILL%" --port %PORT%')
+    L.append('"%%PY%%" "%%KILL%%" --port %%PORT%% --entrypoint "%s"' % cfg.get("bin_js", ""))
     L.append("endlocal")
     return "\r\n".join(L) + "\r\n"
 
@@ -922,6 +954,20 @@ def _rebuild_bats(keys=None, only_missing=False):
     only_missing=True → **只补缺失的文件**：已存在的 bat 一律跳过，既不备份
                         也不覆盖。槽体检修复和保留原端口的接回使用这个模式。
     """
+    if PLATFORM.IS_MAC:
+        made, failed, skipped = [], [], []
+        for key in (SLOT_KEYS if keys is None else keys):
+            cfg = VC.get(key)
+            root = _version_root(cfg) if cfg else ""
+            if not root:
+                skipped.append(key)
+                continue
+            try:
+                made.extend(PLATFORM.write_slot_launchers(root, cfg, only_missing=only_missing))
+            except (OSError, ValueError) as exc:
+                failed.append("%s: %s" % (key, exc))
+        return made, failed, skipped
+
     stamp = time.strftime("%Y%m%d-%H%M%S")
     made, failed, skipped = [], [], []
     for key in (keys if keys is not None else SLOT_KEYS):
@@ -987,91 +1033,16 @@ def gen_bats():
 
 def start_one(key):
     cfg = VC[key]
-    if proc_alive(procs[key]):
-        log(T("[%s] 启动忽略：已在运行 pid=%s") % (key, procs[key].pid)); return
+    if proc_alive(procs.get(key)) or _dsh_pid_on_port(key):
+        return
     if port_open(cfg["port"]):
-        # 端口被占用：先说清「是谁」再决定动作，避免误伤别家程序。
-        if dsh_kill is None:
-            hint = (T("端口 %d 被占用，但无法识别占用者（dsh_kill 未加载）。\n"
-                    "请手动关闭占用程序，或改 config.json 里该版本的 port 后重启管理器。") % cfg["port"])
-            log(T("[%s] 启动失败：%s") % (key, hint))
-            try:
-                messagebox.showwarning(T("端口被占用"), "[%s]\n%s" % (key, hint))
-            except Exception:
-                pass
-            return
-        owners, text = dsh_kill.format_port_owners(cfg["port"])
-        dsh_o = [o for o in owners if o["kind"] in ("dsh", "dsh-ambiguous")]
-        other_o = [o for o in owners if o["kind"] not in ("dsh", "dsh-ambiguous")]
-        if other_o:
-            # 非 dsh 程序占了端口：绝不自动结束，给详细提示 + 不启动
-            hint = (text + T("\n\n这不是 dsh 进程。为避免影响其它程序，管理器不会自动结束它。\n"
-                    "请手动关闭占用程序，或修改 config.json 里该版本的 port 后重启管理器。"))
-            log(T("[%s] 启动失败：端口被非 dsh 程序占用 ->\n%s") % (key, text))
-            try:
-                messagebox.showwarning(T("端口被占用（非 dsh 程序）"), "[%s]\n%s" % (key, hint))
-            except Exception:
-                pass
-            return
-        # 占用者是自家 dsh（旧实例 / 外部用 bat 拉起）：提示后清理再启动
-        log(T("[%s] 端口被自家 dsh 占用，准备先清理再启动 ->\n%s") % (key, text))
-        try:
-            ok = messagebox.askyesno(T("端口被你的 dsh 占用"),
-                T("[%s]\n%s\n\n是否结束该 dsh 进程并启动新实例？") % (key, text))
-        except Exception:
-            ok = True  # GUI 不可用则默认继续（等价于原行为：直接清掉重启）
-        if not ok:
-            log(T("[%s] 用户取消：保留现有 dsh，不启动新实例。") % key)
-            return
-        kill_one(key)
-        # 等端口释放（最多 ~6s），再走下面的启动逻辑
-        for _ in range(12):
-            if not port_open(cfg["port"]):
-                break
-            time.sleep(0.5)
-    env = None
-    if cfg["dsh_home"]:
-        env = {**os.environ, "DSH_HOME": cfg["dsh_home"]}
-        # --- TEMP 隔离：只注入给本版本的子进程，不动系统/用户级环境变量 ---
-        td = (cfg.get("temp_dir") or "").strip()
-        if td:
-            td = resolve(td)
-            try:
-                os.makedirs(td, exist_ok=True)
-                env["TEMP"] = td
-                env["TMP"] = td
-                log(T("[%s] TEMP 已隔离 -> %s") % (key, td))
-            except OSError as e:
-                # 建不出来就退回继承，绝不因此拦住启动
-                log(T("[%s] 警告：TEMP 目录不可用（%s），退回继承默认 TEMP") % (key, e))
-        # -------------------------------------------------------------------
-        _clean_stale_lock(key)
-        log(T("[%s] 启动 env: DSH_HOME=%s TEMP=%s")
-            % (key, cfg["dsh_home"], env.get("TEMP", T("(继承)"))))
-    # 入口 URL 的扫描与 dsh_home 无关（见 VC 里的说明）：每个槽都布防，抓到就用。
-    auth_urls[key] = None
-    _scan_pos[key] = os.path.getsize(LOG_FILE) if LOG_FILE and os.path.exists(LOG_FILE) else 0
-    cmd = _build_cmd(key)
-    log("[%s] START: %s" % (key, " ".join(cmd)))
+        messagebox.showwarning(T("端口被占用"),
+                               T("无法启动 %s：端口 %d 已被占用。") % (key, cfg["port"]))
+        return
     try:
-        p = subprocess.Popen(cmd, env=env, stdout=LOG_FH, stderr=subprocess.STDOUT,
-                             creationflags=CREATE_NO_WINDOW)
-        procs[key] = p
-        log(T("[%s] 已启动 pid=%s (port %d)") % (key, p.pid, cfg["port"]))
-    except FileNotFoundError as e:
-        log(T("[%s] 启动失败（找不到可执行文件）：%s") % (key, e))
-        log(T("[%s] 自检：node_exe=%r 存在=%s | bin_js=%r 存在=%s（不存在说明该版本没装好，重新安装该槽）")
-            % (key, cfg["node_exe"], os.path.exists(cfg["node_exe"]),
-               cfg["bin_js"], os.path.exists(cfg["bin_js"])))
-        # 必须弹框：pythonw 没有控制台，只写日志的话用户点了「启动」看着像没反应。
-        _notify_start_failure(key, T("找不到可执行文件：%s") % e,
-                              T("node_exe：%s（存在=%s）\nbin_js：%s（存在=%s）\n\n"
-                              "该版本可能没装好，或路径变了。修好 config.json 后重试。")
-                              % (cfg["node_exe"], os.path.exists(cfg["node_exe"]),
-                                 cfg["bin_js"], os.path.exists(cfg["bin_js"])))
-    except Exception as e:
-        log(T("[%s] 启动失败：%s") % (key, e))
-        _notify_start_failure(key, "%s" % e, str(e))
+        _spawn_slot_silent(key)
+    except (OSError, ValueError) as exc:
+        _notify_start_failure(key, str(exc), T("请运行槽体检。"))
 
 def _notify_start_failure(key, brief, detail):
     """启动失败时弹框（pythonw 下这是用户唯一的反馈渠道）。
@@ -1088,47 +1059,13 @@ def _kill_pid_tree(pid, tag):
     log("[%s] taskkill pid=%d rc=%d %r" % (tag, pid, rc, out.strip()))
 
 def _pids_on_port(port):
-    """端口 -> LISTENING 的 PID。必须按列解析：
-    子串匹配 ":3080" 会同时命中 :30800、:30801，也会命中远端地址列。"""
-    pids = set()
-    try:
-        _rc, out, _ = run_capture(["netstat", "-ano"])
-        for line in out.splitlines():
-            if "LISTENING" not in line:
-                continue
-            parts = line.split()
-            if len(parts) < 5 or ":" not in parts[1]:
-                continue
-            try:
-                if int(parts[1].rsplit(":", 1)[-1]) != port:
-                    continue
-                pids.add(int(parts[-1]))
-            except ValueError:
-                pass
-    except Exception:
-        pass
-    return pids
+    _, listening = SLOT_PROCESS.slot_listeners(None, port)
+    return listening
 
 def _dsh_pid_on_port(key):
-    """返回占用本槽端口的 dsh PID；没有则返回 None。
-    用途：管理器重启后 procs 全空，用来识别「外部 / 上一会话启动的 dsh 仍在运行」，
-    从而显示「运行中」而非「外部占用」。判据 = 端口 LISTENING 且 PID 是 dsh 进程
-    （dsh_kill._looks_like_dsh：node + 命令行含 @deepseek-ai/dsh），覆盖绝对路径
-    与相对路径（桌面 dsh.bat）启动两种形态；「别的软件占了端口」不会误判成 dsh 在跑。"""
     cfg = VC[key]
-    if dsh_kill is None:
-        return None
-    # 用缓存版探测（node_map TTL 8s / pid_ports TTL 2s；CIM 实测一次 ~4s，
-    # TTL 必须大于它否则缓存永远过期）。外部 dsh 的识别最多延迟一个 TTL 窗口，
-    # 换来轮询不再每次跑 netstat + CIM。杀进程（kill_one/kill_all）走 dsh_kill
-    # 的无缓存路径，不受影响。
-    m = dsh_kill._node_map_cached()
-    pp = dsh_kill._pid_ports_cached()
-    for pid, ports in pp.items():
-        if cfg["port"] in ports and (dsh_kill._looks_like_dsh(m.get(pid, ""))
-                                     or dsh_kill._is_node_exe(pid)):
-            return pid
-    return None
+    listening, _ = SLOT_PROCESS.slot_listeners(cfg.get("bin_js"), cfg["port"])
+    return next(iter(listening), None)
 
 def _refresh_detect_cache(key):
     """杀完进程后**立刻**刷新该槽的端口探测缓存。
@@ -1159,34 +1096,16 @@ def _refresh_detect_cache(key):
 
 
 def kill_one(key, report=True):
-    """停止某版本：委托 dsh_kill 按「签名 + 端口」精准清理，
-    对外部拉起的孤儿进程也能清，且绝不误杀其它 app / 另一 dsh。
-
-    停止后**复查端口**：清理可能失败（进程没杀掉 / 权限不足 / 端口被别的程序
-    占着）。此时若静默返回，用户看到的是「点了停止，状态还是运行中」，只能自己
-    开任务管理器猜。复查逻辑见 _report_port_after_kill。
-    """
-    port = VC[key]["port"]
-    p = procs.get(key)
-    tracked = p.pid if (p is not None and p.poll() is None) else None
-    if dsh_kill is None:
-        # 降级：只杀本 app 跟踪的进程树（仍不误杀）
-        if tracked is not None:
-            log(T("[%s] 停止：dsh_kill 未加载，退化为杀 tracked 进程树 pid=%d") % (key, tracked))
-            _kill_pid_tree(tracked, key)
-        else:
-            log(T("[%s] 停止：dsh_kill 未加载且无 tracked 进程") % key)
+    cfg = VC[key]
+    tracked = procs.get(key)
+    count = SLOT_PROCESS.stop_slot(cfg.get("bin_js"), cfg["port"], tracked)
+    if not proc_alive(tracked):
         procs[key] = None
-        _refresh_detect_cache(key)
-        if report:
-            _report_port_after_kill(key, port, None)
-        return 0
-    killed = dsh_kill.kill_version(key, SIG[key], port, tracked_pid=tracked)
-    procs[key] = None
+        auth_urls[key] = None
     _refresh_detect_cache(key)
     if report:
-        _report_port_after_kill(key, port, killed)
-    return killed
+        _report_port_after_kill(key, cfg["port"], count)
+    return count
 
 def _report_port_after_kill(key, port, killed):
     """停止之后复查端口占用并告知用户。
@@ -1208,15 +1127,15 @@ def _report_port_after_kill(key, port, killed):
     except Exception as e:
         log(T("[%s] 停止后复查端口失败：%s") % (key, e))
         return
-    if not owners:
+    if not owners and not port_open(port):
         log(T("[%s] 停止完成：端口 %d 已释放%s")
             % (key, port, (T("（清理 %d 个进程）") % killed) if killed else ""))
         return
 
-    dsh_left = [o for o in owners if o["kind"] in ("dsh", "dsh-ambiguous")]
-    other_left = [o for o in owners if o["kind"] not in ("dsh", "dsh-ambiguous")]
+    owned_pid = _dsh_pid_on_port(key)
+    dsh_left = [o for o in owners if o["pid"] == owned_pid]
 
-    if dsh_left and not other_left:
+    if owned_pid:
         log(T("[%s] 停止后端口 %d 仍被自家 dsh 占用：%s")
             % (key, port, ", ".join("pid=%d" % o["pid"] for o in dsh_left)))
         try:
@@ -1352,23 +1271,11 @@ def start_all_slots():
     for k in keys:
         cfg = VC[k]
         try:
-            if proc_alive(procs.get(k)) or port_open(cfg["port"]):
-                # 已在跑（含外部/上一会话启动的）
-                if port_open(cfg["port"]):
-                    skipped.append(k)
-                    continue
-            # 端口被占但不是 dsh 在听 → 查是不是别家程序
-            if port_open(cfg["port"]):
-                owners = []
-                if dsh_kill is not None:
-                    try:
-                        owners, _t = dsh_kill.format_port_owners(cfg["port"])
-                    except Exception:
-                        owners = []
-                if not any(o.get("kind") in ("dsh", "dsh-ambiguous") for o in owners):
-                    blocked.append(T("%s（端口 %d 被非 dsh 程序占用）") % (k, cfg["port"]))
-                    continue
+            if proc_alive(procs.get(k)) or _dsh_pid_on_port(k):
                 skipped.append(k)
+                continue
+            if port_open(cfg["port"]):
+                blocked.append(T("%s（端口 %d 已被占用）") % (k, cfg["port"]))
                 continue
             _spawn_slot_silent(k)
             started.append(k)
@@ -1395,29 +1302,23 @@ def start_all_slots():
 
 
 def _spawn_slot_silent(key):
-    """不带任何弹框地拉起一个槽（供批量启动用）。
-
-    只做"能起就起"：不复用 start_one 的交互逻辑，避免批量时弹一堆窗。
-    失败直接抛异常，由调用方汇总。
-    """
     cfg = VC[key]
     cmd = _build_cmd(key)
-    env = os.environ.copy()
-    env["DSH_HOME"] = cfg["dsh_home"] or os.path.join(HOME, ".dsh")
-    td = cfg.get("temp_dir")
-    if td:
-        try:
-            os.makedirs(td, exist_ok=True)
-        except Exception:
-            pass
-        env["TEMP"] = td
-        env["TMP"] = td
-    flags = CREATE_NO_WINDOW | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    p = subprocess.Popen(cmd, cwd=BASE_DIR, env=env,
-                         stdin=subprocess.DEVNULL,
-                         stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL,
-                         creationflags=flags)
+    node = PLATFORM.resolve_node(cmd[0])
+    if not node:
+        raise FileNotFoundError(T("找不到可用的 Node.js：%s") % cmd[0])
+    if not os.path.isfile(cmd[1]):
+        raise FileNotFoundError(T("找不到 dsh 入口：%s") % cmd[1])
+    for field in ("dsh_home", "temp_dir"):
+        if cfg.get(field):
+            os.makedirs(cfg[field], exist_ok=True)
+    _clean_stale_lock(key)
+    env = PLATFORM.slot_env(dict(cfg, node_exe=node))
+    auth_urls[key] = None
+    launcher = [sys.executable, "--run-slot-supervisor"] if PLATFORM.FROZEN else None
+    p = SLOT_PROCESS.spawn_slot(node, cmd[1], cfg["port"], env=env,
+                               cwd=cfg.get("dsh_home") or BASE_DIR,
+                               output_path=LOG_FILE, extra_args=cmd[2:], launcher=launcher)
     procs[key] = p
     log(T("[%s] 已启动 pid=%s 端口=%d") % (key, p.pid, cfg["port"]))
 
@@ -1431,7 +1332,7 @@ def kill_all():
         for k in SLOT_KEYS:
             kill_one(k)
         return
-    dsh_kill.kill_all({k: {"sig": SIG[k], "port": VC[k]["port"]} for k in SLOT_KEYS},
+    dsh_kill.kill_all({k: {"entrypoint": VC[k]["bin_js"], "port": VC[k]["port"]} for k in SLOT_KEYS},
                       sig_any=SIG_ANY)
     for k in SLOT_KEYS:
         procs[k] = None
@@ -1460,6 +1361,15 @@ FIREFOX_CANDIDATES = [
 # 每槽 browser 字段 → (显示名, 候选 exe 列表)。
 # browser 也支持：写死 exe 绝对路径（用系统任何浏览器）；
 # 或写 "default" = 不指定浏览器，直接交给系统默认浏览器打开。
+if PLATFORM.IS_MAC:
+    def _mac_browser_candidates(name):
+        return [os.path.join(root, name + ".app")
+                for root in ("/Applications", os.path.expanduser("~/Applications"))]
+
+    CHROME_CANDIDATES = _mac_browser_candidates("Google Chrome")
+    EDGE_CANDIDATES = _mac_browser_candidates("Microsoft Edge")
+    FIREFOX_CANDIDATES = _mac_browser_candidates("Firefox")
+
 BROWSER_KNOWN = {
     "chrome":  ("Chrome",  CHROME_CANDIDATES),
     "edge":    ("Edge",    EDGE_CANDIDATES),
@@ -1513,43 +1423,9 @@ def _mask_span(offset, length):
 
 
 def _scan_slot(key):
-    """只处理【本槽端口】的入口行：把完整 URL 抓进内存，并把落盘的 token 就地等长掩码。
-    预留 128 字节重叠，避免 token 恰好被读块边界截断而漏掩。"""
-    if _scan_pos.get(key) is None or LOG_FH is None:
-        return
-    try:
-        sz = os.path.getsize(LOG_FILE)
-        if sz <= _scan_pos[key]:
-            return
-        start = _scan_pos[key]
-        blob_start = max(0, start - 128)
-        with open(LOG_FILE, "rb") as f:
-            f.seek(blob_start)
-            blob = f.read()
-        _scan_pos[key] = blob_start + len(blob)
-    except Exception:
-        return
-
-    marker = ("dsh web: http://127.0.0.1:%d" % VC[key]["port"]).encode()
-    pos = 0
-    while True:
-        i = blob.find(marker, pos)
-        if i < 0:
-            return
-        j = blob.find(b"\n", i)
-        line_end = j if j >= 0 else len(blob)
-        line = blob[i:line_end]
-        pos = line_end + 1
-        if auth_urls.get(key) is None:
-            m = re.search(rb"https?://\S+", line)
-            if m:
-                auth_urls[key] = m.group(0).decode("utf-8", "replace")
-                log(T("[%s] 已捕获入口 URL（日志里的 token 已就地隐去）") % key)
-        for tm in _TOKEN_BYTES_RE.finditer(line):
-            tok = tm.group(2)
-            if len(tok) <= 4:
-                continue
-            _mask_span(blob_start + i + tm.start(2) + 4, len(tok) - 4)
+    proc = procs.get(key)
+    if proc and proc.url:
+        auth_urls[key] = proc.url
 
 def _scrub_existing_log():
     """启动时对【已有】日志做一次全量就地掩码。
@@ -1610,13 +1486,16 @@ def open_browser(key):
         else:
             log(T("[%s] 本机没找到 %s，改由系统默认浏览器打开 %s") % (key, _b, url))
         try:
-            os.startfile(url)
+            _platform_open(url)
             log(T("[%s] 浏览器已启动（系统默认）") % key)
         except Exception as e:
             log(T("[%s] 系统默认浏览器打开失败：%s（请手动复制上面的 URL 到浏览器）") % (key, e))
         return
     log(T("[%s] 打开浏览器(%s) -> %s") % (key, cfg["browser"], url))
     try:
+        if PLATFORM.IS_MAC and exe.endswith(".app"):
+            subprocess.Popen(["/usr/bin/open", "-a", exe, url])
+            return
         subprocess.Popen([exe, url])                 # GUI 浏览器绝不能加 CREATE_NO_WINDOW
         log(T("[%s] 浏览器已启动") % key)
     except Exception as e:
@@ -1841,15 +1720,16 @@ def _activate_existing_instance():
 # 2026-10-31 实测：连着 CreateMutexW 两个全新名字，第二次读到的都是 183，
 # 于是「本实例退出」被误触发 —— 症状是双击管理器，窗口一闪不出，日志里却写着
 # 「已有实例在运行」。改完后新建返回 0、重复返回 183，行为正确。
-_k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-_mutex_h = _k32.CreateMutexW(
-    None, False, "DeepSeek.DSH.Manager.SingleInstance")
-if ctypes.get_last_error() == 183:   # ERROR_ALREADY_EXISTS
-    if _activate_existing_instance():
-        log(T("已有实例在运行：已激活其窗口，本实例退出（单实例保护）"))
-    else:
-        log(T("已有实例在运行但未找到其窗口，本实例退出（单实例保护）"))
-    sys.exit(0)
+if PLATFORM.IS_WINDOWS:
+    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _mutex_h = _k32.CreateMutexW(
+        None, False, "DeepSeek.DSH.Manager.SingleInstance")
+    if ctypes.get_last_error() == 183:   # ERROR_ALREADY_EXISTS
+        if _activate_existing_instance():
+            log(T("已有实例在运行：已激活其窗口，本实例退出（单实例保护）"))
+        else:
+            log(T("已有实例在运行但未找到其窗口，本实例退出（单实例保护）"))
+        sys.exit(0)
 
 # ── 任务栏固定项图标自愈 ──────────────────────────────────────────────────
 # 「右键运行中窗口 → 固定到任务栏」生成的固定快捷方式不带 IconLocation，
@@ -1959,7 +1839,8 @@ def _heal_pinned_shortcut_icon():
         except Exception:
             pass
 
-_heal_pinned_shortcut_icon()
+if PLATFORM.IS_WINDOWS:
+    _heal_pinned_shortcut_icon()
 
 # 显式 AppID 已停用：本机 ShellLink 的 COM 属性存储接口不可用（QI 恒 E_NOINTERFACE），
 # 固定 lnk 上无法写 AppID 属性；保留显式 AppID 反而使运行窗口与固定按钮分家
@@ -2022,6 +1903,8 @@ def _top_hwnd(tk_window):
 # 否则 Tk 会先用它自带的默认图标（羽毛）把窗口映射出来，Windows 任务栏就把它
 # 缓存住了；事后 WM_SETICON 只能改标题栏，任务栏仍是羽毛，直到重启资源管理器
 # 才刷新（实测踩过）。见 _icon_handles / 下面这段的注释。
+if PLATFORM.IS_MAC and tk.TkVersion < 8.6:
+    _fatal(T("macOS 需要 Tk 8.6 或更新版本。请使用成品包或安装带新版 Tk 的 Python。"))
 try:
     root = tk.Tk()
 except Exception as _e:
@@ -2281,7 +2164,8 @@ def _force_taskbar_icon():
     except Exception as e:
         log(T("强制设置任务栏图标失败：%s") % e)
 
-_force_taskbar_icon()
+if PLATFORM.IS_WINDOWS:
+    _force_taskbar_icon()
 
 def _make_taskbar_window(win):
     """让 `overrideredirect` 的无边框窗口**仍然出现在任务栏**里，2026-11-14。
@@ -2416,14 +2300,14 @@ def _show_env_report():
         return
     try:
         # pythonw 没有控制台，子进程输出重定向到临时文件再读
-        tmp = os.path.join(BASE_DIR, "temp", "env-check.out")
+        tmp = os.path.join(os.path.dirname(CONFIG_PATH), "temp", "env-check.out")
         os.makedirs(os.path.dirname(tmp), exist_ok=True)
         import subprocess as _sp
         with open(tmp, "wb") as out:
             # check-env.py 是独立进程，把当前语言传过去，否则它只会输出中文
             _env = dict(os.environ)
             _env["DSH_LANG"] = I18N.lang()
-            rc = _sp.run([sys.executable, script], stdout=out,
+            rc = _sp.run([sys.executable, "--check-env" if PLATFORM.FROZEN else script], stdout=out,
                          stderr=_sp.STDOUT, env=_env,
                          creationflags=CREATE_NO_WINDOW).returncode
         raw = open(tmp, "rb").read().decode("utf-8", "replace")
@@ -2449,6 +2333,13 @@ def _show_env_report():
 
 # ── 三个版本卡片（平等等宽，中间用竖向分隔线分开）─────────────
 # 网格：每槽占 1 列，槽与槽之间插 1 列竖线；卡片列 weight=1 → 等宽。
+def _platform_open(path):
+    if PLATFORM.IS_MAC:
+        subprocess.Popen(["/usr/bin/open", path], stderr=subprocess.DEVNULL)
+    else:
+        os.startfile(path)
+
+
 def _open_dir(path, what=T("数据目录")):
     """用资源管理器打开目录。目录不存在 / 打开失败都要显式报错
     （pythonw 无控制台，只写日志用户看不见，所以同时弹框）。"""
@@ -2458,7 +2349,7 @@ def _open_dir(path, what=T("数据目录")):
             messagebox.showerror(T("DSH 版本管理器"),
                                  T("%s不存在：\n%s\n\n可能尚未初始化（先启动一次 dsh）。") % (what, path))
             return
-        os.startfile(path)          # Windows：交给资源管理器打开文件夹
+        _platform_open(path)          # Windows：交给资源管理器打开文件夹
         log(T("已打开%s：%s") % (what, path))
     except Exception as e:
         log(T("打开%s失败 %s：%s") % (what, path, e))
@@ -3268,15 +3159,15 @@ def _health_dialog():
                 return
             key = fixable[i]
             root_ = _version_root(VC[key])
-            pin_node = str(VC[key].get("node_exe") or "").strip().lower() in ("node", "node.exe")
+            pin_node = (not PLATFORM.IS_MAC and str(VC[key].get("node_exe") or "")
+                        .strip().lower() in ("node", "node.exe"))
             if pin_node and (proc_alive(procs.get(key)) or port_open(VC[key]["port"])):
                 messagebox.showwarning(T("修复未完成"), T("请先停止该槽，再固定当前 Node.js。"))
                 return
             # 只读列出这个槽缺哪几件 bat（判据与 _bats_missing 一致）：
             # 确认框必须说清「到底会生成什么」，不能让用户点完才发现多了文件。
-            _need = ["dsh.bat", "dsh-cli.bat"]
-            if VC[key].get("port"):
-                _need.append("kill-%s.bat" % VC[key]["port"])
+            _need = [os.path.basename(path) for path in PLATFORM.slot_launcher_paths(
+                root_, VC[key].get("port")).values()]
             _missing = [n for n in _need
                         if not os.path.isfile(os.path.join(root_, n))]
             _what = "、".join(_missing) or "—"
@@ -4099,14 +3990,20 @@ def _relaunch_self():
         # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP：子进程与当前进程脱钩，
         # 我们随后 destroy 自己不会把它一起带走。
         flags = 0
-        if os.name == "nt":
+        if PLATFORM.IS_WINDOWS:
             flags = 0x00000008 | 0x00000200
-        subprocess.Popen([pyw, entry], cwd=BASE_DIR,
+        command = [pyw] if PLATFORM.FROZEN else [pyw, entry]
+        if PLATFORM.IS_MAC:
+            command += ["--config", CONFIG_PATH]
+            fcntl.flock(_lock_fd, fcntl.LOCK_UN)
+        subprocess.Popen(command, cwd=BASE_DIR,
                          creationflags=flags, close_fds=True,
                          stdin=subprocess.DEVNULL,
                          stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)
     except Exception as e:
+        if PLATFORM.IS_MAC:
+            fcntl.flock(_lock_fd, fcntl.LOCK_EX)
         return False, T("启动新实例失败：%s") % e
     return True, ""
 
@@ -4144,9 +4041,7 @@ def _reload_config_after_change(new_keys=None):
         if len(new_versions) > MAX_SLOTS:
             return False, T("config.json 里的槽数超过上限 %d") % MAX_SLOTS
         CFG = new_cfg
-        INSTALL_BASE = os.path.expanduser(
-            str(CFG.get("install_base", "<home>"))
-            .replace("<self>", BASE_DIR).replace("<home>", HOME))
+        INSTALL_BASE = PLATFORM.config_base(CFG)
         VERSIONS = new_versions
         SLOT_KEYS = list(VERSIONS.keys())
         UI_CFG = CFG.get("ui") if isinstance(CFG.get("ui"), dict) else {}
@@ -5086,29 +4981,24 @@ def _slot_brief(key):
     """一行摘要：v1（dshV1，端口 4080，实装 0.1.5-rc.2）· 运行中"""
     cfg = VC[key]
     ver = INSTALLED.get(key) or T("未知")
-    running = port_open(cfg["port"]) or proc_alive(procs.get(key))
+    running = bool(_dsh_pid_on_port(key)) or proc_alive(procs.get(key))
     return T("%s（%s，端口 %d，实装 %s）· %s") % (
         key, cfg["label"], cfg["port"], ver, T("运行中") if running else T("已停止"))
 
 
 def _stop_for_uninstall(key, port):
-    """卸载前停掉该槽。**在后台线程里被调用** —— 只做进程操作，不碰任何 tk 控件。
-
-    走 dsh_kill 的「签名 + 端口」门控：端口若被非 dsh 程序占着，它会拒绝杀
-    （那正是我们想要的 —— 卸载不该顺手结束别人的软件）。"""
-    p = procs.get(key)
-    tracked = p.pid if (p is not None and p.poll() is None) else None
-    if dsh_kill is not None:
-        dsh_kill.kill_version(key, SIG[key], port, tracked_pid=tracked)
-    elif tracked is not None:
-        _kill_pid_tree(tracked, key)
-    procs[key] = None
-    # 等端口真正释放（最多 10 秒）：进程刚收到终止信号时文件可能还被占用，
-    # 立刻删 node_modules 会撞 "另一个程序正在使用此文件"。
+    cfg = VC[key]
+    tracked = procs.get(key)
+    SLOT_PROCESS.stop_slot(cfg.get("bin_js"), port, tracked)
     for _ in range(20):
-        if not port_open(port):
-            return
-        time.sleep(0.5)
+        owned, listeners = SLOT_PROCESS.slot_listeners(cfg.get("bin_js"), port)
+        unknown = any(SLOT_PROCESS.process_info(pid) is None for pid in listeners)
+        if (not owned and not unknown and not proc_alive(tracked)
+                and (listeners or not port_open(port))):
+            procs[key] = None
+            return True
+        time.sleep(0.25)
+    raise RuntimeError(T("无法确认槽 %s 已停止。") % key)
 
 
 def uninstall_versions_dialog():
@@ -5334,23 +5224,11 @@ def _do_detach(keys):
 
 
 def _bats_missing(key):
-    """该槽的三件 bat 有没有缺失（只判存在，不改任何东西）。
-
-    用途：接回后决定要不要重建 bat —— 缺了就补（否则双击 dsh.bat 起不来），
-    齐着就不动（用户可能自己加过环境变量，别覆盖）。
-    """
-    try:
-        cfg = VC.get(key) or {}
-        root = _version_root(cfg)
-        port = cfg.get("port")
-    except Exception:
-        return False
-    if not root or not os.path.isdir(root):
-        return False
-    need = ["dsh.bat", "dsh-cli.bat"]
-    if port:
-        need.append("kill-%s.bat" % port)
-    return any(not os.path.isfile(os.path.join(root, n)) for n in need)
+    cfg = VC.get(key) or {}
+    root = _version_root(cfg)
+    return bool(root) and any(not os.path.isfile(path)
+                              for path in PLATFORM.slot_launcher_paths(
+                                  root, cfg.get("port")).values())
 
 
 def _do_readd(roots, on_done=None):
@@ -5951,7 +5829,8 @@ def _start_capability_check():
 
     root.after(300, _poll)
 
-_start_capability_check()
+if PLATFORM.IS_WINDOWS:
+    _start_capability_check()
 
 # 历史日志里可能残留旧版本写入的 token（子进程写的入口行之外，还有管理器自己写的
 # "打开浏览器 -> ...?token=..." 之类）：启动时全量就地掩码一次。
@@ -5985,7 +5864,8 @@ root.columnconfigure(0, weight=1)
 root.rowconfigure(2, weight=1)   # 日志区占满剩余高度（row 2 = 日志；操作按钮已收进「设置」）
 root.update_idletasks()
 # 窗口已 realize：再补设一次图标（双保险——就算 Tk 在 realize 时动过图标也会被这里盖回海豚）
-_force_taskbar_icon()
+if PLATFORM.IS_WINDOWS:
+    _force_taskbar_icon()
 
 threading.Thread(target=_detect_worker, daemon=True, name="dsh-detect").start()
 
@@ -7118,7 +6998,7 @@ def _open_project_page():
         webbrowser.open(PROJECT_URL)
     except Exception:
         try:
-            os.startfile(PROJECT_URL)
+            _platform_open(PROJECT_URL)
         except Exception as e:
             messagebox.showinfo(T("项目主页"), T("打不开浏览器，请手动访问：\n%s\n\n(%s)")
                                 % (PROJECT_URL, e))
@@ -7139,7 +7019,7 @@ def _open_user_guide():
         if os.path.exists(_p):
             p = _p
             try:
-                os.startfile(p)
+                _platform_open(p)
                 return
             except Exception:
                 pass
@@ -7351,8 +7231,12 @@ def move_install_root_dialog():
         target = os.path.normpath(target)
         slot_names = []
         for k in SLOT_KEYS:
-            nm = os.path.basename(os.path.normpath(_version_root(VC[k]) or ""))
-            if nm:
+            source = _version_root(VC[k])
+            if not source:
+                continue
+            nm = os.path.basename(os.path.normpath(source))
+            expected = os.path.join(INSTALL_BASE, "dsh-versions", nm)
+            if os.path.realpath(source) == os.path.realpath(expected):
                 slot_names.append(nm)
         plan = MV.plan_move(INSTALL_BASE, target, slot_names)
         if not plan["ok"]:
@@ -7402,7 +7286,13 @@ def _do_move_root(MV, plan):
             # 三件 bat 里写的是**绝对路径**，搬完必须重写 —— 否则双击 dsh.bat
             # 仍然指向旧位置（2026-11-14 补：之前搬完没重写，只有管理器里能启动）。
             try:
-                made, failed, skipped = _rebuild_bats()
+                if PLATFORM.IS_MAC:
+                    _moved = {slot["name"] for slot in plan["slots"]}
+                    keys = [key for key in SLOT_KEYS if os.path.basename(
+                        _version_root(VC[key]) or "") in _moved]
+                    made, failed, skipped = _rebuild_bats(keys=keys, only_missing=True)
+                else:
+                    made, failed, skipped = _rebuild_bats()
                 log(T("[移动] 已按新位置重写 %d 个 bat（失败 %d，跳过 %d）")
                     % (len(made), len(failed), len(skipped)))
             except Exception as e:
@@ -7489,8 +7379,8 @@ def _clear_logs_dialog(parent=None):
 
 def _open_log_folder(parent=None):
     try:
-        if os.name == "nt":
-            os.startfile(os.path.dirname(LOG_FILE))
+        if PLATFORM.IS_WINDOWS or PLATFORM.IS_MAC:
+            _platform_open(os.path.dirname(LOG_FILE))
         else:
             messagebox.showinfo(T("日志位置"), LOG_FILE, parent=parent)
     except Exception as e:
@@ -8296,7 +8186,7 @@ def _log_fresh_env():
     """零槽启动时把环境体检摘要写进日志（界面不打扰，想看滚日志即可）。"""
     try:
         import subprocess as _sp
-        tmp = os.path.join(BASE_DIR, "temp", "env-check.out")
+        tmp = os.path.join(os.path.dirname(CONFIG_PATH), "temp", "env-check.out")
         os.makedirs(os.path.dirname(tmp), exist_ok=True)
         with open(tmp, "wb") as out:
             # 语言必须传过去：下面按 T("[注意]") / T("[缺失]") 过滤行，
@@ -8304,6 +8194,7 @@ def _log_fresh_env():
             _env = dict(os.environ)
             _env["DSH_LANG"] = I18N.lang()
             rc = _sp.run([sys.executable,
+                          "--check-env" if PLATFORM.FROZEN else
                           os.path.join(BASE_DIR, "scripts", "check-env.py")],
                          stdout=out, stderr=_sp.STDOUT, env=_env,
                          creationflags=CREATE_NO_WINDOW).returncode
