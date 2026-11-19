@@ -16,11 +16,13 @@
    npm 全局安装保持可用。用户想撤销，删掉新槽即可，原装毫发无损。
 3. **失败要说人话**：每一步的失败都带原因，不留"未知错误"。
 """
+import filecmp
 import json
 import os
 import shutil
 import subprocess
 import threading
+import tempfile
 import time
 from dsh_i18n import T
 
@@ -122,6 +124,17 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
         return (False, "", T("槽位已满（%d/%d），请先用「设置 → 版本管理 → 卸载 / 移出管理」卸掉不用的槽")
                 % (len(existing), max_slots))
 
+    if slot_key in existing:
+        return (False, "", T("槽位已被占用，请重新扫描后再纳入。"))
+
+    node_exe_source = adopt_mod.source_node_exe(node_modules) or node_exe_source
+    if not node_exe_source:
+        node_exe_source = _pick_node_exe(existing, install_base)
+    if not node_exe_source or node_exe_source.lower() in ("node", "node.exe"):
+        node_exe_source = shutil.which(node_exe_source or "node") or ""
+    if not node_exe_source:
+        return (False, "", T("这份安装没有自带 Node.js，管理器也没有找到可复制的运行时。"))
+
     # 注意：不要把 backup_root 当 temp_root 传下去 —— 那是「用户数据备份目录」，
     # 临时目录有自己的规范位置（temp_root，缺省 <槽根>/dsh-temp）。
     plan = adopt_mod.adopt_plan(node_modules, versions_root, slot_key,
@@ -170,14 +183,11 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
 
     # node 运行时：源可能是文件或目录；找不到就别硬来——没有独立 node 的槽
     # 与既有槽不同构，换版本时会有 ABI 风险，所以这里当硬性要求。
-    if node_exe_source:
-        p.on_step(T("复制 node 运行时…"))
-        node_exe, err = adopt_mod.copy_node_exe(node_exe_source, root)
-        if not node_exe:
-            return (False, "", err)
-    else:
-        node_exe = ""
-        p.on_step(T("未找到可复用的 node 运行时，本槽将使用系统 node（换版本时留意 ABI）…"))
+    p.on_step(T("复制 node 运行时…"))
+    node_exe, err = adopt_mod.copy_node_exe(node_exe_source, root)
+    if not node_exe:
+        _cleanup_partial(root, versions_root)
+        return (False, "", err)
 
     # ── 3) 先建数据目录、把备份的用户数据复制进来，再复制几百 MB 程序 ──────
     # 顺序是刻意的（2026-10-31 调整）：用户数据这一步最容易失败 —— 旧 dsh 没退
@@ -279,7 +289,10 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
         node_exe=node_exe or "node", browser=browser, install_base=install_base)
     try:
         cfg = read_config(config_path)
-        cfg.setdefault("versions", {})[plan["slot_key"]] = slot_cfg
+        slots = cfg.setdefault("versions", {})
+        if plan["slot_key"] in slots or len(slots) >= max_slots:
+            return (False, "", T("槽位已被占用，请重新扫描后再纳入。"))
+        slots[plan["slot_key"]] = slot_cfg
         write_config_atomic(config_path, cfg)
     except Exception as e:
         _cleanup_partial(root, versions_root)
@@ -546,11 +559,12 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
     # 实测缺陷：原先只把别槽路径填进 config，磁盘上并没有 node 目录 ——
     # 新槽于是缺 node/（与其它槽不一致），也拿不到隔离收益。
     node_exe = ""
-    node_src = _pick_node_exe(existing, install_base, os.path.expanduser("~"))
+    node_src = _pick_node_exe(existing, install_base, os.path.expanduser("~"), with_npm=True)
     if node_src and os.path.isfile(node_src):
         p.on_step(T("复制 node 运行时到本槽（每槽独立，ABI 稳定）…"))
         node_exe, nerr = adopt_mod.copy_node_exe(node_src, root)
         if not node_exe:
+            _drop_partial_install(root, dsh_home, versions_root)
             return (False, "", T("复制 node 运行时失败：%s") % nerr)
     else:
         # 首槽 / 既有槽都没自带 node 时才退回系统 node，并说清代价，
@@ -722,7 +736,8 @@ def _gen_slot_bats(adopt_mod, slot_cfg, root, slot_key, install_base=""):
         return ""
     try:
         # 只抽取三个纯函数，不执行主程序（它有 GUI 副作用）
-        src = open(mgr, encoding="utf-8").read()
+        with open(mgr, encoding="utf-8") as handle:
+            src = handle.read()
         tree = __import__("ast").parse(src)
         keep = [n for n in tree.body
                 if isinstance(n, __import__("ast").FunctionDef)
@@ -931,29 +946,112 @@ def bundled_node_exe():
     return exe if os.path.isfile(exe) else ""
 
 
-def _pick_node_exe(existing_slots, base="", home=""):
-    """挑一个 node.exe 给新槽：优先用既有槽里已验证能跑的，其次用包里自带的。
-
-    为什么「已有槽」优先于「包内」：新槽与老槽同构（同一份 node、同一 ABI），
-    换版本时 node-pty 这类原生模块才不会因为 ABI 不匹配崩掉。包内那份是
-    **首槽 / 所有槽的 node 都坏了**时的兜底 —— 它保证新电脑上至少有一条活路。
-    两者都没有才退回裸 `"node"` 交给 PATH（最后兜底，调用方会提示代价）。
-
-    `base`/`home` 用来展开占位符；不传也能工作（只认绝对路径的老配置），
-    但那样占位符配置会被漏掉 —— 调用方应当传。
-    """
+def _pick_node_exe(existing_slots, base="", home="", with_npm=False):
+    """Find a copyable Node runtime in registered slots, the bundle, or PATH."""
     if isinstance(existing_slots, (list, tuple)):
-        # 兼容传 list 的旧调用方：以前这里直接 .items()，会抛
-        # 'list' object has no attribute 'items'，node 来源静默退回兜底。
-        existing_slots = {str(_i): _v for _i, _v in enumerate(existing_slots)}
-    for _k, v in (existing_slots or {}).items():
-        p = _expand_slot_path((v or {}).get("node_exe"), base, home)
-        if p and os.path.isfile(p):
-            return p
-    bundled = bundled_node_exe()
-    if bundled:
-        return bundled
-    return "node"       # 兜底：交给脚本/系统去解析
+        existing_slots = dict(enumerate(existing_slots))
+    candidates = [_expand_slot_path((slot or {}).get("node_exe"), base, home)
+                  for slot in (existing_slots or {}).values()]
+    candidates.extend((bundled_node_exe(), shutil.which("node")))
+    available = [os.path.abspath(path) for path in candidates if path and os.path.isfile(path)]
+    if with_npm:
+        usable = next((path for path in available if _npm_cli(path)[1]), "")
+        if usable:
+            return usable
+    return available[0] if available else "node"
+
+
+def _publish_runtime_file(source, destination):
+    """Exclusive create also works on portable drives without hard-link support."""
+    with open(source, "rb") as incoming:
+        outgoing = open(destination, "xb")
+        try:
+            with outgoing:
+                shutil.copyfileobj(incoming, outgoing)
+                outgoing.flush()
+                os.fsync(outgoing.fileno())
+            shutil.copystat(source, destination)
+        except Exception:
+            os.unlink(destination)
+            raise
+
+
+def pin_path_node(config_path, key, root, base, self_dir=""):
+    """Pin the same PATH executable for a stopped legacy slot without replacing files."""
+    from dsh_adopt import _is_reparse, inspect_adopt_source, portable_path
+
+    config = read_config(config_path)
+    slot = config.get("versions", {}).get(key) or {}
+    configured = slot.get("node_exe") or ""
+    if configured.strip().lower() not in ("node", "node.exe"):
+        return False
+    system = shutil.which(configured.strip())
+    if not system:
+        raise OSError(T("PATH 上找不到 Node.js。"))
+    entry = _expand_slot_path(slot.get("bin_js"), base)
+    expected = os.path.join(root, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js")
+    if (not entry or not os.path.isfile(entry) or
+            os.path.normcase(os.path.realpath(entry)) != os.path.normcase(os.path.realpath(expected))
+            or os.path.islink(root) or _is_reparse(root)):
+        raise OSError(T("槽程序路径已变化，请重新体检。"))
+    info = inspect_adopt_source(os.path.join(root, "node_modules"))
+    if not info.get("ok"):
+        raise OSError("\n".join(info["problems"]))
+    node_dir = os.path.join(root, "node")
+    target = os.path.join(node_dir, "node.exe")
+    for path in (node_dir, target):
+        if os.path.islink(path) or _is_reparse(path):
+            raise OSError(T("节点路径是链接，已保留：%s") % path)
+    if os.path.lexists(target) and not (os.path.isfile(target)
+                                      and filecmp.cmp(system, target, shallow=False)):
+        raise OSError(T("槽内已有不同的 Node.js，已保留：%s") % target)
+
+    dlls = [name for name in os.listdir(os.path.dirname(system))
+            if name.lower().endswith(".dll")
+            and os.path.isfile(os.path.join(os.path.dirname(system), name))]
+    for name in dlls:
+        source = os.path.join(os.path.dirname(system), name)
+        destination = os.path.join(node_dir, name)
+        if (os.path.lexists(destination) and
+                (os.path.islink(destination) or _is_reparse(destination)
+                 or not os.path.isfile(destination)
+                 or not filecmp.cmp(source, destination, shallow=False))):
+            raise OSError(T("槽内已有不同的 Node.js，已保留：%s") % destination)
+    backup_config(config_path)
+    os.makedirs(node_dir, exist_ok=True)
+    created = []
+    try:
+        if not os.path.isfile(target):
+            with tempfile.NamedTemporaryFile(dir=node_dir, delete=False) as temp:
+                staging = temp.name
+            try:
+                shutil.copy2(system, staging)
+                _publish_runtime_file(staging, target)
+                created.append(target)
+            finally:
+                os.unlink(staging)
+        for name in dlls:
+            destination = os.path.join(node_dir, name)
+            if os.path.isfile(destination):
+                continue
+            with tempfile.NamedTemporaryFile(dir=node_dir, delete=False) as temp:
+                staging = temp.name
+            try:
+                shutil.copy2(os.path.join(os.path.dirname(system), name), staging)
+                _publish_runtime_file(staging, destination)
+                created.append(destination)
+            finally:
+                os.unlink(staging)
+        current = read_config(config_path)
+        if current.get("versions", {}).get(key) != slot:
+            raise OSError(T("槽程序路径已变化，请重新体检。"))
+        current["versions"][key]["node_exe"] = portable_path(target, base)
+        write_config_atomic(config_path, current)
+    except Exception:
+        for path in created:
+            os.unlink(path)
+        raise
+    return True
 
 
 def slot_root_from_bin_js(bin_js):

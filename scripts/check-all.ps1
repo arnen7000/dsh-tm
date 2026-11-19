@@ -399,6 +399,7 @@ if ($Fast) {
     $all = @(
         (Join-Path $Repo "scripts\test-manager-logic.py"),
         (Join-Path $Repo "scripts\test-adopt-logic.py"),
+        (Join-Path $Repo "scripts\test-adoption-recovery.py"),
         (Join-Path $Repo "scripts\test-install-ops.py"),
         (Join-Path $Repo "scripts\test-slot-ops.py"),
         (Join-Path $Repo "scripts\test-bat-text.py"),

@@ -111,9 +111,10 @@ def is_global_install(node_modules):
 def guess_source_home(node_modules):
     """猜这份安装「原来的用户数据目录」在哪，返回 (路径, 人话说明)。
 
-    只认两种有把握的情形，其余一律返回 ("", "") —— 宁可当"没有旧数据"，
+    只认明确的目录布局，其余返回 ("", "") —— 宁可当"没有旧数据"，
     也不能把别的安装的数据当成它的：
       · 本地隔离安装：<X>/node_modules + <X>/.dsh-home（我们的槽就是这种）
+      · 便携安装：<X>/node_modules 与相邻的 <X>-home
       · npm 全局安装：数据在 dsh 的默认 home ~/.dsh
     **只找不搬** —— 调用方负责备份/复制。
     """
@@ -122,6 +123,10 @@ def guess_source_home(node_modules):
     own = os.path.join(parent, ".dsh-home")
     if os.path.isdir(own):
         return (own, T("安装目录里的 .dsh-home"))
+    sibling = parent + "-home"
+    if (os.path.basename(nm).lower() == "node_modules" and os.path.isdir(sibling)
+            and not os.path.islink(sibling) and not _is_reparse(sibling)):
+        return (sibling, T("安装目录旁的同名 -home 数据目录"))
     if is_global_install(nm):
         default_home = os.path.join(os.path.expanduser("~"), ".dsh")
         if os.path.isdir(default_home):
@@ -292,6 +297,55 @@ def scan_managed_dirs(versions_root, managed_roots=()):
             "managed": os.path.normcase(os.path.abspath(root)) in managed,
         })
     return out
+
+
+def search_installations(scope, managed_roots=(), cancelled=lambda: False):
+    """Read a selected directory (including a drive root) for npm dsh installations."""
+    scope = os.path.abspath(scope)
+    managed = {os.path.normcase(os.path.realpath(root)) for root in managed_roots if root}
+    hits = []
+    errors = 0
+    skipped = {"node_modules", ".git", ".dsh-home", "dsh备份", "dsh_session_backup",
+               "$recycle.bin", "system volume information"}
+
+    def inaccessible(_error):
+        nonlocal errors
+        errors += 1
+
+    def add(node_modules):
+        if os.path.normcase(os.path.realpath(os.path.dirname(node_modules))) in managed:
+            return
+        if os.path.islink(node_modules) or _is_reparse(node_modules):
+            return
+        package = os.path.join(node_modules, "@deepseek-ai", "dsh")
+        if not os.path.isfile(os.path.join(package, "lib", "bin.js")):
+            return
+        version = read_package_version(package)
+        if version:
+            hits.append({"kind": "npm-global" if is_global_install(node_modules) else "versions-dir",
+                         "node_modules": node_modules, "path": package, "version": version})
+
+    if cancelled():
+        return hits, errors, True
+    names = ("dsh", "@deepseek-ai", "node_modules")
+    direct = scope
+    for name in names:
+        if os.path.basename(direct).lower() == name:
+            if name == "node_modules":
+                add(direct)
+                return hits, errors, False
+            direct = os.path.dirname(direct)
+
+    for directory, subdirs, _ in os.walk(scope, onerror=inaccessible, followlinks=False):
+        if cancelled():
+            return hits, errors, True
+        for name in subdirs:
+            if name.lower() == "node_modules":
+                add(os.path.join(directory, name))
+        subdirs[:] = [name for name in subdirs
+                      if name.lower() not in skipped
+                      and not _is_reparse(os.path.join(directory, name))]
+    return hits, errors, False
 
 
 def detect_existing_installs(npm_globals, versions_root, managed_roots=()):
@@ -567,6 +621,13 @@ def copy_tree(src, dst):
     return (True, "")
 
 
+def source_node_exe(node_modules):
+    """查找这份安装自带的 Node，比其它槽或系统运行时更能保持原依赖 ABI。"""
+    root = os.path.dirname(os.path.abspath(node_modules))
+    paths = (os.path.join(root, "node", "node.exe"), os.path.join(root, "node.exe"))
+    return next((path for path in paths if os.path.isfile(path)), "")
+
+
 def copy_node_exe(src_node, dst_root):
     """把一份 node 运行时复制进新槽（隔离关键：每槽自带 node，升级不互相影响）。
 
@@ -574,7 +635,13 @@ def copy_node_exe(src_node, dst_root):
     （既有槽就是 <槽>/node/node.exe 这种布局，调用方手上常常只有目录）。
     返回 (目标 node.exe 路径, 说明)。找不到可用源就如实报错 —— 不静默退回
     系统 node，因为 node-pty 等原生模块按 ABI 编译，版本不匹配会直接崩。"""
-    src_node = os.path.abspath(src_node or "")
+    src_node = os.fspath(src_node or "")
+    if src_node.lower() in ("node", "node.exe"):
+        resolved = shutil.which(src_node)
+        if not resolved:
+            return (None, T("PATH 上找不到 Node.js。"))
+        src_node = resolved
+    src_node = os.path.realpath(src_node)
     if os.path.isfile(src_node):
         src_dir = os.path.dirname(src_node)
     elif os.path.isdir(src_node):
@@ -590,7 +657,20 @@ def copy_node_exe(src_node, dst_root):
     dst_dir = os.path.join(dst_root, "node")
     try:
         os.makedirs(dst_dir, exist_ok=True)
-        shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
+        shutil.copy2(exe, os.path.join(dst_dir, "node.exe"))
+        for name in os.listdir(src_dir):
+            if name.lower().endswith(".dll") and os.path.isfile(os.path.join(src_dir, name)):
+                shutil.copy2(os.path.join(src_dir, name), os.path.join(dst_dir, name))
+        # The Node directory on PATH can be shared with other programs.
+        for module in ("npm", "corepack", "pnpm"):
+            source = os.path.join(src_dir, "node_modules", module)
+            if os.path.isdir(source):
+                shutil.copytree(source, os.path.join(dst_dir, "node_modules", module),
+                                dirs_exist_ok=True)
+        for name in ("npm.cmd", "npx.cmd", "corepack.cmd", "pnpm.cmd", "pnpx.cmd"):
+            source = os.path.join(src_dir, name)
+            if os.path.isfile(source):
+                shutil.copy2(source, os.path.join(dst_dir, name))
     except Exception as e:
         return (None, T("复制 node 失败：%s") % e)
     return (os.path.join(dst_dir, "node.exe"), "")
@@ -862,7 +942,16 @@ def backup_dsh_home(dsh_home, backup_root, stamp=None):
     fails = []
     try:
         os.makedirs(backup_root, exist_ok=True)
-        dst = os.path.join(backup_root, "dsh-home-%s" % stamp)
+        base = os.path.join(backup_root, "dsh-home-%s" % stamp)
+        dst = base
+        for index in range(1, 1000):
+            try:
+                os.mkdir(dst)
+                break
+            except FileExistsError:
+                dst = "%s-%d" % (base, index + 1)
+        else:
+            raise OSError(backup_root)
         copy_tree_nolinks(dsh_home, dst, fails)
     except Exception as e:
         return (None, T("备份失败（已中止纳入，请手动复制后再试）：%s") % e)
