@@ -6,8 +6,8 @@ architectures.
 
 ## 使用 App
 
-1. 从同一个 GitHub Actions 运行下载对应架构的已签名 ZIP 与 SHA-256 清单。PR
-   会记录最终产物的链接和验证结果。
+1. 在 [GitHub Releases](https://github.com/arnen7000/dsh-tm/releases) 下载对应架构的
+   App ZIP 和同名 `.sha256`。Apple Silicon 选 `macos-arm64`，Intel 选 `macos-x64`。
 2. 核对清单后解压，把 `DS-Manager.app` 移到「应用程序」。
 3. 双击启动，选择「安装官方版 dsh」或纳入已有 npm 版。管理器内置 Python/Tk、
    Node、npm 和 pnpm。首次安装槽和初始化 web profile 需要连接 npm 仓库。
@@ -53,17 +53,28 @@ The packaged executable supports `--cli` and `--check-env` from Terminal.
 
 ## Signing setup for the upstream PR
 
-Create the GitHub Environment `macos-signing`, restrict it to the reviewed
-`codex/macos-support` branch and require a reviewer. Set the following secrets
-in the environment. Encode the two binary/text credential files as base64
-before pasting them into the GitHub secrets UI.
+在仓库的 **Settings → Environments** 创建 `macos-signing`。在 **Deployment
+branches and tags** 选 **Selected branches and tags**，添加类型为 **Branch**、
+名称为 `codex/macos-support` 的规则。在 **Required reviewers** 添加批准人。
+启用 **Prevent self-review** 时，由另一位指定审阅人批准触发账号发起的任务。
 
-- `APPLE_CERTIFICATE_P12_BASE64` and `APPLE_CERTIFICATE_PASSWORD`.
-- `APPLE_NOTARY_KEY_BASE64`, `APPLE_NOTARY_KEY_ID` and `APPLE_NOTARY_ISSUER_ID`.
+在这个 Environment 的 **Environment secrets** 添加以下值。
 
-Set the repository variable `DSH_TM_MACOS_SIGNING` to `true`, then trigger a
-fresh push run on the trusted candidate branch. Review the run SHA before
-approving the environment jobs. Both architecture jobs produce a ZIP and
-SHA-256 after Developer ID signing, notarization, stapling and Gatekeeper
-assessment. Signing waits for both macOS builds and the Windows check of the
-same commit. The signing job uses the build artifacts from its own run.
+| Secret | 值 |
+| --- | --- |
+| `APPLE_CERTIFICATE_P12_BASE64` | Developer ID Application 证书及其私钥导出的 `.p12`，用 `base64 -i /path/to/signing.p12 \| pbcopy` 复制编码值 |
+| `APPLE_CERTIFICATE_PASSWORD` | 导出 `.p12` 时设置的密码 |
+| `APPLE_NOTARY_KEY_BASE64` | App Store Connect Team API Key 的 `.p8`，用 `base64 -i /path/to/AuthKey.p8 \| pbcopy` 复制编码值 |
+| `APPLE_NOTARY_KEY_ID` | Team API Key 对应的 Key ID |
+| `APPLE_NOTARY_ISSUER_ID` | App Store Connect Team API Keys 页的 Issuer ID |
+
+在 **Settings → Secrets and variables → Actions → Variables** 新建仓库变量
+`DSH_TM_MACOS_SIGNING`，值为 `true`。发布方在 `codex/macos-support` 推送一条
+以 `chore(release): request macOS signing` 开头的提交，触发正式签名运行。
+
+Windows 便携包与两个架构的 macOS 构建通过后，打开该运行的 **Summary**，
+在 **Review deployments** 勾选 `macos-signing`，核对提交 SHA，再点 **Approve and deploy**。
+签名步骤使用这次运行的构建产物，完成 Developer ID 签名、公证和票据装订，再解压验证。
+
+通过签名验收后合并 PR。若同一运行的发布任务已因等待合并而停止，重跑该发布任务。
+发布任务校验 `main` 源码与已签名源码一致，核对三个 ZIP 的校验值，然后创建正式 GitHub Release。

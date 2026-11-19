@@ -1,26 +1,21 @@
-name: Windows portable v0.1.10
+name: Windows portable package
 
 on:
-  push:
-    branches: [main]
-    paths: [VERSION, .github/workflows/windows-release.yml]
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
 
-permissions: {}
-
-concurrency:
-  group: windows-portable-v0.1.10
+permissions:
+  contents: read
 
 env:
-  PORTABLE_TAG: v0.1.10
-  PORTABLE_ZIP: dsh-tm-0.1.10-portable.zip
+  PORTABLE_TAG: v${{ inputs.version }}
+  PORTABLE_ZIP: dsh-tm-${{ inputs.version }}-portable.zip
 
 jobs:
   test-and-build:
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      (github.event_name == 'workflow_dispatch' ||
-      startsWith(github.event.head_commit.message, 'chore(release): 0.1.10'))
     runs-on: windows-latest
     timeout-minutes: 20
     permissions:
@@ -43,14 +38,14 @@ jobs:
           Copy-Item config/config.example.json config.json
           & ./scripts/check-all.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build with the verified v0.1.9 Windows runtime
+      - name: Build with the verified v0.1.10 Windows runtime
         shell: pwsh
         run: |
           $previous = Join-Path $env:RUNNER_TEMP previous-portable.zip
-          $source = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/v0.1.9/dsh-tm-0.1.9-portable.zip"
+          $source = 'https://github.com/arnen7000/dsh-tm/releases/download/v0.1.10/dsh-tm-0.1.10-portable.zip'
           curl.exe --fail --silent --show-error --location --retry 3 --max-time 240 --output $previous $source
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $expected = 'b5e5a6a6c4daaf2dcf44f1083f462f044bf2c9e45ac4962a1f4afa60a09ad66e'
+          $expected = '34c6ff666f70beee0715949b9e7425835cf09b98021cdf824651500f55269614'
           if ((Get-FileHash -Algorithm SHA256 -LiteralPath $previous).Hash.ToLowerInvariant() -ne $expected) {
             throw 'The previous release ZIP failed SHA-256 verification.'
           }
@@ -95,39 +90,4 @@ jobs:
             dist/${{ env.PORTABLE_ZIP }}
             dist/${{ env.PORTABLE_ZIP }}.sha256
           if-no-files-found: error
-
-  publish:
-    needs: test-and-build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: windows-portable
-      - name: Publish the tested ZIP and its checksum
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          sha256sum --check "$PORTABLE_ZIP.sha256"
-          if gh release view "$PORTABLE_TAG" --json isDraft >/dev/null 2>&1; then
-            echo "Release $PORTABLE_TAG already exists. Inspect it before rerunning."
-            exit 1
-          fi
-          cat > release-notes.md <<'EOF'
-          ## Windows 便携包
-
-          - 可从盘符、上层目录或安装目录查找并分别纳入多份 dsh 安装。
-          - 纳入时优先使用源安装自带的 Node 和 DLL，并识别相邻的 `-home` 数据目录。
-          - 新装槽优先配备独立 Node。依赖系统 PATH 的旧槽可在停止后通过体检修复。
-
-          已装旧版的用户可将 ZIP 解压覆盖原管理器目录。保留现有 `config.json` 和槽目录。
-          EOF
-          printf '\nSHA-256 `%s`\n\n[Windows 测试和构建记录](%s/%s/actions/runs/%s)\n' \
-            "$(cut -d ' ' -f 1 "$PORTABLE_ZIP.sha256")" "$GITHUB_SERVER_URL" \
-            "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> release-notes.md
-          gh release create "$PORTABLE_TAG" "$PORTABLE_ZIP" "$PORTABLE_ZIP.sha256" \
-            --target "$GITHUB_SHA" --title "$PORTABLE_TAG" --notes-file release-notes.md --draft
-          gh release edit "$PORTABLE_TAG" --draft=false --latest
+          retention-days: 30
