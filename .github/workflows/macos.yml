@@ -79,16 +79,18 @@ jobs:
     if: >-
       github.repository == 'arnen7000/dsh-tm' &&
       github.event_name == 'push' && github.ref == 'refs/heads/codex/macos-support' &&
-      vars.DSH_TM_MACOS_SIGNING == 'true' &&
       startsWith(github.event.head_commit.message, 'chore(release): request macOS signing')
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      actions: read
     steps:
       - name: Require an existing environment with a reviewer
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          url="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/environments/macos-signing"
-          if ! policy=$(curl --fail --silent --show-error --max-time 20 --retry 2 "$url"); then
+          if ! policy=$(gh api "repos/$GITHUB_REPOSITORY/environments/macos-signing"); then
             echo '::error::Cannot read the macos-signing environment. Check Settings → Environments in this repository.'
             exit 1
           fi

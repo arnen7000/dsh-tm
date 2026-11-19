@@ -68,9 +68,8 @@ branches and tags** 选 **Selected branches and tags**，添加类型为 **Branc
 | `APPLE_NOTARY_KEY_ID` | Team API Key 对应的 Key ID |
 | `APPLE_NOTARY_ISSUER_ID` | App Store Connect Team API Keys 页的 Issuer ID |
 
-在 **Settings → Secrets and variables → Actions → Variables** 新建仓库变量
-`DSH_TM_MACOS_SIGNING`，值为 `true`。发布方在 `codex/macos-support` 推送一条
-以 `chore(release): request macOS signing` 开头的提交，触发正式签名运行。
+发布方在 `codex/macos-support` 推送一条以 `chore(release): request macOS signing`
+开头的提交，触发正式签名运行。流程先核实 `macos-signing` 存在且已配置批准人。
 
 Windows 便携包与两个架构的 macOS 构建通过后，打开该运行的 **Summary**，
 在 **Review deployments** 勾选 `macos-signing`，核对提交 SHA，再点 **Approve and deploy**。
