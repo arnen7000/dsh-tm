@@ -49,10 +49,11 @@ jobs:
             --arch "$ARCH" --output "$RUNNER_TEMP/artifacts/$zip"
           (cd "$RUNNER_TEMP/artifacts" && shasum -a 256 -c "$zip.sha256")
           ditto -x -k "$RUNNER_TEMP/artifacts/$zip" "$RUNNER_TEMP/extracted"
-          python scripts/test-macos-platform.py
-          python scripts/test-storage-safety.py
-          for suite in test-adopt-logic test-adoption-recovery test-cli test-config-compat test-health test-install-ops test-i18n test-manager-logic test-move test-slot-ops; do
-            python "scripts/$suite.py"
+          for suite in scripts/test-*.py; do
+            case "$suite" in
+              scripts/test-macos-app.py|scripts/test-slot-process.py) continue ;;
+            esac
+            python "$suite"
           done
           DSH_TEST_NODE="$RUNNER_TEMP/extracted/DS-Manager.app/Contents/Resources/runtime/node/bin/node" \
             python scripts/test-slot-process.py

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Exercise slot ownership with real Node listeners and paths containing spaces."""
+"""Exercise slot ownership and batch operations with real Node listeners."""
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -59,8 +60,12 @@ class SlotProcessTests(unittest.TestCase):
             time.sleep(0.05)
 
     def reachable(self):
+        return self.port_reachable(self.port)
+
+    @staticmethod
+    def port_reachable(port):
         with socket.socket() as connection:
-            return connection.connect_ex(("127.0.0.1", self.port)) == 0
+            return connection.connect_ex(("127.0.0.1", port)) == 0
 
     def start_external(self, entrypoint, *args, cwd=None):
         proc = subprocess.Popen(
@@ -80,7 +85,7 @@ class SlotProcessTests(unittest.TestCase):
     def cli(self, *args):
         result = subprocess.run(
             [sys.executable, str(ROOT / "dsh-tm.py"), "--config", str(self.config), *args, "--json"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
         )
         return result, json.loads(result.stdout)
 
@@ -100,6 +105,44 @@ class SlotProcessTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertEqual(payload["slots"][0]["error_code"], "port_conflict")
                 self.assertIsNone(decoy.poll())
+
+    def test_batch_launches_six_slots_and_reports_a_foreign_port(self):
+        import dsh_slot_process as slot
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        versions = config["versions"]
+        decoy = self.start_external(self.decoy)
+        with ExitStack() as reserved:
+            for number in range(2, 7):
+                listener = reserved.enter_context(socket.socket())
+                listener.bind(("127.0.0.1", 0))
+                port = listener.getsockname()[1]
+                entry = self.root / ("槽 %d" % number) / "bin.js"
+                entry.parent.mkdir()
+                entry.write_text(SERVER, encoding="utf-8")
+                versions["v%d" % number] = {"node_exe": str(NODE), "bin_js": str(entry), "port": port}
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        for cfg in versions.values():
+            self.addCleanup(slot.stop_slot, cfg["bin_js"], cfg["port"])
+
+        result, payload = self.cli("start", "--all", "--wait", "30")
+        self.assertEqual(result.returncode, 1, (result.stderr, payload))
+        rows = {row["key"]: row for row in payload["slots"]}
+        self.assertEqual(rows["v1"]["error_code"], "port_conflict")
+        self.assertCountEqual(payload["changed"], list(versions)[1:])
+        self.assertIsNone(decoy.poll())
+
+        decoy.terminate()
+        decoy.wait(timeout=5)
+        result, payload = self.cli("start", "v1", "--wait", "30")
+        self.assertEqual(result.returncode, 0, (result.stderr, payload))
+        result, status = self.cli("status", "--all")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(status["count"], 6)
+        self.assertTrue(all(row["state"] == "running" for row in status["slots"]), status)
+        result, stopped = self.cli("stop", "--all")
+        self.assertEqual(result.returncode, 0, (result.stderr, stopped))
+        self.assertCountEqual(stopped["changed"], versions)
+        self.assertFalse(any(self.port_reachable(cfg["port"]) for cfg in versions.values()))
 
     @unittest.skipIf(sys.platform == "win32", "POSIX exposes the running working directory")
     def test_relative_entrypoint_cannot_be_inferred_after_process_changes_directory(self):

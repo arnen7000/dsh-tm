@@ -76,6 +76,9 @@ jobs:
             if ($LASTEXITCODE -ne 0 -or $node -ne 'v24.21.0') { throw "Unexpected Node: $node" }
             & ./runtime/node/node.exe ./runtime/node/node_modules/npm/bin/npm-cli.js --version
             if ($LASTEXITCODE -ne 0) { throw 'The bundled npm failed.' }
+            $env:DSH_TEST_NODE = (Resolve-Path ./runtime/node/node.exe).Path
+            & ./runtime/python/python.exe ./scripts/test-slot-process.py
+            if ($LASTEXITCODE -ne 0) { throw 'The portable package failed the process safety tests.' }
             if (Test-Path ./config.json) { throw 'The ZIP contains a local configuration.' }
           } finally {
             Pop-Location

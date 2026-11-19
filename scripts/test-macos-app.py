@@ -20,6 +20,14 @@ import dsh_slot_process
 DSH_VERSION = "0.2.2-rc.1"
 
 
+def packaged_cli(base_args, *command):
+    result = subprocess.run([*base_args, *command], capture_output=True, timeout=95)
+    if result.returncode:
+        raise RuntimeError("Packaged CLI %s failed (exit %d): %s" % (
+            command[0], result.returncode, result.stdout.decode("utf-8", "replace")))
+    return json.loads(result.stdout)
+
+
 def run(app, gui=True):
     app = app.resolve()
     exe = app / "Contents/MacOS/DS-Manager"
@@ -32,8 +40,8 @@ def run(app, gui=True):
         base = home / "dsh 中文 slots"
         base.mkdir()
         config = home / "config.json"
-        config.write_text(json.dumps({"install_base": str(base), "versions": {}}),
-                          encoding="utf-8")
+        config.write_text(json.dumps({"install_base": str(base), "versions": {},
+                                      "legacy_extension": {"keep": True}}), encoding="utf-8-sig")
         os.environ.update(HOME=work, PATH="/usr/bin:/bin:/usr/sbin:/sbin")
         if gui:
             with (home / "gui.log").open("wb") as output:
@@ -56,12 +64,14 @@ def run(app, gui=True):
             dsh_adopt, DSH_VERSION, str(config), str(base), "v1", [])
         if not ok:
             raise RuntimeError(detail)
-        slot = json.loads(config.read_text())["versions"][key]
+        saved = json.loads(config.read_text(encoding="utf-8-sig"))
+        assert saved["legacy_extension"] == {"keep": True}
+        slot = saved["versions"][key]
         for field in ("node_exe", "bin_js", "dsh_home", "temp_dir"):
             slot[field] = dsh_platform.resolve_path(slot[field], str(base))
 
         args = [str(exe), "--cli", "--config", str(config), "--json"]
-        listed = json.loads(subprocess.check_output(args + ["list"], timeout=30))
+        listed = packaged_cli(args, "list")
         assert listed["schema_version"] == 1 and listed["count"] == 1
         logfile = home / "service.log"
         port = slot["port"]
@@ -92,15 +102,25 @@ def run(app, gui=True):
             except Exception:
                 raise AssertionError("Failed authenticated HTTP navigation") from None
             assert tracked.url not in logfile.read_text(errors="replace")
-            cli = subprocess.run(args + ["stop", key], capture_output=True, timeout=40)
-            if cli.returncode:
-                raise RuntimeError("Packaged CLI stop failed: " + cli.stdout.decode("utf-8", "replace"))
+            packaged_cli(args, "stop", key)
             tracked.wait(timeout=20)
             assert not dsh_slot_process.port_reachable(port)
         finally:
             if tracked.poll() is None:
                 dsh_slot_process.stop_slot(slot["bin_js"], port, tracked)
                 tracked.wait(timeout=20)
+
+        try:
+            started = packaged_cli(args, "start", "--all", "--wait", "60")
+            assert started["changed"] == [key]
+            status = packaged_cli(args, "status", key)
+            assert status["slots"][0]["state"] == "running"
+            stopped = packaged_cli(args, "stop", "--all")
+            assert stopped["changed"] == [key]
+            assert not dsh_slot_process.port_reachable(port)
+        finally:
+            if dsh_slot_process.port_reachable(port):
+                dsh_slot_process.stop_slot(slot["bin_js"], port)
         print("Packaged dsh lifecycle passed")
 
 
