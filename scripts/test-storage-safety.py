@@ -12,6 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import dsh_move as move
+import dsh_platform as platform
 import dsh_uninstall_ops as uninstall
 
 
@@ -83,6 +84,25 @@ class SlotFilesystemTests(unittest.TestCase):
 
         self.assertEqual(target.stat().st_mode, original_mode)
         self.assertEqual(target.read_text(encoding="utf-8"), "outside")
+
+    def test_containment_respects_case_insensitive_macos_volumes(self):
+        if sys.platform != "darwin":
+            self.skipTest("macOS filesystem semantics")
+        folder = self.slot / "cache files"
+        folder.mkdir()
+        child = folder / "state.txt"
+        child.touch()
+        alias = self.slot / "CACHE FILES"
+        if not alias.is_dir():
+            self.skipTest("Case-sensitive volume")
+        self.assertTrue(uninstall._path_within(child, alias, strict=True))
+        self.assertFalse(uninstall._path_within(folder, alias, strict=True))
+        self.assertFalse(uninstall.is_safe_to_delete(
+            str(child), str(self.slot), [str(alias)], str(self.work), str(self.work))[0])
+        self.assertEqual(
+            move._moved_path(str(child), [(str(alias), str(self.dst))]),
+            str(self.dst / child.name),
+        )
 
     def test_uninstall_rejects_escape_and_symlink_ancestor(self):
         target = self.work / "elsewhere"
@@ -178,9 +198,75 @@ class SlotFilesystemTests(unittest.TestCase):
         before_slot = self.config["versions"]["v1"]
         after_slot = after["versions"]["v1"]
         self.assertEqual(after_slot["node_exe"], before_slot["node_exe"])
-        self.assertEqual(after_slot["temp_dir"], str(self.base / "local-temp"))
+        self.assertEqual(Path(after_slot["temp_dir"]), self.base / "local-temp")
         data_home = after_slot["dsh_home"].replace("<base>", after["install_base"])
         self.assertEqual(Path(data_home), self.dst / "dsh-versions" / "dshV1" / ".dsh-home")
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS command launchers")
+    def test_move_preserves_custom_launcher_content_and_updates_moved_temp(self):
+        (self.base / "dsh-temp").mkdir()
+        self.config["versions"]["v1"]["temp_dir"] = "<base>/dsh-temp/中文 path"
+        node = self.work / "fake node"
+        node.write_text('#!/bin/sh\nprintf "%s" "$TMPDIR"\n', encoding="utf-8")
+        node.chmod(0o755)
+        self.config["versions"]["v1"]["node_exe"] = str(node)
+        self.write_config()
+        cfg = {k: v.replace("<base>", str(self.base)) if isinstance(v, str) else v
+               for k, v in self.config["versions"]["v1"].items()}
+        platform.write_slot_launchers(str(self.slot), cfg)
+        start = self.slot / "dsh.command"
+        with start.open("a", encoding="utf-8") as script:
+            script.write("# Keep my comment\n")
+        original_cli = self.slot / "dsh-cli.command"
+        original_cli.write_text('#!/bin/sh\nprintf "custom"\n', encoding="utf-8")
+
+        ok, message = move.move_now(self.move_plan(), str(self.config_path))
+
+        self.assertTrue(ok, message)
+        relocated = self.dst / "dsh-versions" / "dshV1"
+        self.assertEqual(subprocess.check_output([relocated / "dsh.command"], text=True, encoding="utf-8"),
+                         str(self.dst / "dsh-temp" / "中文 path"))
+        self.assertIn("# Keep my comment", (relocated / start.name).read_text())
+        self.assertEqual(subprocess.check_output([relocated / original_cli.name], text=True, encoding="utf-8"),
+                         "custom")
+
+    def test_move_rewrites_existing_windows_launcher_path_lines_only(self):
+        self.config["versions"]["v1"]["temp_dir"] = "<base>/dsh-temp/中文 path"
+        self.write_config()
+        (self.base / "dsh-temp").mkdir()
+        start = self.slot / "dsh.bat"
+        entry = self.slot / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
+        custom = f'REM My custom comment refers to {entry}'
+        original = (f'@echo off\r\n{custom}\r\n'
+                    f'set "TEMP={self.base / "dsh-temp" / "中文 path"}"\r\n'
+                    f'"node" "{entry}" web --no-open --port 4080\r\n')
+        start.write_bytes(original.encode("gbk"))
+
+        with patch.object(platform, "IS_MAC", False), patch.object(platform, "IS_WINDOWS", True):
+            ok, message = move.move_now(self.move_plan(), str(self.config_path))
+
+        self.assertTrue(ok, message)
+        relocated = self.dst / "dsh-versions" / "dshV1"
+        updated = (relocated / start.name).read_bytes().decode("gbk")
+        self.assertIn(f'{custom}\r\n', updated)
+        self.assertIn(f'set "TEMP={self.dst / "dsh-temp" / "中文 path"}"\r\n', updated)
+        self.assertIn(f'"node" "{relocated / entry.relative_to(self.slot)}" web', updated)
+
+    def test_move_keeps_source_when_updating_a_copied_launcher_fails(self):
+        start = self.slot / "dsh.bat"
+        source = f'@echo off\r\nset "DSH_HOME={self.home}"\r\n'.encode("gbk")
+        start.write_bytes(source)
+        original_config = self.config_path.read_bytes()
+        plan = self.move_plan()
+        with patch.object(platform, "IS_MAC", False), patch.object(platform, "IS_WINDOWS", True):
+            with patch.object(Path, "write_bytes", side_effect=PermissionError("launcher is read-only")):
+                ok, message = move.move_now(plan, str(self.config_path))
+
+        self.assertFalse(ok)
+        self.assertIn("launcher is read-only", message)
+        self.assertEqual(start.read_bytes(), source)
+        self.assertEqual(self.config_path.read_bytes(), original_config)
+        self.assertEqual(list(self.dst.iterdir()), [])
 
     def test_move_rebases_absolute_links_into_the_moved_slot(self):
         self.symlink(self.home / "absolute", self.data)
@@ -276,7 +362,8 @@ class SlotFilesystemTests(unittest.TestCase):
         result = subprocess.run([
             sys.executable, str(Path(uninstall.__file__)),
             "--config-path", str(self.config_path), "--target", "all", "--dry-run",
-        ], capture_output=True, text=True)
+        ], capture_output=True, text=True, encoding="utf-8", errors="replace",
+           env=dict(os.environ, PYTHONIOENCODING="utf-8"))
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DryRun", result.stdout)

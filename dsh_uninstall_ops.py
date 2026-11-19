@@ -8,6 +8,7 @@ The PowerShell entry retains user data, the temporary directory, and Node.
 import hashlib
 import json
 import os
+from pathlib import Path
 import re
 import shutil
 import stat
@@ -151,15 +152,39 @@ def _native_path(path):
     return path
 
 
-def _path_within(path, root, strict=False):
+def _path_relative_to(path, root):
+    """Return the spelling below root, with a filesystem check for macOS aliases."""
     if not path or not root or _has_parent_reference(path) or _has_parent_reference(root):
-        return False
-    path = os.path.normcase(_native_path(path))
-    root = os.path.normcase(_native_path(root))
+        return None
+    path, root = _native_path(path), _native_path(root)
     try:
-        return (not strict or path != root) and os.path.commonpath((path, root)) == root
+        if os.path.normcase(os.path.commonpath((path, root))) == os.path.normcase(root):
+            return os.path.relpath(path, root)
     except ValueError:
-        return False  # Windows paths on different drives.
+        return None  # Windows paths on different drives.
+
+    if sys.platform != "darwin":
+        return None
+    parts = Path(path).parts
+    length = len(Path(root).parts)
+    if len(parts) < length:
+        return None
+    ancestor = os.path.join(*parts[:length])
+    try:
+        _assert_unlinked_path(os.path.dirname(ancestor))
+        _assert_unlinked_path(os.path.dirname(root))
+        # Inspect the directory entries themselves. A symlink pointing at root
+        # does not establish containment. Match aliases only if the volume does.
+        if os.path.samestat(os.lstat(ancestor), os.lstat(root)):
+            return os.path.join(*parts[length:]) if len(parts) > length else "."
+    except OSError:
+        pass
+    return None
+
+
+def _path_within(path, root, strict=False):
+    relative = _path_relative_to(path, root)
+    return relative is not None and (not strict or relative != ".")
 
 
 def _paths_overlap(first, second):

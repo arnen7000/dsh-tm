@@ -195,8 +195,8 @@ def _write_launcher(path, script, only_missing):
     return True
 
 
-def write_slot_launchers(root, cfg, only_missing=False, stop_command=None):
-    """Write slot-relative macOS web, CLI, and guarded stop launchers."""
+def slot_launcher_texts(root, cfg, stop_command=None):
+    """Render slot-relative macOS web, CLI, and guarded stop launchers."""
     port = int(cfg["port"])
     launchers = slot_launcher_paths(root, port)
     header = ("#!/bin/sh\n# dsh-tm port: %d\n"
@@ -223,40 +223,43 @@ def write_slot_launchers(root, cfg, only_missing=False, stop_command=None):
         "stop": "exec " + " ".join(map(shlex.quote, stop_command))
                 + " --port %d --entrypoint " % port + entry + "\n",
     }
-    return [path for kind, path in launchers.items()
-            if _write_launcher(path, header + cmds[kind], only_missing)]
+    return {path: header + cmds[kind] for kind, path in launchers.items()}
+
+
+def write_slot_launchers(root, cfg, only_missing=False, stop_command=None):
+    return [path for path, text in slot_launcher_texts(root, cfg, stop_command).items()
+            if _write_launcher(path, text, only_missing)]
 
 
 def bootstrap_config(path, template):
     """Create the initial config atomically without overwriting another instance."""
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, mode=0o700, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=directory, prefix=".config-", delete=False) as file:
-        temporary = file.name
-        try:
-            with open(template, "rb") as source:
-                if IS_MAC:
-                    import json
-                    data = json.load(source)
-                    data["install_base"] = "<appsupport>/DSH-TM"
-                    file.write((json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
-                else:
-                    shutil.copyfileobj(source, file)
+    fd, temporary = tempfile.mkstemp(dir=directory, prefix=".config-")
+    try:
+        with os.fdopen(fd, "wb") as file, open(template, "rb") as source:
+            if IS_MAC:
+                import json
+                data = json.load(source)
+                data["install_base"] = "<appsupport>/DSH-TM"
+                file.write((json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+            else:
+                shutil.copyfileobj(source, file)
             file.flush()
             os.fsync(file.fileno())
-            try:
-                if IS_WINDOWS:
-                    # Windows rename is exclusive and works on FAT/exFAT.
-                    os.rename(temporary, path)
-                else:
-                    os.link(temporary, path)
-            except FileExistsError:
-                pass
-        finally:
-            try:
-                os.unlink(temporary)
-            except FileNotFoundError:
-                pass
+        try:
+            if IS_WINDOWS:
+                # Windows rename is exclusive and works on FAT/exFAT.
+                os.rename(temporary, path)
+            else:
+                os.link(temporary, path)
+        except FileExistsError:
+            pass
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
 
 
 def copy_mac_runtime(source, slot):

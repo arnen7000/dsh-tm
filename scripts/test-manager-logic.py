@@ -1643,8 +1643,9 @@ chk("C3z25a 有版本在运行时拒绝移动（文件被占用会拷坏）",
     "有版本正在运行" in _mv and "port_open(" in _mv and "proc_alive(" in _mv)
 chk("C3z25b 确认框显示「需要多少 / 可用多少」",
     "need_bytes" in _mv and "free_bytes" in _mv)
-chk("C3z25c 移动完成后重写三件 bat（bat 里是绝对路径）",
-    "_rebuild_bats()" in _fn_body("_do_move_root"))
+chk("C3z25c 搬迁事务处理启动脚本，管理器完成后不重建其他槽",
+    "MV.move_now(" in _fn_body("_do_move_root")
+    and "_rebuild_bats(" not in _fn_body("_do_move_root"))
 chk("C3z25d 提示不再说「要换位置请先卸载全部版本」",
     "要换位置请先卸载全部版本" not in src)
 
@@ -1657,9 +1658,9 @@ chk("C3z28a _rebuild_bats 支持 keys / only_missing，默认仍是全槽重写"
     "def _rebuild_bats(keys=None, only_missing=False)" in src
     and "keys if keys is not None else SLOT_KEYS" in _rb
     and "= _rebuild_bats()" in src)
-chk("C3z28b 手动生成、改临时目录、移动安装位置仍重建全部槽",
+chk("C3z28b 手动生成和应用临时目录设置仍重建全部槽",
     all("= _rebuild_bats()" in _fn_body(name)
-        for name in ("gen_bats", "_apply_dir_settings", "_do_move_root")))
+        for name in ("gen_bats", "_apply_dir_settings")))
 chk("C3z28c only_missing 跳过已存在的 bat（不备份、不覆盖用户手改过的）",
     "if only_missing and os.path.isfile(path)" in _rb
     and "continue" in _rb)
@@ -1739,6 +1740,99 @@ def _check_readd_bat_scope():
 
 
 _check_readd_bat_scope()
+
+
+def _check_gui_platform_parity():
+    from types import SimpleNamespace
+
+    opened, copied, logs = [], [], []
+    live = {"owned": set(), "listening": {42}}
+    auth = {"v1": None}
+    proc = {"v1": None}
+    birth = {"value": "original"}
+    env, _ = harvest(["_slot_browser_url", "open_browser", "copy_url",
+                      "_system_is_dark", "_browser_filetypes", "stop_all_slots"], ns_extra={
+        "VC": {"v1": {"port": 4080, "browser": "default", "bin_js": "/slot/bin.js"}},
+        "SLOT_KEYS": ["v1"],
+        "PLATFORM": SimpleNamespace(IS_MAC=True),
+        "SLOT_PROCESS": SimpleNamespace(
+            slot_listeners=lambda *_: (live["owned"], live["listening"]),
+            process_info=lambda _: SimpleNamespace(birth=birth["value"])),
+        "auth_urls": auth, "procs": proc, "proc_alive": bool,
+        "_resolve_browser": lambda _: ("start", ""), "_platform_open": opened.append,
+        "port_open": lambda _: bool(live["listening"]), "log": logs.append,
+        "_dsh_pid_on_port": lambda _: next(iter(live["owned"]), None),
+        "root": SimpleNamespace(clipboard_clear=lambda: None, clipboard_append=copied.append,
+                                update_idletasks=lambda: None),
+        "subprocess": SimpleNamespace(run=lambda *a, **kw: SimpleNamespace(returncode=0, stdout="Dark\n")),
+        "messagebox": SimpleNamespace(showinfo=lambda *args: logs.append(args[-1]),
+                                    askyesno=lambda *_: False),
+    })
+    env["open_browser"]("v1")
+    env["copy_url"]("v1")
+    chk("P1 端口只有外部监听者时，浏览器和剪贴板都不用这个地址",
+        not opened and not copied)
+    env["VC"]["v1"]["label"] = "dshV1"
+    env["stop_all_slots"]()
+    chk("P2 全部停止不会把只被外来监听者占端口的槽算作正在运行", "没有任何槽在运行" in logs[-1])
+
+    live["owned"] = {42}
+    env["open_browser"]("v1")
+    env["copy_url"]("v1")
+    bare = "http://127.0.0.1:4080"
+    chk("P3 属于本槽但由外部启动时，浏览器和剪贴板均提供裸地址",
+        opened == [bare] and copied == [bare])
+
+    proc["v1"] = SimpleNamespace(child_pid=42, child=SimpleNamespace(birth="original"))
+    auth["v1"] = bare + "/?token=abcdefgh1234"
+    env["open_browser"]("v1")
+    env["copy_url"]("v1")
+    chk("P4 本窗口启动且监听 PID 一致时，两种入口动作均保留完整认证地址",
+        opened[-1] == auth["v1"] and copied[-1] == auth["v1"])
+    live["owned"] = {43}
+    live["listening"] = {43}
+    env["open_browser"]("v1")
+    env["copy_url"]("v1")
+    chk("P5 同一槽在外部重启后不会沿用上一个进程的认证地址",
+        opened[-1] == bare and copied[-1] == bare)
+    live["owned"] = {42}
+    live["listening"] = {42}
+    birth["value"] = "reused"
+    env["open_browser"]("v1")
+    env["copy_url"]("v1")
+    chk("P5b 监听进程复用了 PID 时不提供前一进程的认证地址",
+        opened[-1] == bare and copied[-1] == bare)
+
+    chk("P6 macOS 系统外观可识别深色模式", env["_system_is_dark"]())
+    filetypes = env.get("_browser_filetypes")
+    chk("P7 macOS 自定义浏览器优先筛选 app 包",
+        filetypes is not None and filetypes()[0][1] == "*.app")
+    if filetypes:
+        env["PLATFORM"].IS_MAC = False
+        chk("P8 Windows 自定义浏览器保留 exe 筛选", filetypes()[0][1] == "*.exe")
+
+    statuses = []
+    tracked = {"v1": SimpleNamespace(pid=41, child_pid=42)}
+    detection = {"ts": 1, "listen": True, "ext": None}
+    gui, _ = harvest(["_refresh_one"], ns_extra={
+        "VC": env["VC"], "procs": tracked, "proc_alive": bool,
+        "_scan_slot": lambda _: None, "_installed_version": lambda _: "0.2.2",
+        "INSTALLED": {"v1": "0.2.2"}, "_DETECT": {"v1": detection},
+        "_prev_state": {}, "_log_state_change": lambda *args: None,
+        "_health_mark": lambda _: "", "_MUTED": "", "_STATUS_COLORS": {},
+        "status_vars": {"v1": SimpleNamespace(set=statuses.append)},
+        "status_lbls": {"v1": SimpleNamespace(configure=lambda **kw: None)},
+    })
+    gui["_refresh_one"]("v1")
+    chk("P9 槽正在启动但端口被外部进程监听时显示冲突",
+        gui["_prev_state"]["v1"] == "external_conflict")
+    detection["ext"] = 42
+    gui["_refresh_one"]("v1")
+    chk("P10 已跟踪的槽进程开始监听后显示正在运行",
+        gui["_prev_state"]["v1"] == "running_tracked")
+
+
+_check_gui_platform_parity()
 
 
 print()

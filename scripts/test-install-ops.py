@@ -347,8 +347,10 @@ try:
         chk("接受版本号写法 %r（非格式问题）" % raw,
             ok is False and "版本号" not in msg, msg)
 
-    ok, key, msg = O.run_official_install(A, "0.2.0-rc.2", cfgp, tmp, "v2", [],
-                                          versions_root=os.path.join(tmp, "vr"))
+    # The fixture simulates Windows and must not select a host's macOS Node.
+    with patch.object(O.shutil, "which", return_value=None):
+        ok, key, msg = O.run_official_install(A, "0.2.0-rc.2", cfgp, tmp, "v2", [],
+                                              versions_root=os.path.join(tmp, "vr"))
     # 2026-10-30 改了语义：安装失败当场把「装到一半」的目录收回，并把槽从
     # config 撤掉。原因：失败时目录里已经有 npm init 生成的 package.json，
     # 它不满足「零文件」的空壳判据 → `_reuse_empty_shell` 不复用 →

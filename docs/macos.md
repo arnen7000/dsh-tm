@@ -30,7 +30,8 @@ python3 dsh-tm.py --config /path/to/old/config.json doctor --json
 - Windows 便携包从程序目录读配置。macOS 的配置与日志默认位于
   `~/Library/Application Support/DSH-TM`。打开槽目录和浏览器时调用 macOS 的默认程序。
 - macOS 槽内使用 `.command`。启动和 CLI 入口使用槽内 Node，可在管理器关闭后运行。
-  停止入口使用管理器的进程身份检查，移动 App 后可从槽体检补上缺失的停止脚本。
+  停止入口使用管理器的进程身份检查。如果移动 App 后旧停止脚本仍指向原路径，
+  将旧停止脚本移到别处，再用「槽体检 → 修复」补上缺失的停止脚本。
 - Windows 可在体检中把旧 PATH Node 固定到槽内。macOS 新装槽自带 Node 和 npm，
   旧配置仍可使用共享 Node。迁移旧数据时保留来源目录后，可重新纳入已有安装。
 

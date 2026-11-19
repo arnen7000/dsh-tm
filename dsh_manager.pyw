@@ -1006,6 +1006,10 @@ def _rebuild_bats(keys=None, only_missing=False):
     return made, failed, skipped
 
 
+def _launcher_action_label():
+    return T("生成启动、停止和 CLI 脚本") if PLATFORM.IS_MAC else T("生成启动/kill/CLI bat")
+
+
 def gen_bats():
     """为每个版本生成 启动 bat / kill bat / CLI bat。"""
     made, failed, skipped = _rebuild_bats()
@@ -1025,9 +1029,9 @@ def gen_bats():
     if not msg:
         msg.append(T("没有可生成的版本。"))
     body = "\n".join(msg)
-    log(T("=== 生成 bat 完成 ===\n") + body)
+    log(T("=== 启动脚本生成完成 ===\n") + body)
     try:
-        messagebox.showinfo(T("生成启动/kill/CLI bat"), body)
+        messagebox.showinfo(_launcher_action_label(), body)
     except Exception:
         pass
 
@@ -1064,8 +1068,8 @@ def _pids_on_port(port):
 
 def _dsh_pid_on_port(key):
     cfg = VC[key]
-    listening, _ = SLOT_PROCESS.slot_listeners(cfg.get("bin_js"), cfg["port"])
-    return next(iter(listening), None)
+    owned, listeners = SLOT_PROCESS.slot_listeners(cfg.get("bin_js"), cfg["port"])
+    return next(iter(owned), None) if owned == listeners else None
 
 def _refresh_detect_cache(key):
     """杀完进程后**立刻**刷新该槽的端口探测缓存。
@@ -1179,9 +1183,9 @@ def stop_all_slots():
                 continue
         except Exception:
             pass
-        # 外部/上一会话启动的：端口在听就算
+        # 只把能确认属于该槽的外部实例列为运行中。
         try:
-            if port_open(VC[k]["port"]):
+            if _dsh_pid_on_port(k):
                 running.append(k)
         except Exception:
             pass
@@ -1383,6 +1387,11 @@ BROWSER_CHOICES = ["default", "chrome", "edge", "firefox"]
 # 「设置」下拉里的最后一项：不是值，是个动作（弹文件选择框挑任意 exe）。
 _B_OTHER = "选择其他程序…"
 
+def _browser_filetypes():
+    if PLATFORM.IS_MAC:
+        return [(T("macOS 应用程序"), "*.app"), (T("所有文件"), "*")]
+    return [(T("可执行程序"), "*.exe"), (T("所有文件"), "*.*")]
+
 def _browser_label(browser):
     """按钮/标题显示名：chrome→Chrome、edge→Edge、firefox→Firefox、
     绝对路径→该文件名、default/空→浏览器。
@@ -1462,18 +1471,40 @@ def _resolve_browser(browser):
         return ("explicit", os.path.expandvars(browser))  # 用户写死 exe 绝对路径
     return ("start", "")                      # 交给系统默认浏览器
 
+def _slot_browser_url(key):
+    cfg = VC[key]
+    port = cfg["port"]
+    tracked = procs.get(key)
+    alive = proc_alive(tracked)
+    owned, listeners = SLOT_PROCESS.slot_listeners(cfg.get("bin_js"), port)
+    if not owned or owned != listeners:
+        if listeners or port_open(port):
+            log(T("[%s] 无法确认监听端口属于该槽，未提供入口 URL。") % key)
+        elif alive:
+            log(T("[%s] 仍在启动：入口 URL 还没生成，状态变 ✓ 后再点") % key)
+        else:
+            log(T("[%s] 未运行，请先启动") % key)
+        return None
+
+    url = auth_urls.get(key)
+    if alive and tracked.child_pid in owned:
+        current = SLOT_PROCESS.process_info(tracked.child_pid)
+        if current and current.birth == tracked.child.birth:
+            if url:
+                return url
+            log(T("[%s] 仍在启动：入口 URL 还没生成，状态变 ✓ 后再点") % key)
+            return None
+
+    log(T("[%s] 未捕获到入口 URL（该实例不是本管理器启动的）；"
+        "若该版本有 token 保护，请从管理器重启它") % key)
+    return "http://127.0.0.1:%d" % port
+
+
 def open_browser(key):
     cfg = VC[key]
-    url = auth_urls.get(key)
+    url = _slot_browser_url(key)
     if not url:
-        if proc_alive(procs[key]):
-            log(T("[%s] 仍在启动：入口 URL 还没生成，状态变 ✓ 后再点") % key); return
-        if not port_open(cfg["port"]):
-            log(T("[%s] 未运行，请先启动") % key); return
-        # 在监听但不是本管理器拉起的：抓不到 URL，只能给裸地址
-        url = "http://127.0.0.1:%d" % cfg["port"]
-        log(T("[%s] 未捕获到入口 URL（该实例不是本管理器启动的）；"
-            "若该版本有 token 保护，请从管理器重启它") % key)
+        return
     kind, exe = _resolve_browser(cfg["browser"])
     if kind == "start":
         # 两种情形都落到这里：① 配置就是 default（默认值）；② 配了某个浏览器
@@ -1495,8 +1526,8 @@ def open_browser(key):
     try:
         if PLATFORM.IS_MAC and exe.endswith(".app"):
             subprocess.Popen(["/usr/bin/open", "-a", exe, url])
-            return
-        subprocess.Popen([exe, url])                 # GUI 浏览器绝不能加 CREATE_NO_WINDOW
+        else:
+            subprocess.Popen([exe, url])             # GUI 浏览器绝不能加 CREATE_NO_WINDOW
         log(T("[%s] 浏览器已启动") % key)
     except Exception as e:
         log(T("[%s] 浏览器启动失败：%s") % (key, e))
@@ -1507,20 +1538,17 @@ def copy_url(key):
     日志里的 token 已经就地打码，所以"从日志里复制 URL"这条路没有了；
     完整 URL 一直保存在内存的 auth_urls 里，用这个按钮取，既能粘到任意浏览器
     / 别的机器，也不会让 token 落到磁盘上。"""
-    cfg = VC[key]
-    url = auth_urls.get(key)
+    url = _slot_browser_url(key)
     if not url:
-        if proc_alive(procs[key]) or port_open(cfg["port"]):
-            log(T("[%s] 入口 URL 还没抓到（可能还在启动）；状态变 ✓ 后再点") % key)
-            return
-        url = "http://127.0.0.1:%d" % cfg["port"]
-        log(T("[%s] 未捕获到带 token 的入口 URL（该实例不是本管理器启动的），已复制裸地址")
-            % key)
+        return
     try:
         root.clipboard_clear()
         root.clipboard_append(url)
         root.update_idletasks()          # 让剪贴板内容在管理器退出后仍然有效
-        log(T("[%s] 已复制入口 URL 到剪贴板（含 token，请勿外发）") % key)
+        if url == auth_urls.get(key):
+            log(T("[%s] 已复制入口 URL 到剪贴板（含 token，请勿外发）") % key)
+        else:
+            log(T("[%s] 已复制无认证的入口 URL 到剪贴板。") % key)
     except Exception as e:
         log(T("[%s] 复制入口 URL 失败：%s") % (key, e))
 
@@ -3177,7 +3205,7 @@ def _health_dialog():
                     T("只会**补上缺的东西**，不会删除或覆盖你已有的文件：\n"
                       "  · node 运行时、.dsh-home / .tmp 空目录\n"
                       "  · 缺失的启动脚本：%s\n\n"
-                      "已经存在、或你手工改过的 bat 一律不碰。\n\n"
+                      "已经存在、或你手工改过的脚本一律保留。\n\n"
                       "%s（%s）\n%s\n\n继续？")
                     % (_what, key, VC[key].get("label") or key, root_) + "\n" + _node_note,
                     default="yes"):
@@ -3225,8 +3253,9 @@ def _health_dialog():
                 messagebox.showerror(
                     T("修复未完成"),
                     T("已补上：%s\n\n但启动脚本没补全：\n  %s\n\n"
-                      "可到「设置 → 维护」点「生成启动/kill/CLI bat」重试。")
-                    % ("、".join(acts) or "—", "\n  ".join(bat_failed)))
+                      "可到「设置 → 维护」点「%s」重试。")
+                    % ("、".join(acts) or "—", "\n  ".join(bat_failed),
+                       _launcher_action_label()))
                 return
             messagebox.showinfo(
                 T("已修复"),
@@ -5254,7 +5283,7 @@ def _do_readd(roots, on_done=None):
                     log(T("[纳入] 槽 %s 的启动脚本：成功 %d，失败 %d，跳过 %d")
                         % (key, len(made), len(failed), len(skipped)))
                 except Exception as e:
-                    log(T("[纳入] 重写 bat 失败（可点「设置 → 维护 → 生成 bat」）：%s") % e)
+                    log(T("[纳入] 重写启动脚本失败（可到「设置 → 维护」重新生成）：%s") % e)
         else:
             log(T("[纳入] 未完成：%s") % msg.replace("\n", " | "))
             messagebox.showerror(T("重新纳入未完成"), msg or T("原因未知"))
@@ -5522,16 +5551,16 @@ def _refresh_one(key):
         except Exception: pass
         return
     listen, ext_pid = d.get("listen"), d.get("ext")
-    if alive and listen:
+    if alive and listen and ext_pid is not None and ext_pid == p.child_pid:
         state, s = "running_tracked", T("运行中  pid=%s  :%d  ✓") % (p.pid, cfg["port"])
-    elif alive:
-        state, s = "starting", T("启动中  pid=%s  :%d  …") % (p.pid, cfg["port"])
     elif listen and ext_pid is not None:
         # 关键修正：外部（或上一会话）启动的同版本 dsh 仍在跑 —— 直接显示「运行中」，
         # 不再标「外部程序打开」。只有端口被非 dsh 进程占了才报冲突。
         state, s = "running_external", T("运行中  pid=%s  :%d  ✓") % (ext_pid, cfg["port"])
     elif listen:
         state, s = "external_conflict", T("端口被非 dsh 程序占用 :%d（点「停止」看是谁）") % cfg["port"]
+    elif alive:
+        state, s = "starting", T("启动中  pid=%s  :%d  …") % (p.pid, cfg["port"])
     else:
         state, s = "stopped", T("已停止  :%d") % cfg["port"]
         if procs[key] is not None:
@@ -5540,6 +5569,7 @@ def _refresh_one(key):
             except Exception:
                 pass
             procs[key] = None
+            auth_urls[key] = None
     # 状态类别变化才写日志（避免每 1.5s 刷屏）
     prev = _prev_state.get(key)
     if state != prev:
@@ -6337,7 +6367,7 @@ def _apply_dir_settings(ib_var, tr_var):
         if ch["key"] in VC:
             VC[ch["key"]]["temp_dir"] = ch["new_abs"]
     made, failed, _skipped = _rebuild_bats()
-    log(T("[设置] 临时目录根 → %s（%s；重写 %d 个 bat）")
+    log(T("[设置] 临时目录根 → %s（%s；重写 %d 个启动脚本）")
         % (new_temp, msg, len(made)))
 
     lines = [T("临时目录已迁到："), "  " + new_temp, ""]
@@ -6345,9 +6375,9 @@ def _apply_dir_settings(ib_var, tr_var):
         if ch["old_abs"] and _norm_cmp(ch["old_abs"]) != _norm_cmp(ch["new_abs"]):
             lines.append("  %-6s %s → %s" % (ch["key"], ch["old_abs"], ch["new_abs"]))
     lines.append("")
-    lines.append(T("已重写 %d 个 bat（TEMP/TMP 指向新位置）。") % len(made))
+    lines.append(T("已重写 %d 个启动脚本（临时目录指向新位置）。") % len(made))
     if failed:
-        lines.append(T("有 %d 个 bat 写入失败，请看日志。") % len(failed))
+        lines.append(T("有 %d 个启动脚本写入失败，请看日志。") % len(failed))
     lines.append(T("旧临时目录里的文件没有搬（那是每次启动重建的垃圾），可手动删除。"))
     return (True, "\n".join(lines))
 
@@ -6560,7 +6590,15 @@ def _apply_palette():
 
 
 def _system_is_dark():
-    """读 Windows 的"应用使用深色模式"开关。读不到就当浅色。"""
+    """读取平台的系统深色模式设置。"""
+    if PLATFORM.IS_MAC:
+        try:
+            result = subprocess.run(
+                ["/usr/bin/defaults", "read", "-g", "AppleInterfaceStyle"],
+                capture_output=True, text=True, timeout=1)
+            return result.returncode == 0 and result.stdout.strip() == "Dark"
+        except (OSError, subprocess.TimeoutExpired):
+            return False
     try:
         import winreg
         k = winreg.OpenKey(
@@ -7283,20 +7321,6 @@ def _do_move_root(MV, plan):
                 T("移动完成"),
                 T("%s\n\n管理器已切换到新位置。") % message)
             _restart_or_tell(T("安装位置"))
-            # 三件 bat 里写的是**绝对路径**，搬完必须重写 —— 否则双击 dsh.bat
-            # 仍然指向旧位置（2026-11-14 补：之前搬完没重写，只有管理器里能启动）。
-            try:
-                if PLATFORM.IS_MAC:
-                    _moved = {slot["name"] for slot in plan["slots"]}
-                    keys = [key for key in SLOT_KEYS if os.path.basename(
-                        _version_root(VC[key]) or "") in _moved]
-                    made, failed, skipped = _rebuild_bats(keys=keys, only_missing=True)
-                else:
-                    made, failed, skipped = _rebuild_bats()
-                log(T("[移动] 已按新位置重写 %d 个 bat（失败 %d，跳过 %d）")
-                    % (len(made), len(failed), len(skipped)))
-            except Exception as e:
-                log(T("[移动] 重写 bat 失败（可点「设置 → 维护 → 生成 bat」）：%s") % e)
         else:
             log(T("[移动] 失败：%s") % str(message).replace("\n", " | "))
             messagebox.showerror(T("移动失败"), str(message))
@@ -7763,7 +7787,7 @@ def settings_hub_dialog():
 
     _mbtn(0, 0, T("检查运行环境"), _show_env_report)
     _mbtn(0, 1, T("槽体检"), lambda: _run_health(deep=True, dialog=True))
-    _mbtn(1, 0, T("生成启动/kill/CLI bat"), gen_bats)
+    _mbtn(1, 0, _launcher_action_label(), gen_bats)
     _mbtn(1, 1, T("使用说明"), _open_user_guide)
 
     # ── 日志 ──────────────────────────────────────────────
@@ -8029,10 +8053,10 @@ def _settings_display_dialog():
             return
         k = order[i]
         sel = bcb.get()
-        if sel == _B_OTHER:
+        if sel == T(_B_OTHER):
             p = filedialog.askopenfilename(
                 title=T("选择浏览器程序"), parent=win,
-                filetypes=[(T("可执行程序"), "*.exe"), (T("所有文件"), "*.*")])
+                filetypes=_browser_filetypes())
             if not p:
                 _b_sync()                       # 取消 → 回到原值
                 return

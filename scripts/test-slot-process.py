@@ -80,7 +80,7 @@ class SlotProcessTests(unittest.TestCase):
     def cli(self, *args):
         result = subprocess.run(
             [sys.executable, str(ROOT / "dsh-tm.py"), "--config", str(self.config), *args, "--json"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
         )
         return result, json.loads(result.stdout)
 

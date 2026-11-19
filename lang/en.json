@@ -1193,5 +1193,18 @@
   "输入编号（可用逗号分隔）或 a（全部）：": "Enter numbers separated by commas, or a for all:",
   "这是 npm 全局安装，不能按槽删除。": "This is a global npm installation and cannot be removed as a slot.",
   "该槽使用共享的 Node.js 运行时。": "This slot uses a shared Node.js runtime.",
-  "配置在搬迁过程中已更改，请重新生成计划。": "The configuration changed during the move. Create a new move plan."
+  "配置在搬迁过程中已更改，请重新生成计划。": "The configuration changed during the move. Create a new move plan.",
+  "目标路径含有 Windows 启动脚本不支持的字符：%s": "The destination contains characters unsupported by Windows launch scripts: %s",
+  "=== 启动脚本生成完成 ===\n": "=== Finished generating launch scripts ===\n",
+  "[%s] 已复制无认证的入口 URL 到剪贴板。": "[%s] Copied the URL without credentials to the clipboard.",
+  "[%s] 无法确认监听端口属于该槽，未提供入口 URL。": "[%s] Could not confirm that the listener belongs to this slot. No URL provided.",
+  "[纳入] 重写启动脚本失败（可到「设置 → 维护」重新生成）：%s": "[Adopt] Could not rewrite the launch scripts. Generate them again under Settings → Maintenance: %s",
+  "[设置] 临时目录根 → %s（%s；重写 %d 个启动脚本）": "[Settings] Temp root → %s (%s, rewrote %d launch scripts)",
+  "macOS 应用程序": "macOS applications",
+  "只会**补上缺的东西**，不会删除或覆盖你已有的文件：\n  · node 运行时、.dsh-home / .tmp 空目录\n  · 缺失的启动脚本：%s\n\n已经存在、或你手工改过的脚本一律保留。\n\n%s（%s）\n%s\n\n继续？": "Repair adds the following missing items:\n  - Node runtime and empty .dsh-home / .tmp directories\n  - Launch scripts: %s\n\nExisting scripts and manual edits are preserved.\n\n%s (%s)\n%s\n\nContinue?",
+  "已补上：%s\n\n但启动脚本没补全：\n  %s\n\n可到「设置 → 维护」点「%s」重试。": "Restored: %s\n\nSome launch scripts are still missing:\n  %s\n\nGo to Settings → Maintenance and choose \"%s\" to retry.",
+  "已重写 %d 个启动脚本（临时目录指向新位置）。": "Rewrote %d launch scripts to use the new temp directory.",
+  "有 %d 个启动脚本写入失败，请看日志。": "Could not write %d launch scripts. See the log for details.",
+  "生成启动、停止和 CLI 脚本": "Generate start, stop and CLI scripts",
+  "选择其他程序…": "Choose another application…"
 }

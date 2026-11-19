@@ -13,14 +13,18 @@
 """
 from __future__ import annotations
 
+from difflib import SequenceMatcher
 import json
 import os
+from pathlib import Path
+import re
 import shutil
 import stat
 import tempfile
 import time
 
 import dsh_uninstall_ops as FS
+import dsh_platform as PLATFORM
 from dsh_i18n import T
 
 
@@ -69,8 +73,8 @@ def _safe_rmtree(path):
 
 def _moved_path(path, relocations):
     for source, destination in relocations:
-        if FS._path_within(path, source):
-            relative = os.path.relpath(FS._native_path(path), FS._native_path(source))
+        relative = FS._path_relative_to(path, source)
+        if relative is not None:
             return os.path.normpath(os.path.join(destination, relative))
     return path
 
@@ -254,6 +258,64 @@ def _verify_copy(source, target, expected):
         raise OSError(T("目录项校验失败：%s") % source)
 
 
+def _windows_launcher_text(text, relocations):
+    def path(value):
+        if not os.path.isabs(value):
+            return value
+        moved = _moved_path(value, relocations)
+        if moved != value and any(c in moved for c in '"\r\n%&^|<>()'):
+            raise OSError(T("目标路径含有 Windows 启动脚本不支持的字符：%s") % moved)
+        return moved
+
+    # Recognize the launcher's path operands and environment assignments. Keep
+    # the original GBK/CRLF and do not rewrite arbitrary comments or commands.
+    text = re.sub(r'(?m)^(set "(?:DSH_HOME|TEMP|TMP|PATH)=)([^"\r\n]*?)(;%PATH%)?("\r?$)',
+                  lambda m: m[1] + path(m[2]) + (m[3] or "") + m[4], text)
+    text = re.sub(r'(?m)^"([^"\r\n]+)" "([^"\r\n]+)"(?= (?:web |%\*\r?$))',
+                  lambda m: '"%s" "%s"' % (path(m[1]), path(m[2])), text)
+    return re.sub(r'(?m)^([ \t]*"[^"\r\n]+" "[^"\r\n]+" --port [^\r\n]+ --entrypoint ")'
+                  r'([^"\r\n]+)("\r?$)',
+                  lambda m: m[1] + path(m[2]) + m[3], text)
+
+
+def _refresh_staged_launchers(item, stage_path, configs, relocations):
+    before, after = configs.get(os.path.normcase(FS._native_path(item["src"])), ({}, {}))
+    port = before.get("port")
+    if not port:
+        return
+    candidates = PLATFORM.slot_launcher_paths(stage_path, port).values()
+    paths = [Path(path) for path in candidates
+             if not FS._is_reparse_path(path) and os.path.isfile(path)]
+    if not paths:
+        return
+    if PLATFORM.IS_MAC:
+        old = PLATFORM.slot_launcher_texts(item["src"], before)
+        new = PLATFORM.slot_launcher_texts(item["dst"], after)
+        old = {os.path.basename(path): text.splitlines(keepends=True) for path, text in old.items()}
+        new = {os.path.basename(path): text.splitlines(keepends=True) for path, text in new.items()}
+    encoding = "utf-8" if PLATFORM.IS_MAC else "gbk"
+    for path in paths:
+        original = path.read_bytes()
+        try:
+            text = original.decode(encoding)
+        except UnicodeError:
+            continue  # A launcher in a different encoding is user-maintained.
+        if PLATFORM.IS_MAC:
+            before_lines, after_lines = old[path.name], new[path.name]
+            # Apply only generated sections that still match the pre-move
+            # launcher verbatim, leaving customizations around them intact.
+            for tag, start, end, replacement, limit in SequenceMatcher(
+                    None, before_lines, after_lines, autojunk=False).get_opcodes():
+                if tag == "replace":
+                    text = text.replace("".join(before_lines[start:end]),
+                                        "".join(after_lines[replacement:limit]), 1)
+        elif PLATFORM.IS_WINDOWS:
+            text = _windows_launcher_text(text, relocations)
+        updated = text.encode(encoding)
+        if updated != original:
+            path.write_bytes(updated)
+
+
 def _update_paths(data, plan, config_path, relocations):
     old_base = plan["src_base"]
     home = os.path.expanduser("~")
@@ -268,13 +330,24 @@ def _update_paths(data, plan, config_path, relocations):
             return moved
         return value
 
-    data["install_base"] = plan["dst_base"]
+    new_base = plan["dst_base"]
+    data["install_base"] = new_base
+    configs = {}
     for cfg in (data.get("versions") or {}).values():
+        before = dict(cfg)
+        source = FS.slot_root(before, old_base, home, self_dir)
         for field in ("node_exe", "bin_js", "dsh_home", "temp_dir"):
             if field in cfg:
+                before[field] = FS.resolve(cfg[field], old_base, home, self_dir)
                 cfg[field] = swap(cfg[field])
+        if source:
+            after = {field: FS.resolve(value, new_base, home, self_dir)
+                     if field in ("node_exe", "bin_js", "dsh_home", "temp_dir") else value
+                     for field, value in cfg.items()}
+            configs[os.path.normcase(FS._native_path(source))] = before, after
     if "temp_root" in data:
         data["temp_root"] = swap(data["temp_root"])
+    return configs
 
 
 def move_now(plan, config_path, progress=None):
@@ -314,7 +387,7 @@ def move_now(plan, config_path, progress=None):
                 raise FileExistsError(destination)
             if FS._paths_overlap(config_path, source):
                 raise OSError(T("搬迁目录包含当前配置：%s") % source)
-        _update_paths(data, plan, config_path, relocations)
+        configs = _update_paths(data, plan, config_path, relocations)
         os.makedirs(plan["dst_base"], exist_ok=True)
         staging = tempfile.mkdtemp(prefix=".dsh-move-", dir=plan["dst_base"])
 
@@ -324,6 +397,7 @@ def move_now(plan, config_path, progress=None):
             _copy_tree_no_follow(item["src"], stage_path, item["dst"], relocations)
             step(T("校验 %s …") % item["name"])
             _verify_copy(item["src"], stage_path, item["stats"])
+            _refresh_staged_launchers(item, stage_path, configs, relocations)
 
         for index, item in enumerate(items):
             destination = item["dst"]
