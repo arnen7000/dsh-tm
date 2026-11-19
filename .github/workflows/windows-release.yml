@@ -3,7 +3,7 @@ name: Windows portable v0.1.10
 on:
   push:
     branches: [main]
-    paths: [VERSION]
+    paths: [VERSION, .github/workflows/windows-release.yml]
   workflow_dispatch:
 
 permissions: {}
@@ -25,6 +25,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+    env:
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,7 +41,6 @@ jobs:
             throw 'VERSION does not match the release tag.'
           }
           Copy-Item config/config.example.json config.json
-          $env:PYTHONIOENCODING = 'utf-8'
           & ./scripts/check-all.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build with the verified v0.1.9 Windows runtime
@@ -85,7 +86,8 @@ jobs:
             Pop-Location
           }
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
-          "$hash  $env:PORTABLE_ZIP" | Set-Content -LiteralPath "$zip.sha256" -Encoding ascii
+          $checksum = Join-Path $PWD.Path "$zip.sha256"
+          [IO.File]::WriteAllText($checksum, "$hash  $env:PORTABLE_ZIP`n", [Text.Encoding]::ASCII)
       - uses: actions/upload-artifact@v4
         with:
           name: windows-portable
