@@ -1206,5 +1206,10 @@
   "已重写 %d 个启动脚本（临时目录指向新位置）。": "Rewrote %d launch scripts to use the new temp directory.",
   "有 %d 个启动脚本写入失败，请看日志。": "Could not write %d launch scripts. See the log for details.",
   "生成启动、停止和 CLI 脚本": "Generate start, stop and CLI scripts",
-  "选择其他程序…": "Choose another application…"
+  "选择其他程序…": "Choose another application…",
+  "[%s] 启动失败：未核实该槽在端口 %d 上监听。": "[%s] Startup failed. The listener on port %d could not be verified.",
+  "[%s] 启动等候超时（%d 秒），进程仍在后台初始化。": "[%s] Startup wait timed out after %d seconds. The process is still initializing in the background.",
+  "[%s] 已发出启动指令，端口 %d。": "[%s] Startup requested on port %d.",
+  "启动失败  :%d（查看日志）": "Startup failed  :%d (see log)",
+  "启动等候超时  :%d（仍在后台）": "Startup wait timed out  :%d (still in background)"
 }

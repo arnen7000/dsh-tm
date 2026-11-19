@@ -14,6 +14,7 @@ import threading
 import time
 
 WINDOWS = sys.platform == "win32"
+START_TIMEOUT = 20.0
 TOKEN = re.compile(rb"(token=)[^\s&#\"'<>\x1b]+", re.IGNORECASE)
 ENTRY_URL = re.compile(rb"dsh web:\s*(https?://(?:127\.0\.0\.1|localhost|\[::1\]):(\d+)(?=[/?#\s]|$)[^\s\x1b]*)")
 
@@ -298,15 +299,20 @@ def port_reachable(port):
     return False
 
 
-def slot_state(entrypoint, port):
+def observe_slot(entrypoint, port):
+    """Return (state, verified processes by PID) from one listener observation."""
     port = normalize_port(port)
     if port is None:
-        return "idle"
-    owned, listeners = slot_listeners(entrypoint, port)
+        return "idle", {}
+    owned, listeners = _matching_listeners(entrypoint, port)
     if listeners:
-        return "owned" if owned == listeners else "conflict"
+        return ("owned" if owned.keys() == listeners else "conflict"), owned
     # A listener that the OS won't disclose is still a conflict.
-    return "conflict" if port_reachable(port) else "idle"
+    return ("conflict" if port_reachable(port) else "idle"), owned
+
+
+def slot_state(entrypoint, port):
+    return observe_slot(entrypoint, port)[0]
 
 
 def _still_owned(process, entrypoint, port, tracked):
@@ -403,6 +409,8 @@ class SlotProcess:
         self._proc = proc
         self.entrypoint = normal_path(entrypoint)
         self.port = port
+        self.launched_at = time.monotonic()
+        self.start_confirmed = False
         self.child = None
         self.url = None
         self.started = threading.Event()

@@ -1275,8 +1275,21 @@ chk("C3z20f 批量安装收尾不引用未定义的 payload（曾导致装完不
 chk("C3z20h 原地刷新重建探测缓存与状态记忆（否则新槽永远「检测中…」）",
     "_DETECT.clear()" in _rl and "_prev_state.clear()" in _rl
     and "_old_detect.get(_k)" in _rl)
-chk("C3z20i 探测线程对缺失槽键用 setdefault（防 KeyError 被吞）",
-    "_DETECT.setdefault(key" in _fn_body("_detect_worker"))
+chk("C3z20i 探测线程刷新新槽，接收时核对配置和探测时间",
+    "_refresh_detect_cache(key)" in _fn_body("_detect_worker")
+    and "VC.get(key) is not cfg" in _fn_body("_apply_detect_payload"))
+
+_old_cfg = {"port": 4080}
+_current_cfg = {"port": 5080}
+_probe, _ = harvest(["_apply_detect_payload"], ns_extra={
+    "VC": {"v1": _current_cfg}, "_DETECT": {},
+})
+_apply_payload = _probe["_apply_detect_payload"]
+_apply_payload("v1", _current_cfg, 10.0, "conflict", {})
+_apply_payload("v1", _old_cfg, 11.0, "idle", {})
+_apply_payload("v1", _current_cfg, 9.0, "idle", {})
+chk("C3z20j 旧配置或较早探测不能覆盖新槽状态",
+    _probe["_DETECT"]["v1"]["ownership"] == "conflict")
 
 # ── C3z21：移出后再「扫描并纳入」必须原样接回，不能复制成 -2 ─────────────
 # 2026-11-12 实测：移出 v3 后点「扫描并纳入」，走了复制路径 → 736 MB 拷到
@@ -1499,7 +1512,8 @@ chk("C3z31d CLI 的 --version 与界面同源",
 
 chk("C3z29e 杀完进程立刻刷新探测缓存（否则日志里「已停止」紧跟「运行中(外部)」）",
     "_refresh_detect_cache(key)" in _fn_body("kill_one")
-    and "_DETECT[key] = {" in _fn_body("_refresh_detect_cache"))
+    and "_apply_detect_payload(" in _fn_body("_refresh_detect_cache")
+    and "_DETECT[key] = {" in _fn_body("_apply_detect_payload"))
 
 
 # ── C3z26：纳入对话框的尺寸按内容算（2026-11-14「这个界面不太合理」）────────
@@ -1568,6 +1582,48 @@ chk("C3z22e 日志扫描偏移随软刷新重建（新槽不会 KeyError）",
     "_scan_pos.update({k: _old_scan.get(k) for k in SLOT_KEYS})"
     in _fn_body("_reload_config_after_change")
     and "procs.get(key)" in _fn_body("_scan_slot"))
+
+def check_slot_status(ownership, owners, age, exit_code=None):
+    from types import SimpleNamespace
+
+    rendered = []
+    proc = SimpleNamespace(pid=900, child_pid=901, poll=lambda: exit_code,
+                           child=SimpleNamespace(pid=901, birth="original"),
+                           wait=lambda **kwargs: exit_code,
+                           launched_at=time.monotonic() - age,
+                           start_confirmed=False)
+    cfg = {"port": 4080, "bin_js": "slot/bin.js"}
+    ns, _ = harvest(["proc_alive", "_refresh_one"], ns_extra={
+        "VC": {"v1": cfg}, "INSTALLED": {"v1": ""}, "procs": {"v1": proc},
+        "auth_urls": {"v1": ""}, "_DETECT": {"v1": {
+            "listen": ownership != "idle", "ext": next(iter(owners), None),
+            "ownership": ownership, "ts": time.monotonic(),
+            "owners": {pid: SimpleNamespace(birth=birth) for pid, birth in owners.items()}}},
+        "_prev_state": {}, "_scan_slot": lambda *a: None,
+        "_installed_version": lambda *a: "", "_health_mark": lambda *a: "",
+        "_log_state_change": lambda *a: None, "_STATUS_COLORS": {}, "_MUTED": "",
+        "status_vars": {"v1": SimpleNamespace(set=rendered.append)}, "status_lbls": {},
+        "SLOT_PROCESS": SimpleNamespace(START_TIMEOUT=20),
+    })
+    ns["_refresh_one"]("v1")
+    return ns["_prev_state"].get("v1"), ns["procs"]["v1"], rendered
+
+_status_foreign, _ignored, _render_foreign = check_slot_status("conflict", {}, 1)
+chk("C3z22f 跟踪的进程尚未监听时，外来监听显示端口占用",
+    _status_foreign == "external_conflict", str(_render_foreign))
+_status_timed_out, _pending_timed_out, _render_timed_out = check_slot_status("idle", {}, 21)
+chk("C3z22g 启动超时有明确状态，并允许冷启动继续初始化",
+    _status_timed_out == "start_timed_out" and _pending_timed_out is not None,
+    str(_render_timed_out))
+_status_owned, _ignored, _render_owned = check_slot_status("owned", {901: "original"}, 1)
+chk("C3z22h 端口核实属于跟踪的子进程后显示运行中",
+    _status_owned == "running_tracked" and "901" in _render_owned[0], str(_render_owned))
+_status_reused, _ignored, _render_reused = check_slot_status("owned", {901: "new"}, 1)
+chk("C3z22i PID 已复用时不把外部进程认成本窗口启动的进程",
+    _status_reused == "running_external", str(_render_reused))
+_status_exited, _stopped_exited, _render_exited = check_slot_status("idle", {}, 1, exit_code=1)
+chk("C3z22j 监听前进程退出立即显示失败",
+    _status_exited == "start_failed" and _stopped_exited is None, str(_render_exited))
 
 
 # ── C3z23：槽编号与目录一一对应（2026-11-13「为什么会有 dshV3-2」）──────────
@@ -1810,27 +1866,6 @@ def _check_gui_platform_parity():
     if filetypes:
         env["PLATFORM"].IS_MAC = False
         chk("P8 Windows 自定义浏览器保留 exe 筛选", filetypes()[0][1] == "*.exe")
-
-    statuses = []
-    tracked = {"v1": SimpleNamespace(pid=41, child_pid=42)}
-    detection = {"ts": 1, "listen": True, "ext": None}
-    gui, _ = harvest(["_refresh_one"], ns_extra={
-        "VC": env["VC"], "procs": tracked, "proc_alive": bool,
-        "_scan_slot": lambda _: None, "_installed_version": lambda _: "0.2.2",
-        "INSTALLED": {"v1": "0.2.2"}, "_DETECT": {"v1": detection},
-        "_prev_state": {}, "_log_state_change": lambda *args: None,
-        "_health_mark": lambda _: "", "_MUTED": "", "_STATUS_COLORS": {},
-        "status_vars": {"v1": SimpleNamespace(set=statuses.append)},
-        "status_lbls": {"v1": SimpleNamespace(configure=lambda **kw: None)},
-    })
-    gui["_refresh_one"]("v1")
-    chk("P9 槽正在启动但端口被外部进程监听时显示冲突",
-        gui["_prev_state"]["v1"] == "external_conflict")
-    detection["ext"] = 42
-    gui["_refresh_one"]("v1")
-    chk("P10 已跟踪的槽进程开始监听后显示正在运行",
-        gui["_prev_state"]["v1"] == "running_tracked")
-
 
 _check_gui_platform_parity()
 

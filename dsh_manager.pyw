@@ -1037,11 +1037,12 @@ def gen_bats():
 
 def start_one(key):
     cfg = VC[key]
-    if proc_alive(procs.get(key)) or _dsh_pid_on_port(key):
-        return
-    if port_open(cfg["port"]):
+    ownership = SLOT_PROCESS.slot_state(cfg.get("bin_js"), cfg["port"])
+    if ownership == "conflict":
         messagebox.showwarning(T("端口被占用"),
                                T("无法启动 %s：端口 %d 已被占用。") % (key, cfg["port"]))
+        return
+    if ownership == "owned" or proc_alive(procs.get(key)):
         return
     try:
         _spawn_slot_silent(key)
@@ -1068,35 +1069,24 @@ def _pids_on_port(port):
 
 def _dsh_pid_on_port(key):
     cfg = VC[key]
-    owned, listeners = SLOT_PROCESS.slot_listeners(cfg.get("bin_js"), cfg["port"])
-    return next(iter(owned), None) if owned == listeners else None
+    ownership, owners = SLOT_PROCESS.observe_slot(cfg.get("bin_js"), cfg["port"])
+    return min(owners) if ownership == "owned" else None
 
 def _refresh_detect_cache(key):
-    """杀完进程后**立刻**刷新该槽的端口探测缓存。
+    """Refresh the same ownership snapshot used by the background poll."""
+    cfg = VC.get(key)
+    if cfg is not None:
+        observed_at = time.monotonic()
+        ownership, owners = SLOT_PROCESS.observe_slot(cfg.get("bin_js"), cfg["port"])
+        _apply_detect_payload(key, cfg, observed_at, ownership, owners)
 
-    2026-11-14 用户贴的日志：
-        [v3] 停止完成：端口 6080 已释放（清理 1 个进程）
-        [v3] 状态变化: 运行中（外部/上一会话启动，本管理器未跟踪）pid=20032
-    两行自相矛盾 —— 原因是 `_DETECT[key]` 还是**杀之前**那批数据，
-    紧接着的 refresh 拿旧数据算出「运行中」，要等 0.8 秒后探测线程才纠正。
-    这里杀完就地探一次并写回缓存，refresh 立刻看到"已停止"。
-    """
-    try:
-        port = VC[key]["port"]
-    except Exception:
+
+def _apply_detect_payload(key, cfg, observed_at, ownership, owners):
+    if VC.get(key) is not cfg or observed_at < (_DETECT.get(key) or {}).get("ts", 0):
         return
-    _listen = False
-    try:
-        _listen = port_open(port)
-    except Exception:
-        pass
-    _ext = None
-    if _listen:
-        try:
-            _ext = _dsh_pid_on_port(key)
-        except Exception:
-            _ext = None
-    _DETECT[key] = {"listen": _listen, "ext": _ext, "ts": time.time()}
+    _DETECT[key] = {"listen": ownership != "idle", "ownership": ownership,
+                    "owners": owners, "ext": min(owners) if ownership == "owned" else None,
+                    "ts": observed_at}
 
 
 def kill_one(key, report=True):
@@ -1275,11 +1265,12 @@ def start_all_slots():
     for k in keys:
         cfg = VC[k]
         try:
-            if proc_alive(procs.get(k)) or _dsh_pid_on_port(k):
-                skipped.append(k)
-                continue
-            if port_open(cfg["port"]):
+            ownership = SLOT_PROCESS.slot_state(cfg.get("bin_js"), cfg["port"])
+            if ownership == "conflict":
                 blocked.append(T("%s（端口 %d 已被占用）") % (k, cfg["port"]))
+                continue
+            if ownership == "owned" or proc_alive(procs.get(k)):
+                skipped.append(k)
                 continue
             _spawn_slot_silent(k)
             started.append(k)
@@ -1324,7 +1315,7 @@ def _spawn_slot_silent(key):
                                cwd=cfg.get("dsh_home") or BASE_DIR,
                                output_path=LOG_FILE, extra_args=cmd[2:], launcher=launcher)
     procs[key] = p
-    log(T("[%s] 已启动 pid=%s 端口=%d") % (key, p.pid, cfg["port"]))
+    log(T("[%s] 已发出启动指令，端口 %d。") % (key, cfg["port"]))
 
 
 def kill_all():
@@ -2007,6 +1998,8 @@ _STATUS_COLORS = {
     "running_tracked":   _GREEN,
     "running_external":  _GREEN,
     "starting":          _AMBER,
+    "start_timed_out":   _RED,
+    "start_failed":      _RED,
     "external_conflict": _RED,
     "stopped":           _MUTED,
 }
@@ -4077,6 +4070,7 @@ def _reload_config_after_change(new_keys=None):
         N_SLOTS = len(SLOT_KEYS)
         COLS = N_SLOTS * 2
         FRESH_START = (N_SLOTS == 0)
+        _old_vc = VC
         VC = _build_vc(VERSIONS)
         SIG = {k: _make_sig(cfg) for k, cfg in VC.items()}
         INSTALLED = {k: _installed_version(cfg) for k, cfg in VC.items()}
@@ -4093,7 +4087,9 @@ def _reload_config_after_change(new_keys=None):
         _old_detect = dict(_DETECT)
         _DETECT.clear()
         for _k in SLOT_KEYS:
-            _DETECT[_k] = _old_detect.get(_k) or {"listen": None, "ext": None, "ts": 0.0}
+            _same_listener = all(_old_vc.get(_k, {}).get(field) == VC[_k].get(field)
+                                 for field in ("port", "bin_js"))
+            _DETECT[_k] = (_old_detect.get(_k) if _same_listener else None) or {"ts": 0.0}
         _old_prev = dict(_prev_state)
         _prev_state.clear()
         _prev_state.update({k: _old_prev.get(k) for k in SLOT_KEYS})
@@ -4137,10 +4133,7 @@ def _reload_config_after_change(new_keys=None):
     for _k in SLOT_KEYS:
         if not (_DETECT.get(_k) or {}).get("ts"):
             try:
-                _listen = port_open(VC[_k]["port"])
-                _DETECT[_k].update({"listen": _listen,
-                                    "ext": _dsh_pid_on_port(_k) if _listen else None,
-                                    "ts": time.time()})
+                _refresh_detect_cache(_k)
             except Exception as _e:
                 # 不再静默：探测失败时状态行只能走兜底文案，必须留下原因。
                 log(T("[配置] 探测槽 %s 端口失败（状态行先按「已停止 :端口」显示）：%s")
@@ -5476,22 +5469,14 @@ _prev_state = {k: None for k in SLOT_KEYS}
 # ── 后台探测线程（2026-09-27 启动提速）────────────────────────────────────
 # 曾经 port_open + _dsh_pid_on_port 在 UI 线程逐槽直跑：启动快照 = 3×(netstat+CIM)
 # ≈ 6 秒全在窗口出现之前；运行中每轮 refresh 还会周期性冻住界面。
-# 现在：netstat/CIM 探测全部挪到这个 daemon 线程（配合 dsh_kill 的 TTL 缓存，
-# 每轮只跑一次 netstat + 一次 CIM），UI 线程只读现成结果 —— 窗口秒开、轮询零卡顿。
-_DETECT = {k: {"listen": None, "ext": None, "ts": 0.0} for k in SLOT_KEYS}
+# 后台按槽核实监听者，界面刷新只读最近一次观测结果。
+_DETECT = {k: {"ts": 0.0} for k in SLOT_KEYS}
 
 def _detect_worker():
     while True:
         for key in SLOT_KEYS:
             try:
-                cfg = VC[key]
-                listen = port_open(cfg["port"])
-                ext = _dsh_pid_on_port(key) if listen else None
-                # 用 setdefault 而不是 _DETECT[key]：原地刷新会重建槽键，
-                # 万一新槽还没建好条目，KeyError 会被外层 except 吞掉，
-                # 那个槽就永远拿不到探测数据（状态行卡在「检测中…」）。
-                d = _DETECT.setdefault(key, {"listen": None, "ext": None, "ts": 0.0})
-                d["listen"], d["ext"], d["ts"] = listen, ext, time.time()
+                _refresh_detect_cache(key)
             except Exception as _e:
                 # 以前静默 pass：探测一直失败时，状态行就永远没有端口
                 # （2026-11-12 二次反馈的排查点）。首次失败记一行，避免刷屏。
@@ -5503,7 +5488,7 @@ def _detect_worker():
 def _log_state_change(key, prev, state, cfg, listen, ext_pid, tracked_p):
     """只在状态「类别」变化时写日志，避免每 1.5s 轮询刷屏；
     便于以后用 Agent 复盘 运行/外部运行/冲突/停止 的切换。"""
-    pid = (tracked_p.pid if (tracked_p is not None and tracked_p.poll() is None) else None)
+    pid = ((tracked_p.child_pid or tracked_p.pid) if proc_alive(tracked_p) else None)
     if state == "running_tracked":
         log(T("[%s] 状态变化: 运行中（本管理器启动）pid=%s 端口=%d") % (key, pid, cfg["port"]))
     elif state == "running_external":
@@ -5511,13 +5496,16 @@ def _log_state_change(key, prev, state, cfg, listen, ext_pid, tracked_p):
             % (key, ext_pid, cfg["port"]))
     elif state == "starting":
         log(T("[%s] 状态变化: 启动中 pid=%s 端口=%d") % (key, pid, cfg["port"]))
+    elif state == "start_timed_out":
+        log(T("[%s] 启动等候超时（%d 秒），进程仍在后台初始化。")
+            % (key, SLOT_PROCESS.START_TIMEOUT))
+    elif state == "start_failed":
+        log(T("[%s] 启动失败：未核实该槽在端口 %d 上监听。") % (key, cfg["port"]))
     elif state == "external_conflict":
-        who = _pids_on_port(cfg["port"])
-        log(T("[%s] 状态变化: 端口 %d 被非 dsh 进程占用 pid=%s"
-            "\n     点「停止」可看到占用者是谁；管理器不会自动结束别人的程序")
-            % (key, cfg["port"], ",".join(str(x) for x in who) or T("未知")))
+        log("[%s] %s" % (key, T("端口 %s 已被占用，无法确认归属。") % cfg["port"]))
     elif state == "stopped":
         log(T("[%s] 状态变化: 已停止 端口=%d") % (key, cfg["port"]))
+
 
 def _refresh_one(key):
     """刷新**单个**槽的状态行。
@@ -5527,7 +5515,6 @@ def _refresh_one(key):
     后面所有槽的状态行就都停在初始的「—」，界面看起来就是「这个槽没有端口号」。
     现在 refresh 逐个调用并用 try 兜住 —— 一个槽出错只影响它自己。
     """
-    _scan_slot(key)
     cfg = VC[key]
     # 实装版本每次刷新轻量重读：换了版本 / 外部重装都能自动反映到标题
     ver = _installed_version(cfg)
@@ -5535,43 +5522,40 @@ def _refresh_one(key):
         INSTALLED[key] = ver
         try: title_lbls[key].config(text=_slot_title(key))
         except Exception: pass
-    p = procs.get(key); alive = proc_alive(p)
+    p = procs.get(key)
+    alive = proc_alive(p)
     d = _DETECT.get(key) or {}
-    if not d.get("ts"):
-        # 探测数据还没到（新槽刚刷新时最常见）。原来写「检测中…」，
-        # 用户会以为这个槽没分配端口（2026-11-12 二次反馈）。
-        # 改成先按「已停止 :端口」显示 —— 端口至少是可见的，
-        # 0.8 秒内探测线程会用真实结果覆盖。
-        if alive:
-            status_vars[key].set(T("启动中  pid=%s  :%d  …") % (p.pid, cfg["port"])
-                                 + _health_mark(key))
-        else:
-            status_vars[key].set(T("已停止  :%d") % cfg["port"] + _health_mark(key))
-        try: status_lbls[key].configure(foreground=_MUTED)
-        except Exception: pass
-        return
+    ownership = d.get("ownership")
     listen, ext_pid = d.get("listen"), d.get("ext")
-    if alive and listen and ext_pid is not None and ext_pid == p.child_pid:
-        state, s = "running_tracked", T("运行中  pid=%s  :%d  ✓") % (p.pid, cfg["port"])
-    elif listen and ext_pid is not None:
-        # 关键修正：外部（或上一会话）启动的同版本 dsh 仍在跑 —— 直接显示「运行中」，
-        # 不再标「外部程序打开」。只有端口被非 dsh 进程占了才报冲突。
-        state, s = "running_external", T("运行中  pid=%s  :%d  ✓") % (ext_pid, cfg["port"])
-    elif listen:
-        state, s = "external_conflict", T("端口被非 dsh 程序占用 :%d（点「停止」看是谁）") % cfg["port"]
-    elif alive:
-        state, s = "starting", T("启动中  pid=%s  :%d  …") % (p.pid, cfg["port"])
-    else:
-        state, s = "stopped", T("已停止  :%d") % cfg["port"]
-        if procs[key] is not None:
-            try:
-                procs[key].wait(timeout=0)     # 回收句柄，避免 Popen 一直挂着
-            except Exception:
-                pass
-            procs[key] = None
-            auth_urls[key] = None
-    # 状态类别变化才写日志（避免每 1.5s 刷屏）
     prev = _prev_state.get(key)
+    child = p.child if alive else None
+    observed = d.get("owners", {}).get(child.pid) if child else None
+    is_tracked = ownership == "owned" and observed is not None and observed.birth == child.birth
+    if is_tracked:
+        p.start_confirmed = True
+        _scan_slot(key)
+    else:
+        auth_urls[key] = None
+    if p and not alive:
+        p.wait(timeout=0)
+        procs[key] = None
+
+    if ownership == "conflict":
+        state, s = "external_conflict", T("端口 %s 已被占用，无法确认归属。") % cfg["port"]
+    elif ownership == "owned":
+        state = "running_tracked" if is_tracked else "running_external"
+        s = T("运行中  pid=%s  :%d  ✓") % (p.child_pid if is_tracked else ext_pid, cfg["port"])
+    elif alive and not p.start_confirmed:
+        if time.monotonic() - p.launched_at >= SLOT_PROCESS.START_TIMEOUT:
+            state, s = "start_timed_out", T("启动等候超时  :%d（仍在后台）") % cfg["port"]
+        else:
+            state, s = "starting", T("启动中  pid=%s  :%d  …") % (p.pid, cfg["port"])
+    elif (p and not p.start_confirmed) or (p is None and prev == "start_failed"):
+        state, s = "start_failed", T("启动失败  :%d（查看日志）") % cfg["port"]
+    else:
+        # 即使还没有探测数据，也先显示已配置的端口。
+        state, s = "stopped", T("已停止  :%d") % cfg["port"]
+    # 状态类别变化才写日志（避免每 1.5s 刷屏）
     if state != prev:
         _log_state_change(key, prev, state, cfg, listen, ext_pid, p)
         _prev_state[key] = state
@@ -6595,7 +6579,7 @@ def _system_is_dark():
         try:
             result = subprocess.run(
                 ["/usr/bin/defaults", "read", "-g", "AppleInterfaceStyle"],
-                capture_output=True, text=True, timeout=1)
+                capture_output=True, encoding="utf-8", errors="replace", timeout=1)
             return result.returncode == 0 and result.stdout.strip() == "Dark"
         except (OSError, subprocess.TimeoutExpired):
             return False

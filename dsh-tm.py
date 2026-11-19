@@ -531,7 +531,8 @@ def cmd_start(ctx, args):
         # quiet=True：JSON 模式下 WARN 不能打到 stdout，否则就不是单个 JSON 了。
         if work:
             _wait_until_listening(ctx, work,
-                                  timeout=float(getattr(args, "wait", 20)), quiet=True)
+                                  timeout=float(getattr(args, "wait", SLOT_PROCESS.START_TIMEOUT)),
+                                  quiet=True)
         changed = []
         for r in rows:
             k = r["key"]
@@ -549,7 +550,7 @@ def cmd_start(ctx, args):
             if before[k] != now:
                 changed.append(k)
         return _op_emit("start", rows, changed=changed,
-                        extra={"waited_seconds": float(getattr(args, "wait", 20))})
+                        extra={"waited_seconds": float(getattr(args, "wait", SLOT_PROCESS.START_TIMEOUT))})
     keys = _target_keys(ctx, args)
     if not keys:
         return EXIT_USAGE
@@ -573,14 +574,14 @@ def cmd_start(ctx, args):
     if todo:
         # 等端口真正开始监听再回报。dsh 从 spawn 到 listen 实测要 5~8 秒
         # （0.2.x 要加载插件树），固定 sleep 1.5s 会把"已启动"误报成"已停止"。
-        if _wait_until_listening(ctx, waiting, timeout=float(getattr(args, "wait", 20))):
+        if _wait_until_listening(ctx, waiting, timeout=float(getattr(args, "wait", SLOT_PROCESS.START_TIMEOUT))):
             rc = EXIT_FAIL
         print(T("\n实际状态："))
         rc |= cmd_list(ctx, args)
     return rc
 
 
-def _wait_until_listening(ctx, keys, timeout=20.0, step=0.4, quiet=False):
+def _wait_until_listening(ctx, keys, timeout=SLOT_PROCESS.START_TIMEOUT, step=0.4, quiet=False):
     """轮询到所有目标槽都开始监听，或超时。返回仍未起来的槽名列表。
 
     `quiet=True` 给 JSON 模式用：超时 WARN 不能打到 stdout，否则 stdout 里
@@ -1136,7 +1137,7 @@ def build_parser():
         sp.add_argument("slot", nargs="*", help=T("槽名（如 v1）；可给多个"))
         sp.add_argument("--all", action="store_true", help=T("对全部槽执行"))
         if name == "start":
-            sp.add_argument("--wait", type=float, default=20.0, metavar=T("秒"),
+            sp.add_argument("--wait", type=float, default=SLOT_PROCESS.START_TIMEOUT, metavar=T("秒"),
                             help=T("等待端口监听的超时秒数（缺省 20）"))
 
     sp = sub.add_parser(
