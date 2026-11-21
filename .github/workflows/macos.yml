@@ -75,6 +75,80 @@ jobs:
     with:
       version: '0.1.11'
 
+  publish-preview:
+    name: Publish tested GitHub preview packages
+    needs: [package, windows-portable]
+    if: >-
+      github.repository == 'arnen7000/dsh-tm' &&
+      github.event_name == 'push' && github.ref == 'refs/heads/codex/macos-support' &&
+      startsWith(github.event.head_commit.message, 'chore(release): publish GitHub preview')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: dsh-tm-preview-v0.1.11
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: macos-*-unsigned
+          merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-portable
+      - name: Verify and publish the preview
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="v${RELEASE_VERSION}-preview.1"
+          packages=("dsh-tm-$RELEASE_VERSION-portable.zip"
+                    "DS-Manager-$RELEASE_VERSION-macos-arm64-unsigned.zip"
+                    "DS-Manager-$RELEASE_VERSION-macos-x64-unsigned.zip")
+          assets=()
+          for zip in "${packages[@]}"; do
+            sha256sum --check --strict "$zip.sha256"
+            assets+=("$zip" "$zip.sha256")
+          done
+          if gh api "repos/$GH_REPO/git/ref/tags/$tag" --silent 2>/dev/null; then
+            tagged_commit=$(gh api "repos/$GH_REPO/commits/$tag" --jq '.sha')
+            [[ "$tagged_commit" == "$GITHUB_SHA" ]] || {
+              echo "Tag $tag already points to a different commit."
+              exit 1
+            }
+          fi
+
+          cat > release-notes.md <<'EOF'
+          dsh-tm v0.1.11 的 GitHub 预发布。Windows 与 macOS 共用六槽管理、设置、体检和 CLI。
+
+          - Windows x64 下载 `dsh-tm-0.1.11-portable.zip`。
+          - Apple Silicon 下载 `DS-Manager-0.1.11-macos-arm64-unsigned.zip`。
+          - Intel Mac 下载 `DS-Manager-0.1.11-macos-x64-unsigned.zip`。
+
+          Mac 包使用临时签名，尚未取得 Developer ID 签名或 Apple 公证。macOS 可能拦截首次启动。最低部署目标为 macOS 13.5，双架构完整生命周期在 macOS 15 实测。
+
+          ## SHA-256
+          EOF
+          for zip in "${packages[@]}"; do
+            printf '\n- `%s` `%s`\n' "$zip" "$(cut -d ' ' -f 1 "$zip.sha256")" >> release-notes.md
+          done
+          printf '\n[同一提交的三平台构建和测试](%s/%s/actions/runs/%s)\n' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> release-notes.md
+
+          if draft_target=$(gh release view "$tag" --json isDraft,isPrerelease,targetCommitish \
+            --jq 'select(.isDraft and .isPrerelease) | .targetCommitish' 2>/dev/null); then
+            [[ "$draft_target" == "$GITHUB_SHA" ]] || {
+              echo "Release $tag already exists. Inspect it before retrying."
+              exit 1
+            }
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
+              --notes-file release-notes.md --draft --prerelease "${assets[@]}"
+          fi
+          gh release edit "$tag" --draft=false --prerelease --latest=false
+
   check-signing-environment:
     name: Check human approval for macOS signing
     if: >-

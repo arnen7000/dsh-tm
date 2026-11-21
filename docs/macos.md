@@ -14,6 +14,10 @@ architectures.
 4. 用槽位卡片打开浏览器。需要从终端运行槽时，在槽目录运行
    `./dsh.command` 或 `./dsh-cli.command`。停止脚本会核对该槽的进程身份。
 
+GitHub 预发布的 `-unsigned` ZIP 使用临时签名，尚未做 Developer ID 签名和 Apple 公证。
+macOS 可能阻止首次启动。核对来源和 SHA-256 后，可按 [Apple 的打开方式](https://support.apple.com/zh-cn/102445)
+为此 App 单独确认打开。
+
 App 和源码默认共用 `~/Library/Application Support/DSH-TM/config.json`。
 首次启动 Web 可能需要安装插件。等待 20 秒后，管理器会显示启动等候超时，CLI 默认返回失败，
 槽进程仍可在后台完成初始化。管理器核实槽进程开始监听后会显示运行中。也可以点「停止」取消。
