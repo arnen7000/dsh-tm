@@ -1,4 +1,4 @@
-# dsh 版本管理器（dsh-tm）
+# DSH 管理器（DSH-TM）
 
 macOS 用户可按 [macOS 使用说明](docs/macos.md) 安装 App 或从源码运行管理器。下文的批处理与 PowerShell 示例适用于 Windows。
 

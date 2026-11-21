@@ -4,6 +4,7 @@ from http.cookiejar import CookieJar
 import json
 import os
 from pathlib import Path
+import plistlib
 import subprocess
 import sys
 import tempfile
@@ -30,7 +31,12 @@ def packaged_cli(base_args, *command):
 
 def run(app, gui=True):
     app = app.resolve()
-    exe = app / "Contents/MacOS/DS-Manager"
+    with (app / "Contents/Info.plist").open("rb") as source:
+        info = plistlib.load(source)
+    assert app.name == "DSH-TM.app", app.name
+    for key in ("CFBundleName", "CFBundleDisplayName", "CFBundleExecutable"):
+        assert info.get(key) == "DSH-TM", (key, info.get(key))
+    exe = app / "Contents/MacOS" / info["CFBundleExecutable"]
     runtime = app / "Contents/Resources/runtime/node"
     if not runtime.is_dir():
         runtime = app / "Contents/Frameworks/runtime/node"

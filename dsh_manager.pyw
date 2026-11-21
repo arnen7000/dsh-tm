@@ -118,7 +118,7 @@ import dsh_slot_process as SLOT_PROCESS
 BASE_DIR = str(PLATFORM.RESOURCE_DIR)
 CONFIG_PATH = PLATFORM.default_config_path()
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=T("DSH 版本管理器"))
+    parser = argparse.ArgumentParser(description=T("DSH 管理器"))
     parser.add_argument("--config", default=CONFIG_PATH)
     CONFIG_PATH = os.path.abspath(os.path.expanduser(parser.parse_args().config))
 EXAMPLE_PATH = os.path.join(BASE_DIR, "config", "config.example.json")
@@ -220,7 +220,7 @@ except Exception:
 # ── 加载配置 ──────────────────────────────────────────────────────────────
 def _fatal(msg):
     root = tk.Tk(); root.withdraw()
-    messagebox.showerror(T("DSH 版本管理器"), msg)
+    messagebox.showerror(T("DSH 管理器"), msg)
     sys.exit(1)
 
 def _boot_log(msg):
@@ -1721,7 +1721,7 @@ def _activate_existing_instance():
         if user32.IsWindowVisible(hwnd):
             buf = ctypes.create_unicode_buffer(64)
             user32.GetWindowTextW(hwnd, buf, 64)
-            if buf.value == T("DSH 版本管理器"):
+            if buf.value in (T("DSH 管理器"), T("DSH 版本管理器")):
                 found.append(hwnd)
         return 1
     _cb_ref = _ENUMPROC(_cb)          # 防 GC
@@ -1933,11 +1933,11 @@ except Exception as _e:
         import ctypes
         ctypes.windll.user32.MessageBoxW(0,
             T("创建窗口失败：%s\n\n详情见日志：%s") % (_e, LOG_FILE),
-            T("DSH 版本管理器"), 0x10)
+            T("DSH 管理器"), 0x10)
     except Exception:
         pass
     sys.exit(1)
-root.title(T("DSH 版本管理器"))
+root.title(T("DSH 管理器"))
 
 # 抢在窗口显示前替换窗口类图标。
 # 两处要点（都踩过）：
@@ -2276,12 +2276,12 @@ title_lbls  = {}            # 各槽卡片（LabelFrame），刷新时更新 tex
 _hdr = ttk.Frame(root)
 _hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 8))
 # 2026-11-02 用户要求：
-#   · 标题显示 **dsh-tm 及版本号**（原来只写"DSH 版本管理器"，没版本）
+#   · 标题显示项目名及版本号
 #   · 「在 GitHub 收藏」放主界面（原来在设置里）
 #   · 修深色模式下标题看不清
 #     （原来 foreground 固定成创建时的 _INK=浅色值，切深色后不会变）
 # 这里不固定 foreground，改由 _refresh_header_style() 在主题应用后统一刷。
-_hdr_title = ttk.Label(_hdr, text="dsh-tm",
+_hdr_title = ttk.Label(_hdr, text="DSH-TM",
                        font=("Segoe UI", 18, "bold"))
 _hdr_title.pack(side="left")
 _hdr_ver = ttk.Label(_hdr, text="", font=("Segoe UI", 10))
@@ -2368,14 +2368,14 @@ def _open_dir(path, what=T("数据目录")):
     try:
         if not os.path.isdir(path):
             log(T("打开%s失败（目录不存在）：%s") % (what, path))
-            messagebox.showerror(T("DSH 版本管理器"),
+            messagebox.showerror(T("DSH 管理器"),
                                  T("%s不存在：\n%s\n\n可能尚未初始化（先启动一次 dsh）。") % (what, path))
             return
         _platform_open(path)          # Windows：交给资源管理器打开文件夹
         log(T("已打开%s：%s") % (what, path))
     except Exception as e:
         log(T("打开%s失败 %s：%s") % (what, path, e))
-        messagebox.showerror(T("DSH 版本管理器"), T("打开%s失败：\n%s\n\n%s") % (what, path, e))
+        messagebox.showerror(T("DSH 管理器"), T("打开%s失败：\n%s\n\n%s") % (what, path, e))
 
 cards_frame = ttk.Frame(root)
 cards_frame.grid(row=1, column=0, sticky="nsew", padx=12, pady=4)
@@ -7064,12 +7064,12 @@ def about_dialog():
     只有排障时才需要，放进「关于」正合适。
     """
     win = tk.Toplevel(root)
-    win.title(T("关于 DSH 版本管理器"))
+    win.title(T("关于 DSH 管理器"))
     win.transient(root)
     win.resizable(False, False)
     _apply_icon(win)
 
-    ttk.Label(win, text=T("DSH 版本管理器（dsh-tm）"),
+    ttk.Label(win, text=T("DSH 管理器（DSH-TM）"),
               font=("Microsoft YaHei UI", 13, "bold")).pack(padx=24, pady=(20, 2),
                                                            anchor="w")
     ttk.Label(win, text=T("多版本隔离 · 独立进程 / 端口 / 数据 / 运行时 / 临时目录"),
@@ -7734,7 +7734,7 @@ def settings_hub_dialog():
         except Exception:
             pass
         # 窗口标题不是控件的 text，retranslate 管不到，单独设一次
-        for _w, _k in ((root, "DSH 版本管理器"), (win, "设置")):
+        for _w, _k in ((root, "DSH 管理器"), (win, "设置")):
             try:
                 _w.title(T(_k))
             except Exception:

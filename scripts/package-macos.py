@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 
 ARCHES = {'arm64': 'arm64', 'x64': 'x86_64'}
-BUNDLE_NAME = 'DS-Manager.app'
+BUNDLE_NAME = 'DSH-TM.app'
 MIN_MACOS = (13, 5, 0)
 
 
@@ -29,16 +29,19 @@ def codesign_files(app):
 
 
 def verify_bundle(app, arch, signed):
-    exe = app / 'Contents' / 'MacOS' / 'DS-Manager'
+    exe = app / 'Contents' / 'MacOS' / 'DSH-TM'
     runtime = app / 'Contents' / 'Resources' / 'runtime' / 'node' / 'bin'
     for path in app.rglob('*'):
         if path.is_symlink() and not path.resolve(strict=True).is_relative_to(app):
             raise ValueError(f'Bundle symlink points outside the app: {path}')
     with (app / 'Contents' / 'Info.plist').open('rb') as source:
         metadata = plistlib.load(source)
-    if (metadata['LSMinimumSystemVersion'] != '13.5'
+    if (metadata['CFBundleName'] != 'DSH-TM'
+            or metadata['CFBundleDisplayName'] != 'DSH-TM'
+            or metadata['CFBundleExecutable'] != exe.name
+            or metadata['LSMinimumSystemVersion'] != '13.5'
             or metadata['CFBundleIdentifier'] != 'io.github.arnen7000.dsh-tm'):
-        raise ValueError('Unexpected minimum macOS version or bundle identifier')
+        raise ValueError('Unexpected app name, executable, minimum macOS version or bundle identifier')
     binaries = list(codesign_files(app))
     for program in (exe, runtime / 'node'):
         if program.resolve() not in binaries:

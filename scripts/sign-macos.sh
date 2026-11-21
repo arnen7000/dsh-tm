@@ -3,8 +3,8 @@
 set -euo pipefail
 umask 077
 
-if [[ $# != 2 || ! -d "$1" || "${1##*/}" != DS-Manager.app ]]; then
-    echo 'Usage: bash scripts/sign-macos.sh /path/to/DS-Manager.app arm64|x64' >&2
+if [[ $# != 2 || ! -d "$1" || "${1##*/}" != DSH-TM.app ]]; then
+    echo 'Usage: bash scripts/sign-macos.sh /path/to/DSH-TM.app arm64|x64' >&2
     exit 2
 fi
 case "$2" in arm64|x64) ;; *) exit 2 ;; esac

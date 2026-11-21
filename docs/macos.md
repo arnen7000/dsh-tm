@@ -8,7 +8,7 @@ architectures.
 
 1. 在 [GitHub Releases](https://github.com/arnen7000/dsh-tm/releases) 下载对应架构的
    App ZIP 和同名 `.sha256`。Apple Silicon 选 `macos-arm64`，Intel 选 `macos-x64`。
-2. 核对清单后解压，把 `DS-Manager.app` 移到「应用程序」。
+2. 核对清单后解压，把 `DSH-TM.app` 移到「应用程序」。`v0.1.11-preview.1` 的包内名称为 `DS-Manager.app`。
 3. 双击启动，选择「安装官方版 dsh」或纳入已有 npm 版。管理器内置 Python/Tk、
    Node、npm 和 pnpm。首次安装槽和初始化 web profile 需要连接 npm 仓库。
 4. 用槽位卡片打开浏览器。需要从终端运行槽时，在槽目录运行
@@ -36,7 +36,7 @@ python3 dsh-tm.py --config /path/to/old/config.json doctor --json
 - Windows 便携包从程序目录读配置。macOS 的配置与日志默认位于
   `~/Library/Application Support/DSH-TM`。打开槽目录和浏览器时调用 macOS 的默认程序。
 - macOS 槽内使用 `.command`。启动和 CLI 入口使用槽内 Node，可在管理器关闭后运行。
-  停止入口使用管理器的进程身份检查。如果移动 App 后旧停止脚本仍指向原路径，
+  停止入口使用管理器的进程身份检查。移动 App 或从 `DS-Manager.app` 升级后，如果旧停止脚本仍指向原路径，
   将旧停止脚本移到别处，再用「槽体检 → 修复」补上缺失的停止脚本。
 - Windows 可在体检中把旧 PATH Node 固定到槽内。macOS 新装槽自带 Node 和 npm，
   旧配置仍可使用共享 Node。迁移旧数据时保留来源目录后，可重新纳入已有安装。

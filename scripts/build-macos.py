@@ -14,7 +14,7 @@ import tempfile
 import urllib.request
 
 REPO = Path(__file__).resolve().parent.parent
-APP = 'DS-Manager'
+APP = 'DSH-TM'
 BUNDLE_ID = 'io.github.arnen7000.dsh-tm'
 MIN_MACOS = '13.5'
 NODE_VERSION = '24.21.0'
@@ -104,6 +104,8 @@ def write_spec(work, runtime, arch):
     binaries = [(str(runtime / 'bin' / 'node'), 'runtime/node/bin')]
     info = {
         'CFBundleVersion': os.environ.get('GITHUB_RUN_NUMBER', '1'),
+        'CFBundleName': APP,
+        'CFBundleDisplayName': APP,
         'LSMinimumSystemVersion': MIN_MACOS,
         'NSHighResolutionCapable': True,
     }
