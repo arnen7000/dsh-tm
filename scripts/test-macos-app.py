@@ -29,6 +29,32 @@ def packaged_cli(base_args, *command):
     return json.loads(result.stdout)
 
 
+def verify_gui_start(exe, config):
+    output_path = config.parent / "gui.log"
+    manager_log = Path(dsh_platform.log_path(str(config)))
+    with output_path.open("wb") as output:
+        proc = subprocess.Popen([str(exe), "--config", str(config)],
+                                stdout=output, stderr=output)
+        try:
+            # The startup snapshot is written by a callback in the Tk event loop.
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline and proc.poll() is None:
+                if manager_log.exists():
+                    log_text = manager_log.read_text(encoding="utf-8", errors="replace")
+                    if "=== 启动快照结束 ===" in log_text:
+                        print("Packaged GUI startup completed", flush=True)
+                        return
+                time.sleep(0.25)
+            raise RuntimeError("GUI startup did not complete (exit %s): %s" %
+                               (proc.poll(), output_path.read_text(errors="replace")))
+        finally:
+            if proc.poll() is None:
+                # This fixture only checks startup. Reap the test App independently
+                # of how the native window process handles a termination signal.
+                proc.kill()
+                proc.wait(timeout=10)
+
+
 def run(app, gui=True):
     app = app.resolve()
     with (app / "Contents/Info.plist").open("rb") as source:
@@ -54,21 +80,7 @@ def run(app, gui=True):
         assert report.returncode == 0, report.stdout + report.stderr
         assert "[OK]   config.json" in report.stdout, report.stdout
         if gui:
-            with (home / "gui.log").open("wb") as output:
-                proc = subprocess.Popen([str(exe), "--config", str(config)],
-                                        stdout=output, stderr=output)
-            try:
-                try:
-                    code = proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    pass
-                else:
-                    raise RuntimeError("GUI exited %s: %s" %
-                                       (code, (home / "gui.log").read_text(errors="replace")))
-            finally:
-                if proc.poll() is None:
-                    proc.terminate()
-                    proc.wait(timeout=10)
+            verify_gui_start(exe, config)
 
         ok, key, detail = dsh_install_ops.run_official_install(
             dsh_adopt, DSH_VERSION, str(config), str(base), "v1", [])
