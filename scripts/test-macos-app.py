@@ -43,6 +43,10 @@ def run(app, gui=True):
         config.write_text(json.dumps({"install_base": str(base), "versions": {},
                                       "legacy_extension": {"keep": True}}), encoding="utf-8-sig")
         os.environ.update(HOME=work, PATH="/usr/bin:/bin:/usr/sbin:/sbin")
+        report = subprocess.run([str(exe), "--check-env", "--lang", "en", "--config", str(config)],
+                                capture_output=True, encoding="utf-8", errors="replace", timeout=30)
+        assert report.returncode == 0, report.stdout + report.stderr
+        assert "[OK]   config.json" in report.stdout, report.stdout
         if gui:
             with (home / "gui.log").open("wb") as output:
                 proc = subprocess.Popen([str(exe), "--config", str(config)],

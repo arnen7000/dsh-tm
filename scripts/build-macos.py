@@ -111,7 +111,7 @@ def write_spec(work, runtime, arch):
     spec.write_text(f'''a = Analysis(
     [{str(REPO / 'dsh_manager.pyw')!r}], pathex=[{str(REPO)!r}],
     binaries={binaries!r}, datas={datas!r},
-    hiddenimports=['argparse', 'ast', 'glob', 'platform'],
+    hiddenimports=['argparse', 'ast', 'glob', 'platform', 'queue'],
 )
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, console=False,

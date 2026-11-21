@@ -2328,7 +2328,8 @@ def _show_env_report():
             # check-env.py 是独立进程，把当前语言传过去，否则它只会输出中文
             _env = dict(os.environ)
             _env["DSH_LANG"] = I18N.lang()
-            rc = _sp.run([sys.executable, "--check-env" if PLATFORM.FROZEN else script], stdout=out,
+            rc = _sp.run([sys.executable, "--check-env" if PLATFORM.FROZEN else script,
+                          "--config", CONFIG_PATH], stdout=out,
                          stderr=_sp.STDOUT, env=_env,
                          creationflags=CREATE_NO_WINDOW).returncode
         raw = open(tmp, "rb").read().decode("utf-8", "replace")
@@ -8203,7 +8204,7 @@ def _log_fresh_env():
             _env["DSH_LANG"] = I18N.lang()
             rc = _sp.run([sys.executable,
                           "--check-env" if PLATFORM.FROZEN else
-                          os.path.join(BASE_DIR, "scripts", "check-env.py")],
+                          os.path.join(BASE_DIR, "scripts", "check-env.py"), "--config", CONFIG_PATH],
                          stdout=out, stderr=_sp.STDOUT, env=_env,
                          creationflags=CREATE_NO_WINDOW).returncode
         raw = open(tmp, "rb").read().decode("utf-8", "replace")

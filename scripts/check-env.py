@@ -6,6 +6,8 @@
 
 退出码 0 = 全部满足；非 0 = 有硬性缺项。警告项不影响退出码。
 """
+import argparse
+import importlib.util
 import os
 import sys
 import subprocess
@@ -23,13 +25,11 @@ if ROOT not in sys.path:
 import dsh_platform as PLATFORM
 from dsh_i18n import T, set_lang   # noqa: E402
 
-_lang = os.environ.get("DSH_LANG") or "zh"
-for _i, _a in enumerate(sys.argv):
-    if _a == "--lang" and _i + 1 < len(sys.argv):
-        _lang = sys.argv[_i + 1]
-    elif _a.startswith("--lang="):
-        _lang = _a.split("=", 1)[1]
-set_lang(_lang)
+_parser = argparse.ArgumentParser(allow_abbrev=False)
+_parser.add_argument("--lang", default=os.environ.get("DSH_LANG") or "zh")
+_parser.add_argument("--config", default=PLATFORM.default_config_path(), type=os.path.expanduser)
+_args, _unknown = _parser.parse_known_args()
+set_lang(_args.lang)
 
 MIN_PY = (3, 8)          # 见 README「运行环境」：代码未用 3.9/3.10 专有语法
 # node 版本要求分两档，别混：
@@ -209,16 +209,21 @@ def check_node():
              % (node, MIN_NODE[0], MIN_NODE[1]))
 
 
-def check_files():
+def check_files(config_path):
     print(T("== 6. 管理器文件完整性 =="))
-    need = ["dsh_manager.pyw", "dsh_kill.py", "dsh_adopt.py",
-            "dsh_install_ops.py", "dsh_uninstall_ops.py"]
-    miss = [f for f in need if not os.path.isfile(os.path.join(ROOT, f))]
+    modules = ["dsh_kill", "dsh_adopt", "dsh_install_ops", "dsh_uninstall_ops"]
+    if PLATFORM.FROZEN:
+        resources = ["config/config.example.json"]
+        miss = [module for module in modules if importlib.util.find_spec(module) is None]
+    else:
+        resources = ["dsh_manager.pyw", *(module + ".py" for module in modules)]
+        miss = []
+    miss.extend(name for name in resources if not os.path.isfile(os.path.join(ROOT, name)))
     if miss:
         bad(T("缺少文件：%s") % ", ".join(miss))
     else:
-        ok(T("%d 个核心文件齐备") % len(need))
-    if os.path.isfile(PLATFORM.default_config_path()):
+        ok(T("%d 个核心文件齐备") % (len(modules) + 1))
+    if os.path.isfile(config_path):
         ok(T("config.json 已生成"))
     else:
         warn(T("config.json 不存在（首次启动会自动从 "
@@ -272,7 +277,7 @@ def check_min_version_claim():
               % MIN_PY)
     else:
         ok(T("未使用 %d.%d 以上才有的专有语法，「最低 %d.%d」的说法成立")
-           % (MIN_PY[0] + 1, MIN_PY[1], MIN_PY[0], MIN_PY[1]))
+           % (MIN_PY[0], MIN_PY[1] + 1, MIN_PY[0], MIN_PY[1]))
 
 
 def check_scope():
@@ -413,8 +418,9 @@ check_tkinter()
 check_stdlib()
 check_optional()
 check_node()
-check_files()
-check_min_version_claim()
+check_files(_args.config)
+if not PLATFORM.FROZEN:
+    check_min_version_claim()
 check_scope()
 check_privilege()
 check_ports()
