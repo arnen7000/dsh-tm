@@ -14,9 +14,12 @@ macOS 用户可按 [macOS 使用说明](docs/macos.md) 安装 App 或从源码�
 **支持 1~6 个版本并存。**
 
 > ### ⬇ 下载
-> **[Releases 页面](https://github.com/arnen7000/dsh-tm/releases)** → 下 `dsh-tm-<版本>-portable.zip`
-> → 解压到任意目录 → 双击 `start-manager.bat`。
-> **不用装 Python、不用装 Node**，包里都带了。
+> 在 [v0.1.11-preview.2](https://github.com/arnen7000/dsh-tm/releases/tag/v0.1.11-preview.2) 下载对应的试用包。
+>
+> - **Windows x64** 选 `dsh-tm-0.1.11-portable.zip`，解压后双击 `start-manager.bat`。
+> - **Mac** 根据芯片选 `macos-arm64` 或 `macos-x64`，解压后打开 `DSH-TM.app`。见 [macOS 使用说明](docs/macos.md)。
+>
+> Python 和 Node 已随包提供。
 
 ---
 

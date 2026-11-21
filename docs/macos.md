@@ -1,12 +1,12 @@
 # macOS
 
-dsh-tm supports Apple Silicon (arm64) and Intel (x64). The builds target macOS
+DSH-TM supports Apple Silicon (arm64) and Intel (x64). The builds target macOS
 13.5 and newer. The GitHub Actions smoke tests run on macOS 15 on both
 architectures.
 
 ## 使用 App
 
-1. 在 [GitHub Releases](https://github.com/arnen7000/dsh-tm/releases) 下载对应架构的
+1. 在 [GitHub 试用版](https://github.com/arnen7000/dsh-tm/releases/tag/v0.1.11-preview.2) 下载对应架构的
    App ZIP 和同名 `.sha256`。Apple Silicon 选 `macos-arm64`，Intel 选 `macos-x64`。
 2. 核对清单后解压，把 `DSH-TM.app` 移到「应用程序」。`v0.1.11-preview.1` 的包内名称为 `DS-Manager.app`。
 3. 双击启动，选择「安装官方版 dsh」或纳入已有 npm 版。管理器内置 Python/Tk、
