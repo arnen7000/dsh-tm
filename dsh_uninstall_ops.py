@@ -1,40 +1,25 @@
 # -*- coding: utf-8 -*-
-"""管理器侧的「卸载某个/某几个槽」实现。
+"""Plan and execute slot removal for the manager and Windows PowerShell entry.
 
-与 scripts/uninstall.ps1 的分工（**两者必须保持一致**）
---------------------------------------------------------
-  · `scripts/uninstall.ps1` —— 命令行场景的卸载器（含交互菜单、`-DryRun`）。
-  · 本文件 —— 管理器 GUI 里「卸载 dsh 版本…」按钮的实现。
-
-为什么不干脆让 GUI 去调 uninstall.ps1：GUI 有三件 ps1 做不好的事 ——
-  1. 停进程可以**在进程内**走 `dsh_kill`（GUI 本来就持有签名与 tracked pid），
-     不必再起一个 PowerShell + Python 子进程；
-  2. 改 config.json 要跟安装/纳入用**同一套**原子写（`ensure_ascii=False`、indent=2），
-     而 ps1 的 `ConvertTo-Json` 会把中文转成 \\uXXXX、缩进也变，diff 噪声大；
-  3. 卸载完要能立刻刷新界面，不能等子进程。
-代价是删除护栏有两份实现 —— 所以这里的规则与 ps1 的 `Test-SafeToDelete` **逐条对齐**，
-并有 `scripts/test-slot-ops.py` 用同一批边界用例锁住（见该文件的 §护栏 一节）。
-
-安全铁律（与 ps1 相同）
------------------------
-1. 停进程只走 dsh_kill 的「签名 + 端口」门控，非 dsh 程序占端口时**拒绝杀**。
-2. 用户数据（`DSH_HOME`）**先备份、再删除**；备份失败则整个槽不动。
-3. 临时目录（`temp_dir`）保留。
-4. 只删「槽根目录之内、且不是上面两个目录」的条目；槽根本身不删。
-5. 任何一步失败都**不把该槽从 config.json 移除** —— 否则用户失去重试入口。
-6. 用户数据排在**程序文件之前**删：万一删不掉，程序还在，槽仍然可用；
-   反过来会留下「程序没了、数据还在」的半残槽（2026-10-30 实测踩到过）。
+Both entry points verify backups, protect other slots, and preserve failed slots
+in the configuration. The manager removes backed-up slot data with the slot.
+The PowerShell entry retains user data, the temporary directory, and Node.
 """
+import hashlib
 import json
 import os
+from pathlib import Path
 import re
 import shutil
 import stat
 import subprocess
+import sys
+import tempfile
 import time
 
 # 与 dsh_install_ops 共用同一套配置读写（原子写、备份），不重复实现。
 import dsh_install_ops as OPS
+import dsh_platform as PLATFORM
 from dsh_i18n import T
 
 
@@ -68,22 +53,18 @@ def is_drive_root(p):
 
 
 def resolve(p, base, home, self_dir):
-    """展开 `<base>` / `<home>` / `<self>` / `<npm_global>` 占位符。
-    与 dsh_manager.resolve() 同语义 —— 那边不可 import，故此处保留一份。"""
-    if not p or not isinstance(p, str):
-        return p
-    p = p.replace("<self>", self_dir)
-    p = p.replace("<base>", base).replace("<home>", home)
-    if "<npm_global>" in p:
-        p = p.replace("<npm_global>", os.path.join(
-            os.environ.get("APPDATA", ""), "npm", "node_modules"))
-    return p
+    npm_global = PLATFORM.probe_npm_global() if isinstance(p, str) and "<npm_global>" in p else ""
+    return PLATFORM.resolve_path(p, base, home, self_dir, npm_global)
 
 
 def install_base_of(cfg, home, self_dir):
-    raw = str((cfg or {}).get("install_base") or "<home>")
-    return os.path.expanduser(
-        raw.replace("<self>", self_dir).replace("<home>", home))
+    cfg = cfg or {}
+    raw = str(cfg.get("install_base") or
+              ("<appsupport>/DSH-TM" if PLATFORM.IS_MAC else "<home>"))
+    if (PLATFORM.IS_MAC and home == os.path.expanduser("~")
+            and raw in ("<appsupport>/DSH-TM", os.path.join(PLATFORM.app_support(home), "DSH-TM"))):
+        return PLATFORM.config_base(cfg)
+    return PLATFORM.resolve_path(raw, home=home, self_dir=self_dir)
 
 
 def slot_root(cfg, base, home, self_dir):
@@ -125,7 +106,7 @@ def is_global_install(cfg, base, home, self_dir):
 
 
 # ══════════════════════════════════════════════════════════════════
-# 删除护栏（与 uninstall.ps1 的 Test-SafeToDelete 逐条对齐）
+# 图形界面和 PowerShell 入口共用的删除护栏
 # ══════════════════════════════════════════════════════════════════
 
 def is_safe_to_delete(path, slot_root_dir, keep_paths, home, repo):
@@ -137,35 +118,107 @@ def is_safe_to_delete(path, slot_root_dir, keep_paths, home, repo):
       c) 不等于用户主目录 / 仓库目录 / 盘符根；
       d) 不是 home 或 repo 的**上级**（防止配置写错把整片目录端掉）。
     """
-    if not path or not os.path.exists(path):
+    if not path or not os.path.lexists(path):
         return (False, T("不存在"))
     if not slot_root_dir:
         return (False, T("反推不出槽根目录，拒绝删除"))
-    n = norm(path)
-    for k in (keep_paths or []):
-        if k and n == norm(k):
-            return (False, T("用户数据/临时目录，保留"))
-    if not is_under(path, slot_root_dir):
+    if not _path_within(path, slot_root_dir, strict=True):
         return (False, T("不在槽根目录之内"))
-    if is_drive_root(path):
-        return (False, T("盘符根目录"))
+    try:
+        _assert_unlinked_path(os.path.dirname(path))
+    except OSError as exc:
+        return (False, str(exc))
+    for protected in keep_paths or []:
+        if protected and _paths_overlap(path, protected):
+            return (False, T("用户数据/临时目录，保留"))
     for prot, why in ((home, T("用户主目录")), (repo, T("管理器目录"))):
-        if not prot:
-            continue
-        if n == norm(prot):
+        if prot and _path_within(prot, path):
             return (False, why)
-        if is_under(prot, path):
-            return (False, T("是%s的上级目录") % why)
     return (True, "")
 
 
-def _is_reparse_path(p):
-    """路径本身是不是 junction / 符号链接（不跟随）。"""
+def _has_parent_reference(path):
+    return ".." in os.fspath(path).replace(os.altsep or os.sep, os.sep).split(os.sep)
+
+
+def _native_path(path):
+    path = os.path.abspath(path)
+    if sys.platform == "darwin":
+        for alias in ("/tmp", "/var", "/etc"):
+            if path == alias or path.startswith(alias + "/"):
+                target = "/private" + alias
+                if os.path.islink(alias) and os.readlink(alias) in (target, target[1:]):
+                    return target + path[len(alias):]
+    return path
+
+
+def _path_relative_to(path, root):
+    """Return the spelling below root, with a filesystem check for macOS aliases."""
+    if not path or not root or _has_parent_reference(path) or _has_parent_reference(root):
+        return None
+    path, root = _native_path(path), _native_path(root)
     try:
-        st = os.stat(p, follow_symlinks=False)
+        if os.path.normcase(os.path.commonpath((path, root))) == os.path.normcase(root):
+            return os.path.relpath(path, root)
+    except ValueError:
+        return None  # Windows paths on different drives.
+
+    if sys.platform != "darwin":
+        return None
+    parts = Path(path).parts
+    length = len(Path(root).parts)
+    if len(parts) < length:
+        return None
+    ancestor = os.path.join(*parts[:length])
+    try:
+        _assert_unlinked_path(os.path.dirname(ancestor))
+        _assert_unlinked_path(os.path.dirname(root))
+        # Inspect the directory entries themselves. A symlink pointing at root
+        # does not establish containment. Match aliases only if the volume does.
+        if os.path.samestat(os.lstat(ancestor), os.lstat(root)):
+            return os.path.join(*parts[length:]) if len(parts) > length else "."
     except OSError:
+        pass
+    return None
+
+
+def _path_within(path, root, strict=False):
+    relative = _path_relative_to(path, root)
+    return relative is not None and (not strict or relative != ".")
+
+
+def _paths_overlap(first, second):
+    return _path_within(first, second) or _path_within(second, first)
+
+
+def _stat_is_link(st):
+    return stat.S_ISLNK(st.st_mode) or bool(
+        getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+    )
+
+
+def _is_reparse_path(path):
+    """Recognize symbolic links and Windows reparse points without following them."""
+    try:
+        return _stat_is_link(os.lstat(path))
+    except (FileNotFoundError, NotADirectoryError):
         return False
-    return bool(getattr(st, "st_file_attributes", 0) & 0x400)   # FILE_ATTRIBUTE_REPARSE_POINT
+
+
+def _assert_unlinked_path(path):
+    """Reject traversal through links, including ancestors of a slot root."""
+    if _has_parent_reference(path):
+        raise OSError(T("路径包含上级目录引用：%s") % path)
+    path = _native_path(path)
+    for part in reversed((path, *_path_parents(path))):
+        if _is_reparse_path(part):
+            raise OSError(T("路径经过符号链接或重解析点：%s") % part)
+
+
+def _path_parents(path):
+    while (parent := os.path.dirname(path)) != path:
+        yield parent
+        path = parent
 
 
 def _dir_size(path, budget_files=200000):
@@ -227,7 +280,7 @@ def _is_reparse(entry):
     return _is_reparse_path(entry.path)
 
 
-def _collect_links(src):
+def _collect_links(src, failures):
     """列出 src 下所有 junction / 符号链接，返回 [(相对路径, 目标)]。
 
     只读目录项、不读文件内容，1.5 万文件约 0.2 秒。"""
@@ -236,21 +289,14 @@ def _collect_links(src):
     while stack:
         s = stack.pop()
         try:
-            entries = list(os.scandir(s))
-        except OSError:
-            continue
-        for e in entries:
-            if _is_reparse(e):
-                try:
-                    out.append((os.path.relpath(e.path, src), os.readlink(e.path)))
-                except OSError:
-                    out.append((os.path.relpath(e.path, src), ""))
-            else:
-                try:
-                    if e.is_dir(follow_symlinks=False):
+            with os.scandir(s) as entries:
+                for e in entries:
+                    if _is_reparse(e):
+                        out.append((os.path.relpath(e.path, src), os.readlink(e.path)))
+                    elif e.is_dir(follow_symlinks=False):
                         stack.append(e.path)
-                except OSError:
-                    pass
+        except OSError as exc:
+            failures.append((os.path.relpath(s, src), str(exc)))
     return out
 
 
@@ -304,8 +350,8 @@ def _copy_user_data(src, dst, failures=None):
     实际少了文件，而卸载照样往下删。现在调用方拿到 failures 就能当场中止。
     """
     os.makedirs(dst, exist_ok=True)
-    skipped = _collect_links(src)
     fails = failures if failures is not None else []
+    skipped = _collect_links(src, fails)
 
     # 快路：robocopy 多线程（约 4 倍）。失败则退回逐文件，慢但能把"哪个文件拷不动"
     # 逐个记下来 —— 备份宁可慢，也不能悄悄不完整。
@@ -338,107 +384,115 @@ def _copy_user_data(src, dst, failures=None):
 
 
 def _walk_file_sizes(root):
-    """列出 root 下所有**非链接**文件：相对路径 -> 字节数。不跟随 junction。"""
+    return _file_inventory(root, lambda entry: entry.stat(follow_symlinks=False).st_size)
+
+
+def _file_inventory(root, fingerprint):
+    """List regular files without following links; propagate enumeration errors."""
+    _assert_unlinked_path(root)
     out = {}
     stack = [root]
     while stack:
-        d = stack.pop()
-        try:
-            entries = list(os.scandir(d))
-        except OSError:
-            continue
-        for e in entries:
-            try:
-                if _is_reparse(e):
+        directory = stack.pop()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if _is_reparse(entry):
                     continue
-                if e.is_dir(follow_symlinks=False):
-                    stack.append(e.path)
-                elif e.is_file(follow_symlinks=False):
-                    out[os.path.relpath(e.path, root)] = e.stat(
-                        follow_symlinks=False).st_size
-            except OSError:
-                continue
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(entry.path)
+                elif entry.is_file(follow_symlinks=False):
+                    out[os.path.relpath(entry.path, root)] = fingerprint(entry)
+                else:
+                    raise OSError(T("无法备份此文件类型：%s") % entry.path)
     return out
 
 
+def _file_digest(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.digest()
+
+
+def _backup_required_file(path, stamp, folder=None, label=None):
+    _assert_unlinked_path(path)
+    prefix = label or os.path.basename(path) + ".bak"
+    folder = folder or os.path.dirname(os.path.abspath(path))
+    _assert_unlinked_path(folder)
+    os.makedirs(folder, exist_ok=True)
+    destination = os.path.join(folder, prefix + "-" + stamp)
+    try:
+        _copy_new_file(path, destination)
+    except FileExistsError:
+        fd, destination = tempfile.mkstemp(prefix=prefix + "-" + stamp + "-", dir=folder)
+        os.close(fd)
+        try:
+            shutil.copyfile(path, destination)
+        except OSError:
+            os.unlink(destination)
+            raise
+    if _file_digest(destination) != _file_digest(path):
+        os.unlink(destination)
+        raise OSError(T("备份内容与原文件不一致：%s") % path)
+    return destination
+
+
 def verify_backup(src, dst):
-    """核对备份是否完整。返回 (missing, size_diff, total)。
-
-    missing    —— 源里有、备份里没有的文件（**真正的丢数据**，调用方必须中止）
-    size_diff  —— 两边都有但大小不同（多半是源正在被写：dsh 没停干净）
-    total      —— 源里参与核对的文件数
-
-    为什么要核对（2026-10-31 用户提问「备份完成是否需要进行相关的核对」）：
-    在此之前备份是"尽力而为"—— robocopy 失败就退回逐文件，逐文件再失败就
-    静默记一笔，然后照样往下删槽目录。dsh 运行时会锁住 `.dsh-home` 里的库文件，
-    这个组合就是一条**静默丢数据**的路径。核对把"尽力而为"变成"要么完整、要么中止"。
-    """
-    s = _walk_file_sizes(src)
-    d = _walk_file_sizes(dst)
-    missing = [p for p in s if p not in d]
-    size_diff = [p for p in s if p in d and d[p] != s[p]]
-    return missing, size_diff, len(s)
+    """Return (missing, mismatched, total) after comparing file contents."""
+    source = _file_inventory(src, lambda entry: _file_digest(entry.path))
+    backup = _file_inventory(dst, lambda entry: _file_digest(entry.path))
+    missing = [path for path in source if path not in backup]
+    changed = [path for path in source if path in backup and source[path] != backup[path]]
+    return missing, changed, len(source)
 
 
 def _force_rmtree(path):
-    """删除整个目录树：**不跟随 junction/符号链接**，并先清只读位。
+    """Remove the entry and its contents without following or chmod'ing links."""
+    _assert_unlinked_path(os.path.dirname(path))
+    st = os.lstat(path)
 
-    为什么不能用 shutil.rmtree（2026-10-30 实测两个坑）：
-      1) 只读文件（WinError 5）：`.dsh-home\\attachments` 里的对象文件是 `-r--r--r--`
-         （附件按内容寻址存储，天然只读），rmtree 直接抛「拒绝访问」，整个卸载
-         因此失败、留下半个槽。→ 删之前先 chmod +S_IWRITE。
-      2) **junction 会被跟进**：`.dsh-home\\profiles\\node_modules\\*` 是指向槽自己
-         node_modules 的 junction，还有几个指向**槽外**的插件仓库。
-         shutil.rmtree 把 junction 当普通
-         目录递归进去，会**删掉目标目录里的真实文件** —— 等于删到槽外去。
-         → 碰到 reparse point 只删链接本身（对 junction 调 os.rmdir 即可，
-            RemoveDirectory 只摘掉重解析点，目标原封不动）。
-    """
-    errors = []
-
-    def _clear_readonly(p):
+    def remove(func, entry, entry_stat):
         try:
-            os.chmod(p, stat.S_IWRITE)
-        except OSError:
-            pass
+            func(entry)
+        except PermissionError:
+            if (os.name != "nt" or entry_stat.st_nlink > 1
+                    or _is_reparse_path(entry)):
+                raise
+            # Unlike os.chmod on Windows Python < 3.13, SetFileAttributesW
+            # changes attributes on the entry itself if it becomes a symlink.
+            import ctypes
+            attributes = entry_stat.st_file_attributes
+            if not attributes & stat.FILE_ATTRIBUTE_READONLY:
+                raise
+            attributes &= ~stat.FILE_ATTRIBUTE_READONLY
+            if not ctypes.windll.kernel32.SetFileAttributesW(
+                    str(entry), attributes or stat.FILE_ATTRIBUTE_NORMAL):
+                raise
+            func(entry)
 
-    def _walk(p):
-        try:
-            entries = list(os.scandir(p))
-        except OSError as e:
-            errors.append("%s（%s）" % (p, e))
-            return
-        for e in entries:
-            child = e.path
-            if _is_reparse(e):
-                # 只摘链接，绝不进去删目标内容
-                _clear_readonly(child)
-                try:
-                    os.rmdir(child)          # junction / 目录符号链接
-                except OSError:
-                    try:
-                        os.unlink(child)     # 文件符号链接
-                    except OSError as ex:
-                        errors.append("%s（%s）" % (child, ex))
-                continue
-            try:
-                if e.is_dir(follow_symlinks=False):
-                    _walk(child)
-                else:
-                    _clear_readonly(child)
-                    os.unlink(child)
-            except OSError as ex:
-                errors.append("%s（%s）" % (child, ex))
-        _clear_readonly(p)
-        try:
-            os.rmdir(p)
-        except OSError as ex:
-            errors.append("%s（%s）" % (p, ex))
+    def walk(entry, entry_stat):
+        if _stat_is_link(entry_stat):
+            if (os.name == "nt"
+                    and entry_stat.st_file_attributes & stat.FILE_ATTRIBUTE_DIRECTORY):
+                os.rmdir(entry)
+            else:
+                os.unlink(entry)
+        elif stat.S_ISDIR(entry_stat.st_mode):
+            with os.scandir(entry) as children:
+                paths = [child.path for child in children]
+            for child in paths:
+                walk(child, os.lstat(child))
+            remove(os.rmdir, entry, entry_stat)
+        else:
+            remove(os.unlink, entry, entry_stat)
 
-    _walk(path)
-    if os.path.exists(path):
-        raise OSError(T("有 %d 项删不掉（可能被进程占用或权限不足），首个：%s")
-                      % (len(errors) or 1, errors[0] if errors else path))
+    if os.name == "nt" or _stat_is_link(st):
+        walk(path, st)
+    elif stat.S_ISDIR(st.st_mode):
+        shutil.rmtree(path)
+    else:
+        os.unlink(path)
 
 
 def mark_incomplete(dirpath, kind, total, missing, fails):
@@ -510,31 +564,44 @@ def _backup_slot(plan, key, backup_root, stamp):
     # 建一个空备份目录只会让「dsh备份」越堆越乱。现在先探一次：.dsh-home
     # 一个条目都没有就完全不建，只在日志里留一行（含实装版本）。
     _has_user = False
-    if home and os.path.isdir(home):
+    if home:
+        _assert_unlinked_path(home)
         try:
-            with os.scandir(home) as _it:
-                _has_user = any(True for _ in _it)
-        except OSError:
-            _has_user = True        # 判不了就当有，宁可多备份
+            with os.scandir(home) as entries:
+                _has_user = next(entries, None) is not None
+        except FileNotFoundError:
+            pass
     if not _has_user:
         return ("", {"checked": 0, "missing": 0, "size_changed": 0,
                      "copy_failed": 0, "skipped_empty": True})
 
+    _assert_unlinked_path(backup_root)
+    if any(_paths_overlap(backup_root, path) for path in (home, plan.get("root"))):
+        raise OSError(T("备份目录和源目录重叠：%s") % backup_root)
     os.makedirs(backup_root, exist_ok=True)
-    dst = os.path.join(backup_root, "%s-userdata-%s" % (key, stamp))
-    if os.path.exists(dst):
-        dst = "%s-%d" % (dst, int(time.time() % 1000))
-    os.makedirs(dst, exist_ok=True)
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", key):
+        raise OSError(T("无效的槽键：%s") % key)
+    prefix = "%s-userdata-%s" % (key, stamp)
+    dst = os.path.join(backup_root, prefix)
+    try:
+        os.mkdir(dst)
+    except FileExistsError:
+        dst = tempfile.mkdtemp(prefix=prefix + "-", dir=backup_root)
 
     links = []
     fails = []
     verify = {"checked": 0, "missing": 0, "size_changed": 0, "copy_failed": 0}
     if home and os.path.isdir(home):
-        links = _copy_user_data(home, dst, fails)
-        missing, changed, total = verify_backup(home, dst)
+        missing, changed, total = [], [], 0
+        try:
+            links = _copy_user_data(home, dst, fails)
+            missing, changed, total = verify_backup(home, dst)
+        except OSError as exc:
+            fails.append((".", str(exc)))
         verify = {"checked": total, "missing": len(missing),
                   "size_changed": len(changed), "copy_failed": len(fails)}
-        if missing or fails:
+        if missing or changed or fails:
+            fails.extend((path, T("备份内容与原文件不一致")) for path in changed)
             # **要么完整、要么中止**：源目录一个字节都还没删，用户修好占用/权限
             # 重试即可。留一个名字正常的"半份备份"比没有更危险 —— 用户会以为
             # 数据已经安全了，然后放心让管理器把槽删掉。
@@ -558,25 +625,23 @@ def _backup_slot(plan, key, backup_root, stamp):
                    len(fails),
                    (T("（例：%s —— %s）") % fails[0]) if fails else "",
                    bad))
+    # Backups contain user-owned names. Metadata must not overwrite their files.
+    metadata = dst
+    reserved = ("_links.json", "_slot-package.json", "_slot-package-lock.json", "_meta.json")
+    if any(os.path.lexists(os.path.join(dst, name)) for name in reserved):
+        metadata = tempfile.mkdtemp(prefix="_dsh-backup-metadata-", dir=dst)
     if links:
-        # 跳过的链接单独记一份，别让"备份看起来完整"变成误判
-        try:
-            with open(os.path.join(dst, "_links.json"), "w",
-                      encoding="utf-8", newline="\n") as f:
-                json.dump([{"path": p, "target": t} for p, t in links],
-                          f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        with open(os.path.join(metadata, "_links.json"), "x",
+                  encoding="utf-8", newline="\n") as f:
+            json.dump([{"path": path, "target": target} for path, target in links],
+                      f, ensure_ascii=False, indent=2)
 
     root = plan.get("root") or ""
     for src_name, dst_name in (("package.json", "_slot-package.json"),
                                ("package-lock.json", "_slot-package-lock.json")):
         src = os.path.join(root, src_name)
-        if os.path.isfile(src):
-            try:
-                shutil.copy2(src, os.path.join(dst, dst_name))
-            except Exception:
-                pass        # 清单只是"锦上添花"，拷不到不该让整个卸载失败
+        if os.path.isfile(src) and not _is_reparse_path(src):
+            shutil.copy2(src, os.path.join(metadata, dst_name))
 
     meta = {
         "slot_key": key,
@@ -595,12 +660,9 @@ def _backup_slot(plan, key, backup_root, stamp):
         "verify": verify,
         "config_snippet": plan.get("config") or {},
     }
-    try:
-        with open(os.path.join(dst, "_meta.json"), "w",
-                  encoding="utf-8", newline="\n") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    with open(os.path.join(metadata, "_meta.json"), "x",
+              encoding="utf-8", newline="\n") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
     return dst, verify
 
 
@@ -611,7 +673,8 @@ def _backup_slot(plan, key, backup_root, stamp):
 # 一个「标准槽」应该有的条目。其余一律算「用户自己放进去的」——
 # 卸载会删整个槽目录，这些也会一起没，所以必须点名（2026-11-14）。
 _SLOT_KNOWN = {"node_modules", "node", ".dsh-home", ".tmp",
-               "dsh.bat", "dsh-cli.bat", "package.json", "package-lock.json"}
+               "dsh.bat", "dsh-cli.bat", "dsh.command", "dsh-cli.command",
+               "package.json", "package-lock.json"}
 
 
 def slot_foreign_entries(root):
@@ -627,7 +690,7 @@ def slot_foreign_entries(root):
             low = name.lower()
             if low in _SLOT_KNOWN:
                 continue
-            if re.match(r"^kill-\d+\.bat$", low):     # 端口变了会换文件名
+            if re.match(r"^kill-\d+\.(bat|command)$", low):     # 端口变了会换文件名
                 continue
             out.append(name)
     except OSError:
@@ -635,7 +698,8 @@ def slot_foreign_entries(root):
     return out
 
 
-def plan_slot(key, cfg, base, home, repo, self_dir, versions_root=""):
+def plan_slot(key, cfg, base, home, repo, self_dir, versions_root="",
+              protected_paths=(), retain_runtime=False, allow_global=False):
     """算出一个槽的卸载计划。
 
     返回 dict：
@@ -646,9 +710,11 @@ def plan_slot(key, cfg, base, home, repo, self_dir, versions_root=""):
     """
     cfg = cfg or {}
     root = slot_root(cfg, base, home, self_dir)
-    dsh_home = resolve(cfg.get("dsh_home") or "", base, home, self_dir)
+    default_home = os.path.join(root, ".dsh-home") if root else ""
+    dsh_home = resolve(cfg.get("dsh_home") or "", base, home, self_dir) or default_home
     temp_dir = resolve(cfg.get("temp_dir") or "", base, home, self_dir)
-    keep = [dsh_home, temp_dir]
+    keep = [dsh_home, temp_dir, os.path.join(root, ".tmp"),
+            os.path.join(root, "node")] if retain_runtime else []
     plan = {
         "key": key,
         "label": cfg.get("label") or key,
@@ -656,7 +722,7 @@ def plan_slot(key, cfg, base, home, repo, self_dir, versions_root=""):
         "root": root,
         "dsh_home": dsh_home,
         "temp_dir": temp_dir,
-        "exists": bool(root and os.path.isdir(root)),
+        "exists": False,
         "children": [],
         "bytes": 0,
         "blocked": "",
@@ -669,18 +735,38 @@ def plan_slot(key, cfg, base, home, repo, self_dir, versions_root=""):
     # 全局安装：先于「目录是否存在」判断 —— 否则一个不存在的全局路径会被当成
     # 「目录已不在，直接移出配置」，用户会以为卸干净了，实际全局包还在。
     if is_global_install(cfg, base, home, self_dir):
-        plan["blocked"] = (T("这是 npm 全局安装（bin_js 在 npm 全局 node_modules 下），"
-                           "不能按槽删除 —— 请用 npm uninstall -g @deepseek-ai/dsh"))
+        plan["global_install"] = True
+        if not allow_global:
+            plan["blocked"] = T("这是 npm 全局安装，不能按槽删除。")
+    else:
+        versions_root = versions_root or os.path.join(base, "dsh-versions")
+        if not _path_within(root, versions_root, strict=True):
+            plan["blocked"] = T("槽根目录不在版本根之内（%s 不在 %s 下），拒绝删除") % (root, versions_root)
+            return plan
+    for path in (home, repo):
+        if _path_within(path, root):
+            plan["blocked"] = T("槽根目录是系统/用户/仓库目录，拒绝删除：%s") % root
+            return plan
+    for path in protected_paths:
+        if path and _paths_overlap(root, path):
+            plan["blocked"] = T("槽目录与受保护的路径重叠：%s") % path
+            return plan
+    if plan.get("global_install"):
         return plan
-    # 槽根自身的合法性：必须在 versions_root 之内，且不是 home/repo/盘符根。
-    # 这一条也要在「存在与否」之前 —— 配置写错指向盘根时，绝不能因为"目录不存在"
-    # 就跳过校验。
-    if versions_root and not is_under(root, versions_root):
-        plan["blocked"] = T("槽根目录不在版本根之内（%s 不在 %s 下），拒绝删除") % (root, versions_root)
+    try:
+        _assert_unlinked_path(root)
+        if os.path.lexists(root) and not os.path.isdir(root):
+            raise OSError(T("槽根路径不是目录：%s") % root)
+    except OSError as exc:
+        plan["blocked"] = str(exc)
         return plan
-    if is_drive_root(root) or norm(root) in (norm(home), norm(repo)):
-        plan["blocked"] = T("槽根目录是系统/用户/仓库目录，拒绝删除：%s") % root
-        return plan
+    for path in (dsh_home, temp_dir):
+        if path and (_has_parent_reference(path) or _path_within(root, path)):
+            plan["blocked"] = T("用户数据或临时目录配置无效：%s") % path
+            return plan
+    if not _path_within(default_home, dsh_home) and os.path.lexists(default_home):
+        keep.append(default_home)
+    plan["exists"] = os.path.isdir(root)
     if not plan["exists"]:
         # 目录已不在（手工删过 / 装到一半失败）：仍允许把它从 config.json 移除，
         # 这样用户能自己收尾。删除阶段会跳过。
@@ -699,11 +785,14 @@ def plan_slot(key, cfg, base, home, repo, self_dir, versions_root=""):
         # 名字被占 → 装出 `dshV4-2` 这种名字，用户一看就觉得「上次没卸干净」。
         # 所以这里把 keep 列表传空跑护栏（护栏的其它条件一条不少），
         # 再单独标成 purge 让执行阶段知道"这些是先备份后删"。
-        is_userdata = any(k and norm(p) == norm(k) for k in keep)
-        ok, why = is_safe_to_delete(p, root, [], home, repo)
+        is_userdata = any(_path_within(path, p) for path in (dsh_home, temp_dir))
+        ok, why = is_safe_to_delete(p, root, keep, home, repo)
         if ok:
-            size = _dir_size(p) if os.path.isdir(p) else (
-                os.path.getsize(p) if os.path.isfile(p) else 0)
+            entry_stat = os.lstat(p)
+            size = 0
+            if not _stat_is_link(entry_stat):
+                size = (_dir_size(p) if stat.S_ISDIR(entry_stat.st_mode)
+                        else entry_stat.st_size)
             plan["bytes"] += size
             plan["children"].append({"path": p, "name": name,
                                      "action": "purge" if is_userdata else "delete",
@@ -713,20 +802,33 @@ def plan_slot(key, cfg, base, home, repo, self_dir, versions_root=""):
                                      "reason": why, "size": 0})
     # 所有子项都删完后，槽根应当空掉 → 连目录本身一起收掉（rmdir 只删空目录，
     # 万一还有 keep 的项就自然失败，不会误删）。
-    plan["purge_root"] = True
+    plan["purge_root"] = not retain_runtime and not any(
+        child["action"] == "keep" for child in plan["children"])
+    plan["children"].sort(key=lambda child: child["action"] != "purge")
     plan["foreign"] = slot_foreign_entries(root)
     return plan
 
 
-def plan_many(cfg, keys, home, repo, self_dir, versions_root=""):
-    """给若干个槽出计划，返回 plan 列表（顺序与 keys 一致）。"""
-    base = install_base_of(cfg, home, self_dir)
+def plan_many(cfg, keys, home, repo, self_dir, versions_root="", *,
+              extra_protected=(), retain_runtime=False, allow_global=False,
+              base_override=""):
+    """Plan each selected slot while protecting directories owned by other slots."""
+    base = base_override or install_base_of(cfg, home, self_dir)
     versions = (cfg or {}).get("versions") or {}
-    out = []
-    for k in keys:
-        if k in versions:
-            out.append(plan_slot(k, versions[k], base, home, repo, self_dir, versions_root))
-    return out
+    detached = [record.get("root") for record in detached_records(cfg)]
+    plans = []
+    for key in keys:
+        if key not in versions:
+            continue
+        protected = [*detached, *extra_protected]
+        for other_key, other in versions.items():
+            if other_key != key:
+                protected.append(slot_root(other, base, home, self_dir))
+                for field in ("dsh_home", "temp_dir", "node_exe", "bin_js"):
+                    protected.append(resolve(other.get(field) or "", base, home, self_dir))
+        plans.append(plan_slot(key, versions[key], base, home, repo, self_dir,
+                               versions_root, protected, retain_runtime, allow_global))
+    return plans
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -773,7 +875,8 @@ def slot_key_from_dir(name):
     槽键与目录名必须是**一一对应**的：卡片标题显示的是目录名，配置里记的是
     槽键，两者一旦能各自漂移，就会出现「槽 v4 显示成 dshV3」这种自相矛盾的界面。
     """
-    m = _SLOT_NAME_RE.match(os.path.basename(str(name or "").rstrip("\\/")))
+    name = str(name or "").replace(chr(92), "/").rstrip("/").rsplit("/", 1)[-1]
+    m = _SLOT_NAME_RE.match(name)
     if not m:
         return ""
     return "v" + m.group(1) + (("-" + m.group(2)) if m.group(2) else "")
@@ -912,7 +1015,7 @@ def detach_slots(keys, config_path, home, repo, self_dir, versions_root="",
     payload = {"moved": moved, "kept_in_config": kept, "details": details,
                "records": new_recs, "stamp": stamp}
     parts = [T("已移出管理：%s") % ", ".join(moved)]
-    parts.append(T("磁盘上一个字节都没动 —— 这些槽仍然可以自己双击 dsh.bat 启动。"))
+    parts.append(T("磁盘上一个字节都没动 —— 这些槽仍然可以用它们自己的启动脚本启动。"))
     if kept:
         parts.append(T("没移出的（仍在管理里）：%s") % ", ".join(kept))
     for d in details:
@@ -924,29 +1027,38 @@ def detach_slots(keys, config_path, home, repo, self_dir, versions_root="",
     return (True, payload, "\n".join(parts))
 
 
+def _existing_slot_node(root):
+    paths = (PLATFORM.slot_node_path(root), os.path.join(root, "node", "node"))
+    return next((path for path in paths if os.path.isfile(path)), "")
+
+
+def _copy_new_file(source, destination):
+    # Exclusive creation also preserves an existing file if another repair
+    # completed after the initial existence check.
+    with open(source, "rb") as incoming:
+        with open(destination, "xb") as outgoing:
+            try:
+                shutil.copyfileobj(incoming, outgoing)
+                shutil.copystat(source, destination)
+            except OSError:
+                outgoing.close()
+                os.unlink(destination)
+                raise
+
+
 def repair_slot(root, node_src=""):
-    """**用户点了「修复」之后**才调用：给一个不完整的槽补上缺的东西。
+    """Restore missing runtime and state directories, preserving existing files.
 
-    铁律：**只补、不删、不改已有文件**。用户可能是故意删的，所以这件事
-    必须由他显式点一下才发生（2026-11-14 用户要求）。
-
-    只做两件低风险的事：
-      · 缺 `node/node.exe` → 从 `node_src` 复制一份（固定叫 node.exe）
-      · 缺 `.dsh-home` / `.tmp` → 建空目录
-
-    缺 `lib/bin.js` / 缺依赖 / 缺包 package.json **不修** —— 那等于重装，
-    要联网、会改版本树，应该走「安装官方版 dsh」。
-
-    三件 bat 也不在这里生成：那要读 config，由管理器 `_rebuild_bats()` 负责。
-    2026-11-15 起，用户在「槽体检」里点「修复…」时，管理器会在本函数成功之后
-    用「单槽 + 只补缺失」模式补回缺的 bat；已存在、或用户手工改过的一律不碰。
-
-    返回 (ok, actions, error)；actions 是给人看的动作清单。
+    启动脚本由管理器以「单槽 + 只补缺失」模式补回。
     """
-    root = os.path.normpath(os.path.abspath(root or ""))
     actions = []
     if not root or not os.path.isdir(root):
         return (False, actions, T("目录不存在：%s") % (root or T("(空)")))
+    try:
+        _assert_unlinked_path(root)
+    except OSError as exc:
+        return (False, actions, str(exc))
+    root = os.path.abspath(root)
 
     bin_js = os.path.join(root, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js")
     if not os.path.isfile(bin_js):
@@ -954,26 +1066,24 @@ def repair_slot(root, node_src=""):
                 T("缺 lib/bin.js —— 这是程序本体，补不了（等于重装）。\n"
                 "请删掉这个目录后用「安装官方版 dsh」重装一份。"))
 
-    node_dir = os.path.join(root, "node")
-    has_node = (os.path.isfile(os.path.join(node_dir, "node.exe"))
-                or os.path.isfile(os.path.join(node_dir, "node")))
-    if not has_node:
+    if not _existing_slot_node(root):
         if not (node_src and os.path.isfile(node_src)):
             return (False, actions,
                     T("缺 node 运行时，而且没有可复制的来源（先装/保留一个别的槽）。"))
+        target = PLATFORM.slot_node_path(root)
         try:
-            os.makedirs(node_dir, exist_ok=True)
-            _nm = "node.exe" if node_src.lower().endswith(".exe") else "node"
-            shutil.copy2(node_src, os.path.join(node_dir, _nm))
+            _assert_unlinked_path(os.path.dirname(target))
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            _copy_new_file(node_src, target)
             actions.append(T("补上 node 运行时（从 %s 复制）") % node_src)
-        except Exception as e:
+        except OSError as e:
             return (False, actions, T("复制 node 失败：%s") % e)
 
     for sub in (".dsh-home", ".tmp"):
         p = os.path.join(root, sub)
         if not os.path.isdir(p):
             try:
-                os.makedirs(p, exist_ok=True)
+                os.mkdir(p)
                 actions.append(T("补建 %s 目录") % sub)
             except Exception as e:
                 return (False, actions, T("创建 %s 失败：%s") % (sub, e))
@@ -1091,17 +1201,12 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
         # 缺 node 运行时 → **不代劳**。用户可能是故意删的（省空间 / 换自己那份），
         # 自动从别的槽复制会悄悄推翻他的意图，还可能带进不同 ABI 的 node
         # （node-pty 这类原生模块会崩）。如实说明，让他自己决定（2026-11-14）。
-        node_exe = os.path.join(root, "node", "node.exe")
-        if not os.path.isfile(node_exe):
-            alt = os.path.join(root, "node", "node")
-            if os.path.isfile(alt):
-                node_exe = alt
-            else:
-                d["errors"].append(
-                    T("槽里没有自带的 node 运行时（缺 node/node.exe），不能接回。\n"
-                    "如果你是自己删掉的，把 node 放回 node\\ 下即可；\n"
-                    "也可以删掉这个目录，或用「安装官方版 dsh」装到别的编号。"))
-                continue
+        node_exe = _existing_slot_node(root)
+        if not node_exe:
+            d["errors"].append(
+                T("槽里缺少自带的 node 运行时（%s），不能接回。")
+                % os.path.relpath(PLATFORM.slot_node_path(root), root))
+            continue
         if norm(root) in managed:
             d["errors"].append(T("这个目录已经在管理里（槽 %s），不需要重复纳入")
                                % managed[norm(root)])
@@ -1134,14 +1239,14 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
                                  % (d["label"], label))
 
         # ── 端口：bat 里写的是事实 ────────────────────────────
-        port = port_from_bats(root)
+        port = (PLATFORM.read_slot_port(root) if PLATFORM.IS_MAC else port_from_bats(root))
         if port and port in taken:
             newp = _free(port + 1) or _free(4080)
             if not newp:
                 d["errors"].append(T("原端口 %d 已被别的槽占用，也找不到空闲端口") % port)
                 continue
             d["warnings"].append(T("原端口 %d 已被别的槽占用，改用 %d"
-                                 "（三件 bat 会同步重写）") % (port, newp))
+                                 "（启动脚本会同步更新）") % (port, newp))
             port_changed[key] = (port, newp)
             port = newp
         elif not port:
@@ -1151,8 +1256,8 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
             if not newp:
                 d["errors"].append(T("分配不到空闲端口"))
                 continue
-            d["warnings"].append(T("槽里的 bat 没有端口信息，新分配 %d"
-                                 "（三件 bat 会同步重写）") % newp)
+            d["warnings"].append(T("槽里的启动脚本没有端口信息，新分配 %d"
+                                 "（启动脚本会同步更新）") % newp)
             port_changed[key] = (0, newp)
             port = newp
 
@@ -1168,7 +1273,7 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
 
         versions[key] = {
             "label": label,
-            "node_exe": pre + "/node/node.exe",
+            "node_exe": pre + "/" + os.path.relpath(node_exe, root).replace(os.sep, "/"),
             "bin_js": pre + "/node_modules/@deepseek-ai/dsh/lib/bin.js",
             "dsh_home": pre + "/.dsh-home",
             "temp_dir": pre + "/.tmp",
@@ -1228,7 +1333,8 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
 
 def uninstall_slots(keys, config_path, home, repo, self_dir,
                     versions_root="", backup_root="", stop_fn=None,
-                    progress=None, stamp=None):
+                    progress=None, stamp=None, *, retain_runtime=False,
+                    skip_backup=False, base_override="", global_uninstall=None):
     """卸载若干个槽。返回 (ok, payload, 说明)。
 
     stop_fn(key, port) -> 可选回调：停该槽进程（GUI 传 dsh_kill 版本，测试传 None）。
@@ -1238,11 +1344,14 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
     """
     p = progress or OPS.Progress()
     stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
-    keys = [k for k in (keys or []) if k]
+    keys = list(dict.fromkeys(k for k in (keys or []) if k))
     if not keys:
         return (False, None, T("没有选择要卸载的槽"))
+    if skip_backup and not retain_runtime:
+        return (False, None, T("删除用户数据前必须备份。"))
 
     try:
+        _assert_unlinked_path(config_path)
         cfg = OPS.read_config(config_path)
     except Exception as e:
         return (False, None, T("读 config.json 失败：%s") % e)
@@ -1251,21 +1360,26 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
     if missing:
         return (False, None, T("config.json 里没有这些槽：%s") % ", ".join(missing))
 
-    base = install_base_of(cfg, home, self_dir)
+    base = base_override or install_base_of(cfg, home, self_dir)
     backup_root = backup_root or os.path.join(base, T("dsh备份"))
 
     p.on_step(T("备份 config.json…"))
     try:
-        OPS.backup_config(config_path, stamp=stamp)
+        folder = backup_root if retain_runtime else None
+        label = "config" if retain_runtime else None
+        _backup_required_file(config_path, stamp, folder, label)
     except IOError as e:
         return (False, None, str(e))
 
     removed, kept, details = [], [], []
     total_bytes = 0
 
-    for key in keys:
-        scfg = versions.get(key) or {}
-        plan = plan_slot(key, scfg, base, home, repo, self_dir, versions_root)
+    plans = plan_many(cfg, keys, home, repo, self_dir, versions_root,
+                      extra_protected=(backup_root, config_path),
+                      retain_runtime=retain_runtime, allow_global=global_uninstall is not None,
+                      base_override=base_override)
+    for plan in plans:
+        key = plan["key"]
         port = plan["port"]
         d = {"key": key, "label": plan["label"], "port": port,
              "root": plan["root"], "temp_dir": plan["temp_dir"],
@@ -1279,16 +1393,17 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
             p.on_step(T("[%s] 跳过：%s") % (key, plan["blocked"]))
             continue
 
-        # 1) 停进程。失败只记 warning 不阻断：
-        #    进程可能本来就没在跑（正常），或者停不掉但文件仍可删。
-        #    若真被占用，下面的删除会失败 —— 那时才算错误。
+        # 1) 停进程。停止失败时保留该槽和配置。
         if stop_fn:
             p.on_step(T("[%s] 停止端口 %s 上的 dsh（门控：只杀 dsh）…") % (key, port))
             try:
-                stop_fn(key, port)
+                if stop_fn(key, port) is False:
+                    raise OSError(T("端口 %s 尚未释放") % port)
                 d["stopped"] = True
             except Exception as e:
-                d["warnings"].append(T("停进程失败（继续尝试删除）：%s") % e)
+                d["errors"].append(T("停进程失败，已保留该槽：%s") % e)
+                kept.append(key)
+                continue
 
         # 2) 备份用户数据 + 插件清单 + 版本信息（**在删任何东西之前**）
         #    2026-10-30 起备份内容扩展：除了 .dsh-home（会话/配置/凭据/插件配置），
@@ -1297,7 +1412,7 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
         p.on_step(T("[%s] 备份用户数据与插件清单…") % key)
         try:
             d["foreign"] = plan.get("foreign") or []
-            dst, vfy = _backup_slot(plan, key, backup_root, stamp)
+            dst, vfy = ("", {}) if skip_backup else _backup_slot(plan, key, backup_root, stamp)
             d["backup"] = dst
             d["verify"] = vfy
         except Exception as e:
@@ -1306,7 +1421,7 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
             kept.append(key)
             p.on_step(T("[%s] 中止：备份失败 %s") % (key, e))
             continue
-        if not d["backup"]:
+        if not d["backup"] and not skip_backup:
             # 没有用户数据 → 不建备份目录（见 _backup_slot 开头）。日志里留版本号，
             # 以后想装回同一个版本照着抄即可。
             p.on_step(T("[%s] 没有用户数据（.dsh-home 为空），未生成备份（实装 %s）")
@@ -1314,16 +1429,13 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
         if d["backup"]:
             p.on_step(T("[%s] 已备份并核对通过：%d 个文件 → %s")
                       % (key, vfy.get("checked", 0), d["backup"]))
-            # 大小不一致 = 备份过程中源文件被改过（多半是 dsh 没停干净）。
-            # 文件都在，不阻断；但必须让用户看见，否则"备份完整"是假的。
-            if vfy.get("size_changed"):
-                msg = (T("备份期间有 %d 个文件大小变了（该槽可能仍在运行，"
-                       "备份的是当时那一刻的内容）") % vfy["size_changed"])
-                d["warnings"].append(msg)
-                p.on_step(T("[%s] 注意：%s") % (key, msg))
-
         # 3) 删程序产物 + 用户数据（备份已成功，空壳不再保留）
-        if plan["exists"]:
+        if plan.get("global_install"):
+            try:
+                global_uninstall(plan)
+            except (OSError, subprocess.SubprocessError) as exc:
+                d["errors"].append(T("npm 全局卸载失败：%s") % exc)
+        elif plan["exists"]:
             p.on_step(T("[%s] 删除槽目录内容（共 %s）…") % (key, human_size(plan["bytes"])))
             for ch in plan["children"]:
                 if ch["action"] not in ("delete", "purge"):
@@ -1333,10 +1445,7 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
                 p.on_step(T("[%s] 正在删除 %s（%s）…")
                           % (key, ch["name"], human_size(ch["size"])))
                 try:
-                    if os.path.isdir(ch["path"]):
-                        _force_rmtree(ch["path"])
-                    else:
-                        os.remove(ch["path"])
+                    _force_rmtree(ch["path"])
                     d["bytes"] += ch["size"]
                 except Exception as e:
                     d["errors"].append(T("删除 %s 失败：%s") % (ch["name"], e))
@@ -1357,14 +1466,15 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
                 last = None
                 for _ in range(3):
                     try:
+                        _assert_unlinked_path(plan["root"])
                         os.rmdir(plan["root"])
                         d["purged_root"] = True
                         break
                     except OSError as e:
                         last = e
                         time.sleep(0.4)
-                if not d["purged_root"]:
-                    d["warnings"].append(
+                if not d.get("purged_root"):
+                    d["errors"].append(
                         T("槽目录没能整个删掉（%s）：%s —— 下次装同一槽可能会被命名成 %s-2")
                         % (plan["root"], last, os.path.basename(plan["root"])))
                     p.on_step(T("[%s] 提示：槽目录没能整个删掉（%s），下次装同名槽会复用或改名")
@@ -1382,10 +1492,17 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
     if removed:
         p.on_step(T("更新 config.json（移除 %s）…") % ", ".join(removed))
         try:
+            _assert_unlinked_path(config_path)
             cfg = OPS.read_config(config_path)
-            for k in removed:
-                (cfg.get("versions") or {}).pop(k, None)
-            OPS.write_config_atomic(config_path, cfg)
+            current_versions = cfg.get("versions") or {}
+            for k in removed[:]:
+                if current_versions.get(k) != versions.get(k):
+                    removed.remove(k)
+                    kept.append(k)
+                else:
+                    current_versions.pop(k, None)
+            if removed:
+                OPS.write_config_atomic(config_path, cfg)
         except Exception as e:
             return (False, {"details": details}, T("删除已完成，但写 config.json 失败：%s\n"
                                                  "请手动从 config.json 里删掉 %s")
@@ -1420,7 +1537,7 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
         parts.append(T("备份（用户数据 + 插件清单 + 版本信息）在：%s") % backup_root)
         for d in _with_bak:
             parts.append("  · %s → %s" % (d["key"], d["backup"]))
-    if _no_bak:
+    if _no_bak and not skip_backup:
         # 没有用户数据就不建备份目录（2026-11-14）—— 别让用户去一个空目录里找东西
         parts.append(T("未生成备份（这些槽没有用户数据）：%s")
                      % ", ".join(d["key"] for d in _no_bak))
@@ -1428,7 +1545,7 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
     # `dshV4-2`。万一某个槽根没删成（被占用等），如实说出来 —— 那才会导致 -2 后缀。
     leftover = [d["root"] for d in details
                 if d.get("root") and os.path.isdir(d["root"])]
-    if leftover:
+    if leftover and not retain_runtime:
         parts.append(T("注意：这些槽目录没能整个删掉：%s\n"
                      "下次往同一槽装版本可能被命名成带 -2 后缀的目录，"
                      "确认上面的备份无误后可手动删掉它们。") % "、".join(leftover))
@@ -1449,3 +1566,173 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
     if warns:
         parts.append(T("注意：\n  ") + "\n  ".join(warns))
     return (True, payload, "\n".join(parts))
+
+
+def _stop_cli_slot(entrypoint, port):
+    import dsh_slot_process as processes
+
+    try:
+        port = int(port)
+    except (ValueError, TypeError) as exc:
+        raise OSError(T("端口配置无效：%s") % port) from exc
+    if not 1 <= port <= 65535:
+        raise OSError(T("端口配置无效：%s") % port)
+    if not entrypoint:
+        raise OSError(T("没有槽程序入口，无法确认进程已停止。"))
+    processes.stop_slot(entrypoint, port)
+    for _ in range(20):
+        owned, listeners = processes.slot_listeners(entrypoint, port)
+        unknown = any(processes.process_info(pid) is None for pid in listeners)
+        if not owned and not unknown and (listeners or not processes.port_reachable(port)):
+            return True
+        time.sleep(0.25)
+    return False
+
+
+def _uninstall_global(plan):
+    candidates = (shutil.which(PLATFORM.NODE_NAME), PLATFORM.resolve_node())
+    for node in candidates:
+        npm = PLATFORM.npm_cli_path(node)
+        if npm:
+            break
+    else:
+        raise OSError(T("找不到 npm"))
+    _assert_unlinked_path(plan["root"])
+    # Invoke npm through node to keep the configured prefix out of cmd.exe.
+    subprocess.run([node, npm, "uninstall", "-g", "--prefix", plan["root"],
+                    "@deepseek-ai/dsh"], check=True)
+
+
+def _desktop_shortcut():
+    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+    if PLATFORM.IS_WINDOWS:
+        import winreg
+        try:
+            key = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as settings:
+                desktop = os.path.expandvars(winreg.QueryValueEx(settings, "Desktop")[0])
+        except OSError:
+            pass
+    return os.path.join(desktop, "dsh-manager.lnk")
+
+
+def _finish_command_uninstall(config_path, repo_config, backup_root, skip_backup, stamp):
+    latest = OPS.read_config(config_path)
+    if latest.get("versions") or detached_records(latest):
+        return
+    log = os.path.join(os.path.dirname(config_path), "dsh-manager.log")
+    config_is_default = _path_within(config_path, repo_config) and _path_within(repo_config, config_path)
+    paths = [config_path]
+    if config_is_default or os.path.dirname(log) != os.path.dirname(repo_config):
+        if os.path.lexists(log):
+            paths.append(log)
+    if not skip_backup:
+        for path in paths:
+            label = "config" if path == config_path else None
+            _backup_required_file(path, stamp, backup_root, label)
+    for path in reversed(paths):
+        _assert_unlinked_path(path)
+        os.unlink(path)
+    if config_is_default and PLATFORM.IS_WINDOWS:
+        desktop = _desktop_shortcut()
+        if os.path.lexists(desktop):
+            _force_rmtree(desktop)
+
+
+def _command_main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(description=T("dsh-tm 卸载器"))
+    parser.add_argument("--base", default="")
+    parser.add_argument("--config-path", default="")
+    parser.add_argument("--target", default="")
+    for option in ("dry-run", "yes", "skip-backup", "skip-global"):
+        parser.add_argument("--" + option, action="store_true")
+    args = parser.parse_args(argv)
+    home = os.path.expanduser("~")
+    repo = os.path.dirname(os.path.abspath(__file__))
+    default_config = PLATFORM.default_config_path()
+    base = PLATFORM.resolve_path(args.base, home=home, self_dir=repo) if args.base else ""
+    candidates = [os.path.join(base, "config.json")] if base else []
+    config_path = args.config_path or next(
+        (path for path in candidates + [default_config] if os.path.isfile(path)), default_config)
+    config_path = os.path.abspath(config_path)
+    try:
+        _assert_unlinked_path(config_path)
+        cfg = OPS.read_config(config_path)
+        versions = cfg.get("versions") or {}
+        if not isinstance(versions, dict) or any(not isinstance(slot, dict) for slot in versions.values()):
+            raise ValueError(T("versions 配置格式无效"))
+    except (OSError, ValueError, AttributeError) as exc:
+        print(T("无法读取配置 %s：%s") % (config_path, exc), file=sys.stderr)
+        return 1
+    if not versions:
+        print(T("没有需要卸载的槽。"))
+        return 0
+
+    keys = list(versions)
+    selected = args.target.strip().lower()
+    if not selected:
+        for index, key in enumerate(keys, 1):
+            print("%d) %s (%s)" % (index, key, versions[key].get("label") or key))
+        try:
+            selected = input(T("输入编号（可用逗号分隔）或 a（全部）：")).strip().lower()
+        except EOFError:
+            return 0
+        selected = ",".join(keys[int(token) - 1] if token.isdigit()
+                            and 1 <= int(token) <= len(keys) else token
+                            for token in (part.strip() for part in selected.split(",")))
+    if selected not in ("all", "a", "both"):
+        requested = {name.strip().lower() for name in selected.split(",")}
+        keys = [key for key in keys if key.lower() in requested]
+    if not keys:
+        print(T("没有选中有效槽。"))
+        return 0
+    actual_base = base or install_base_of(cfg, home, repo)
+    backup_root = os.path.join(actual_base, T("dsh备份"))
+    plans = plan_many(cfg, keys, home, repo, repo, extra_protected=(backup_root, config_path),
+                      retain_runtime=True, allow_global=True, base_override=base)
+    for plan in plans:
+        print("%s  %s%s" % (plan["key"], plan["root"],
+                            "  (" + plan["blocked"] + ")" if plan["blocked"] else ""))
+        if plan.get("global_install") and not args.skip_global:
+            print("  npm uninstall -g @deepseek-ai/dsh")
+        for child in plan["children"]:
+            if child["action"] == "delete":
+                print("  " + T("删除 %s") % child["path"])
+    if args.dry_run:
+        print("[DryRun] " + T("未做任何改动。"))
+        return 0
+    if not args.yes:
+        try:
+            if input(T("确认卸载？输入 yes 继续：")).strip().lower() != "yes":
+                return 0
+        except EOFError:
+            return 0
+
+    class ConsoleProgress(OPS.Progress):
+        def on_step(self, message):
+            print(message)
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    ok, payload, message = uninstall_slots(
+        keys, config_path, home, repo, repo, backup_root=backup_root,
+        stop_fn=lambda key, port: _stop_cli_slot(
+            resolve(versions[key].get("bin_js"), actual_base, home, repo), port),
+        progress=ConsoleProgress(), stamp=stamp,
+        retain_runtime=True, skip_backup=args.skip_backup, base_override=base,
+        global_uninstall=(lambda plan: None) if args.skip_global else _uninstall_global,
+    )
+    print(message)
+    if not ok or payload["kept_in_config"]:
+        return 1
+    try:
+        _finish_command_uninstall(config_path, default_config, backup_root, args.skip_backup, stamp)
+    except OSError as exc:
+        print(T("收尾失败：%s") % exc, file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_command_main())

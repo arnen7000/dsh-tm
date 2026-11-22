@@ -2,8 +2,7 @@
 """离线回归：dsh_registry.py（版本列表）+ dsh_uninstall_ops.py（槽位卸载）。
 
 不联网、不起进程、不碰用户真实目录 —— 全部在 temp 下的临时目录里造布局。
-与 scripts/uninstall.ps1 的关系：§护栏 那一节是 `Test-SafeToDelete` 的**同一批边界用例**，
-两边改规则时必须同步改这里（ps1 那边有自己的 11 项断言，见审计报告 P2-1）。
+scripts/uninstall.ps1 也使用这里测试的 Python 卸载护栏。
 """
 import json
 import os
@@ -16,6 +15,7 @@ REPO = os.path.dirname(HERE)
 sys.path.insert(0, REPO)
 
 import dsh_registry as R      # noqa: E402
+import dsh_platform as P
 import dsh_uninstall_ops as U  # noqa: E402
 
 FAILS = []
@@ -126,8 +126,9 @@ def make_slot(key, with_home=True):
     open(os.path.join(pkg, "lib", "bin.js"), "w", encoding="utf-8").write("// x")
     open(os.path.join(pkg, "package.json"), "w", encoding="utf-8").write(
         json.dumps({"name": "@deepseek-ai/dsh", "version": "0.2.0-rc.2"}))
-    os.makedirs(os.path.join(d, "node"), exist_ok=True)
-    open(os.path.join(d, "node", "node.exe"), "wb").write(b"x" * 1024)
+    node = P.slot_node_path(d)
+    os.makedirs(os.path.dirname(node), exist_ok=True)
+    open(node, "wb").write(b"x" * 1024)
     if with_home:
         os.makedirs(os.path.join(d, ".dsh-home"), exist_ok=True)
         open(os.path.join(d, ".dsh-home", "settings.yaml"), "w", encoding="utf-8").write("a: 1")
@@ -142,7 +143,7 @@ def make_slot(key, with_home=True):
 def slot_cfg(key, port, root=None, base="<self>"):
     r = root or ("<base>/dsh-versions/dsh" + key.upper())
     return {"label": "dsh" + key.upper(), "port": port,
-            "node_exe": r + "/node/node.exe",
+            "node_exe": r + "/" + P.slot_node_path("").replace(os.sep, "/"),
             "bin_js": r + "/node_modules/@deepseek-ai/dsh/lib/bin.js",
             "dsh_home": r + "/.dsh-home",
             "temp_dir": r + "/.tmp"}
@@ -157,8 +158,9 @@ HOME = os.path.expanduser("~")
 chk("slot_root 反推本地布局",
     U.norm(U.slot_root(slot_cfg("v1", 4080), FAKE, HOME, FAKE)) == U.norm(d1),
     U.slot_root(slot_cfg("v1", 4080), FAKE, HOME, FAKE))
+os.environ.setdefault("APPDATA", os.path.join(FAKE, "_appdata"))
 GLOBAL_CFG = {"bin_js": os.path.join(
-    os.environ.get("APPDATA", "C:/x"), "npm", "node_modules",
+    os.environ["APPDATA"], "npm", "node_modules",
     "@deepseek-ai", "dsh", "lib", "bin.js")}
 chk("识别 npm 全局安装", U.is_global_install(GLOBAL_CFG, FAKE, HOME, FAKE) is True)
 chk("本地槽不是全局安装", U.is_global_install(slot_cfg("v1", 4080), FAKE, HOME, FAKE) is False)
@@ -361,7 +363,7 @@ cfgp14 = os.path.join(FAKE, "config14.json")
 with open(cfgp14, "w", encoding="utf-8") as _f:
     json.dump({"install_base": "<self>", "versions": {}}, _f, ensure_ascii=False)
 ok17, _p17, msg17 = U.readd_slots([_R14], cfgp14, HOME, REPO, FAKE,
-                                  versions_root=VER)
+                                  versions_root=VER, probe=lambda _port: False)
 chk("I40b 缺 .dsh-home 仍可接回，但提示「没找到原来的用户数据目录」",
     ok17 is True and "用户数据" in msg17, msg17[-240:])
 
@@ -376,9 +378,9 @@ with open(os.path.join(_home15, "settings.yaml"), "w", encoding="utf-8") as _f:
 _src15 = os.path.join(FAKE, "repair-node.exe")
 open(_src15, "wb").write(b"MZ" + b"y" * 64)
 ok18, acts18, err18 = U.repair_slot(_R15, node_src=_src15)
-chk("I42 repair_slot 补上 node（固定叫 node.exe）并补建 .tmp",
+chk("I42 repair_slot 补上本平台的 node 并补建 .tmp",
     ok18 is True
-    and os.path.isfile(os.path.join(_R15, "node", "node.exe"))
+    and os.path.isfile(P.slot_node_path(_R15))
     and os.path.isdir(os.path.join(_R15, ".tmp")), str(err18))
 chk("I43 修复不覆盖已有文件（.dsh-home/settings.yaml 原样）",
     open(os.path.join(_home15, "settings.yaml"), encoding="utf-8").read() == "keep: 1")
@@ -625,6 +627,10 @@ try:
         def __init__(self, rc):
             self.returncode, self.stdout = rc, b""
 
+    robocopy_fixture = os.path.join(GT, "robocopy-fixture")
+    with open(robocopy_fixture, "wb"):
+        pass
+    U.shutil.which = lambda *args, **kwargs: robocopy_fixture
     for _rc in (0, 1, 2, 3, 7):
         U.subprocess.run = lambda *a, **k: _P(_rc)
         ok_rc, why = U._robocopy(src, os.path.join(GT, "y"))
@@ -634,6 +640,7 @@ try:
         ok_rc, why = U._robocopy(src, os.path.join(GT, "y"))
         chk("G2 退出码 %d 视为失败" % _rc, ok_rc is False and str(_rc) in why, why)
     U.subprocess.run = _real_run
+    U.shutil.which = _real_which
 
     # G3 robocopy 失败 → 退回逐文件，内容照样完整（备份不能因为工具失败就没了）
     U._robocopy = lambda s, d: (False, "模拟失败")
@@ -871,20 +878,22 @@ def _mk_slot(ver_dir, name, port, version="0.1.5-rc.2"):
     open(os.path.join(pkg, "lib", "bin.js"), "w", encoding="utf-8").write("// x")
     open(os.path.join(pkg, "package.json"), "w", encoding="utf-8").write(
         json.dumps({"name": "@deepseek-ai/dsh", "version": version}))
-    os.makedirs(os.path.join(d, "node"), exist_ok=True)
-    open(os.path.join(d, "node", "node.exe"), "wb").write(b"x" * 512)
+    node = P.slot_node_path(d)
+    os.makedirs(os.path.dirname(node), exist_ok=True)
+    open(node, "wb").write(b"x" * 512)
     os.makedirs(os.path.join(d, ".dsh-home"), exist_ok=True)
     open(os.path.join(d, ".dsh-home", "settings.yaml"), "w", encoding="utf-8").write("a: 1")
-    # 真实槽的 dsh.bat 里有 `--port N` —— 接回时端口就是从这里读的，
-    # 夹具必须同构，否则测不到解析逻辑（2026-11-13 加）。
-    open(os.path.join(d, "dsh.bat"), "w", encoding="utf-8").write(
-        "@echo off\r\n"
-        '"%s" "%s" web --host 127.0.0.1 --port %d --no-open\r\n'
-        % (os.path.join(d, "node", "node.exe"),
-           os.path.join(pkg, "lib", "bin.js"), port))
+    start = P.slot_launcher_paths(d, port)["start"]
+    with open(start, "w", encoding="utf-8", newline="\n") as f:
+        if P.IS_MAC:
+            f.write("#!/bin/sh\n# dsh-tm port: %d\n" % port)
+        else:
+            f.write("@echo off\n"
+                    '"%s" "%s" web --host 127.0.0.1 --port %d --no-open\n'
+                    % (node, os.path.join(pkg, "lib", "bin.js"), port))
     return {
         "label": name,
-        "node_exe": "<base>/dsh-versions/%s/node/node.exe" % name,
+        "node_exe": "<base>/dsh-versions/%s/%s" % (name, os.path.relpath(node, d).replace(os.sep, "/")),
         "bin_js": "<base>/dsh-versions/%s/node_modules/@deepseek-ai/dsh/lib/bin.js" % name,
         "dsh_home": "<base>/dsh-versions/%s/.dsh-home" % name,
         "temp_dir": "<base>/dsh-versions/dsh-temp/%s" % name,
@@ -948,7 +957,8 @@ chk("I3 磁盘上一个文件都没少、字节数和内容都没变", _tree(VER
     "%d → %d 个文件" % (len(_before), len(_tree(VERI1))))
 chk("I4 三件 bat / .dsh-home / node / node_modules 全都还在",
     all(os.path.exists(os.path.join(VERI1, "dshV1", x)) for x in
-        ("dsh.bat", ".dsh-home", "node", "node_modules")))
+        (os.path.basename(P.slot_launcher_paths("", 4080)["start"]),
+         ".dsh-home", "node", "node_modules")))
 _recs = _cfg1.get("detached") or []
 chk("I5 detached 只记绝对路径（不再存 label / port / 配置快照）",
     len(_recs) == 1 and _recs[0].get("root")
@@ -1004,7 +1014,7 @@ CFG4, VER4 = _mk_cfg(FAKEI, "s4", [("dshV4", 4080), ("dshV5", 4080)])
 U.detach_slots(["v2"], CFG4, HOME, REPO, FAKEI, versions_root=VER4)
 _rec4 = (_load(CFG4).get("detached") or [{}])[0]
 ok5, _p5, msg5 = U.readd_slots([_rec4["root"]], CFG4, HOME, REPO, FAKEI,
-                               versions_root=VER4)
+                               versions_root=VER4, probe=lambda _port: False)
 chk("I21 端口撞车仍然接回成功（不因冲突而拒绝）", ok5 is True, msg5[:200])
 _added4 = (_p5 or {}).get("added") or []
 _cfg4 = _load(CFG4)
@@ -1051,8 +1061,8 @@ chk("I28 槽键从目录名推导（dshV3 → v3 / dshV3-2 → v3-2 / 认不出 
 
 CFG8, VER8 = _mk_cfg(FAKEI, "s8", [("dshV3", 7080)])
 _s8 = os.path.join(VER8, "dshV3")
-chk("I29 port_from_bats 从 bat 里读出真实端口", U.port_from_bats(_s8) == 7080,
-    str(U.port_from_bats(_s8)))
+_read_port = P.read_slot_port if P.IS_MAC else U.port_from_bats
+chk("I29 从本平台的启动文件读出真实端口", _read_port(_s8) == 7080, str(_read_port(_s8)))
 
 # 已在管理里的目录：绝不能重复登记一次（旧版就是这么造出「槽 v4 顶着 dshV3」的）
 ok10, _p10, msg10 = U.readd_slots([_s8], CFG8, HOME, REPO, FAKEI, versions_root=VER8)

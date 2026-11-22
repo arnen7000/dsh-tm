@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import threading
 import tempfile
+import dsh_platform as PLATFORM
 import time
 from dsh_i18n import T
 
@@ -131,7 +132,8 @@ def adopt_existing(adopt_mod, node_modules, versions_root, config_path,
     if not node_exe_source:
         node_exe_source = _pick_node_exe(existing, install_base)
     if not node_exe_source or node_exe_source.lower() in ("node", "node.exe"):
-        node_exe_source = shutil.which(node_exe_source or "node") or ""
+        node_exe_source = (PLATFORM.resolve_node() if PLATFORM.IS_MAC else
+                           shutil.which(node_exe_source or "node") or "")
     if not node_exe_source:
         return (False, "", T("这份安装没有自带 Node.js，管理器也没有找到可复制的运行时。"))
 
@@ -537,6 +539,12 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
                                                       for k, v in (existing or {}).items())
                                                      if p])
 
+    if PLATFORM.IS_MAC:
+        if not port:
+            return False, "", T("没有可用端口。")
+        return _staged_mac_install(adopt_mod, ver, slot_key, root, versions_root,
+                                   install_base, config_path, port, browser, p)
+
     dsh_home = os.path.join(root, ".dsh-home")
     # 临时目录（2026-10-31 改）：优先 `<temp_root>\<槽目录名>`，temp_root 缺省是
     # `<槽根>/dsh-temp` —— 即「临时文件跟着安装根走」，换盘/换 install_base 时
@@ -715,6 +723,61 @@ def run_official_install(adopt_mod, version_text, config_path, install_base,
             % (ver, slot_key, dir_name, port, tail))
 
 
+def _staged_mac_install(adopt_mod, version, key, root, versions_root,
+                        install_base, config_path, port, browser, progress):
+    import fcntl
+    label = os.path.basename(root)
+    try:
+        os.makedirs(versions_root, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".dsh-install-", dir=versions_root) as stage:
+            payload = os.path.join(stage, label)
+            home = os.path.join(payload, ".dsh-home")
+            temp = os.path.join(payload, ".tmp")
+            os.makedirs(home)
+            os.makedirs(temp)
+            runtime = _pick_node_exe(read_config(config_path).get("versions"),
+                                     install_base, with_npm=True)
+            node, error = adopt_mod.copy_node_exe(runtime, payload)
+            if not node:
+                return False, "", error
+            rc, output = _npm_install_slot(node, payload, version, progress=progress)
+            package = os.path.join(payload, "node_modules", "@deepseek-ai", "dsh")
+            entry = os.path.join(package, "lib", "bin.js")
+            if rc or not os.path.isfile(entry):
+                return False, "", T("安装失败：%s") % _tail(output)
+            actual = adopt_mod.read_package_version(package)
+            if not actual or (version[0].isdigit() and actual != version):
+                return False, "", T("npm 安装结果与请求版本不一致。")
+            slot = adopt_mod.build_slot_config(
+                key, label, root, os.path.join(root, ".dsh-home"),
+                os.path.join(root, ".tmp"), port, PLATFORM.slot_node_path(root),
+                browser=browser, install_base=install_base)
+            launch = dict(slot, node_exe=node, bin_js=entry, dsh_home=home, temp_dir=temp)
+            PLATFORM.write_slot_launchers(payload, launch)
+            fd = os.open(config_path + ".write.lock",
+                         os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "w") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                data = read_config(config_path)
+                versions = data.setdefault("versions", {})
+                if (key in versions or os.path.lexists(root)
+                        or any(v.get("port") == port for v in versions.values())):
+                    return False, "", T("目标槽或端口已被占用，请重试。")
+                backup_config(config_path)
+                os.rename(payload, root)
+                try:
+                    versions[key] = slot
+                    write_config_atomic(config_path, data)
+                except Exception:
+                    os.rename(root, payload)
+                    raise
+            progress.on_done(True, {"slot_key": key, "root": root,
+                                    "label": label, "port": port, "version": actual})
+            return True, key, T("已安装 %s 到 %s。") % (actual, label)
+    except (OSError, ValueError) as exc:
+        return False, "", T("安装失败：%s") % exc
+
+
 def _gen_slot_bats(adopt_mod, slot_cfg, root, slot_key, install_base=""):
     """为单个槽生成 dsh.bat / kill-<port>.bat / dsh-cli.bat。
 
@@ -729,6 +792,11 @@ def _gen_slot_bats(adopt_mod, slot_cfg, root, slot_key, install_base=""):
 
     拿不到主程序模块时（单独跑本脚本）返回提示而不是抛错。
     """
+    if PLATFORM.IS_MAC:
+        cfg = dict(slot_cfg)
+        for field in ("node_exe", "bin_js", "dsh_home", "temp_dir"):
+            cfg[field] = PLATFORM.resolve_path(cfg.get(field), install_base)
+        return ", ".join(PLATFORM.write_slot_launchers(root, cfg))
     # 本文件就在仓库根（与 dsh_manager.pyw 同级），不要再上退一层。
     mgr = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "dsh_manager.pyw")
@@ -941,6 +1009,8 @@ def bundled_node_exe():
     0.2.2-alpha.2 都能跑同一个 v24.21.0），等它真要求更高版本时再随新版管理器换。
     目录来自官方 win-x64 发行包，**必须连 `node_modules/npm` 一起带**，否则装不了东西。
     """
+    if PLATFORM.IS_MAC:
+        return PLATFORM.bundled_node()
     exe = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "runtime", "node", "node.exe")
     return exe if os.path.isfile(exe) else ""
@@ -952,13 +1022,16 @@ def _pick_node_exe(existing_slots, base="", home="", with_npm=False):
         existing_slots = dict(enumerate(existing_slots))
     candidates = [_expand_slot_path((slot or {}).get("node_exe"), base, home)
                   for slot in (existing_slots or {}).values()]
-    candidates.extend((bundled_node_exe(), shutil.which("node")))
+    if PLATFORM.IS_MAC:
+        candidates.append(PLATFORM.resolve_node())
+    else:
+        candidates.extend((bundled_node_exe(), shutil.which("node")))
     available = [os.path.abspath(path) for path in candidates if path and os.path.isfile(path)]
     if with_npm:
         usable = next((path for path in available if _npm_cli(path)[1]), "")
         if usable:
             return usable
-    return available[0] if available else "node"
+    return available[0] if available else ("" if PLATFORM.IS_MAC else "node")
 
 
 def _publish_runtime_file(source, destination):
@@ -1118,12 +1191,9 @@ def slot_shape_problems(cfg, base="", home="", self_dir=""):
         out.append((T("警告"), T("临时目录还不存在（启动前会创建）：%s") % temp))
 
     if root:
-        for n in ("dsh.bat", "dsh-cli.bat"):
-            if not os.path.isfile(os.path.join(root, n)):
-                out.append((T("警告"), T("缺 %s（可在管理器里点「生成启动/kill/CLI bat」补）") % n))
-        port = cfg.get("port")
-        if port and not os.path.isfile(os.path.join(root, "kill-%s.bat" % port)):
-            out.append((T("警告"), T("缺 kill-%s.bat（同上，可在管理器里补）") % port))
+        for path in PLATFORM.slot_launcher_paths(root, cfg.get("port")).values():
+            if not os.path.isfile(path):
+                out.append((T("警告"), T("缺 %s") % os.path.basename(path)))
     else:
         out.append((T("警告"), T("bin_js 不在本地 node_modules 布局里，无法检查槽目录内容")))
     return out
@@ -1151,6 +1221,9 @@ def _npm_cli(node_exe):
     为什么不调 npm / npm.cmd：PATH 上的 npm 可能属于别的发行版（甚至被
     执行策略拦下的 npm.ps1），而 npm.cmd 的孙进程管道在 pythonw 下会卡死。
     返回 (node_exe, npm_cli)；找不到 npm_cli 时第二项为空串。"""
+    if PLATFORM.IS_MAC:
+        exe = PLATFORM.resolve_node(node_exe)
+        return exe, PLATFORM.npm_cli_path(exe)
     exe = (node_exe or "").strip()
     if exe and not os.path.dirname(exe):
         # 裸名字（"node"）：交给 PATH 解析 —— 这是 config 里 node_exe 的合法写法。
@@ -1180,8 +1253,8 @@ def _run_npm(node_exe, npm_cli, args, cwd=None):
     _probe_npm_global 为此踩过坑）。
     退出码沿用 npm 语义：0 成功 / 正数失败 / **负数 = 网络类故障**
     （libuv errno，如 -4077=ECONNRESET），据此决定要不要换镜像重试。"""
-    tmp = os.path.join(os.environ.get("TEMP", "."),
-                       "dsh-install-%d-%d.log" % (os.getpid(), int(time.time())))
+    fd, tmp = tempfile.mkstemp(prefix="dsh-install-", suffix=".log")
+    os.close(fd)
     cmd = [node_exe, npm_cli] + list(args)
     try:
         with open(tmp, "wb") as out:
@@ -1189,8 +1262,14 @@ def _run_npm(node_exe, npm_cli, args, cwd=None):
                                     cwd=cwd or None, env=_npm_env(node_exe),
                                     creationflags=getattr(subprocess,
                                                           "CREATE_NO_WINDOW", 0))
-            rc = proc.wait()
+            try:
+                rc = proc.wait(timeout=600)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                rc = 124
     except Exception as e:
+        os.unlink(tmp)
         return (-1, T("无法启动 npm（%s）：%s") % (node_exe, e))
     try:
         with open(tmp, "rb") as f:
@@ -1316,6 +1395,8 @@ def _npm_install_slot(node_exe, slot_dir, version, progress=None):
     fast_fail = ["--fetch-retries=1",
                  "--fetch-retry-mintimeout=3000",
                  "--fetch-retry-maxtimeout=15000"]
+    if PLATFORM.IS_MAC:
+        fast_fail.append("--engine-strict")
     args = ["install", spec] + fast_fail + (["--registry", reg] if reg else [])
     rc, out = _run_npm(exe, cli, args, cwd=slot_dir)
     # 网络中断（ECONNRESET / ETIMEDOUT / EAI_AGAIN …）→ 换镜像重试一次。

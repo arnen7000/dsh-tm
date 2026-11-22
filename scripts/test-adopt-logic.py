@@ -12,6 +12,7 @@ import os
 import shutil
 import sys
 import tempfile
+from unittest.mock import patch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -21,6 +22,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 os.environ["DSH_TEMP_NO_REAL_DISK"] = "1"
 
 import dsh_adopt as A   # noqa: E402
+import dsh_platform as platform
 
 FAILS = []
 
@@ -347,13 +349,15 @@ try:
         with open(os.path.join(src, fn), "wb") as f:
             f.write(b"x" * 16)
     dst_root = os.path.join(tmp, "newslot")
-    got, err = A.copy_node_exe(src, dst_root)
+    with patch.object(platform, "IS_MAC", False):
+        got, err = A.copy_node_exe(src, dst_root)
     chk("复制成功", got and os.path.isfile(got), "%s %s" % (got, err))
     chk("落在新槽的 node 子目录",
         got and os.path.dirname(got) == os.path.join(dst_root, "node"), str(got))
     chk("文件内容在", os.path.getsize(got) == 16 if got else False)
 
-    got2, err2 = A.copy_node_exe(os.path.join(tmp, "没有"), dst_root)
+    with patch.object(platform, "IS_MAC", False):
+        got2, err2 = A.copy_node_exe(os.path.join(tmp, "没有"), dst_root)
     chk("源缺失时如实报错（不静默用系统 node）",
         got2 is None and "找不到" in err2, "%s %s" % (got2, err2))
 finally:
@@ -430,9 +434,13 @@ try:
     # (h) 全局安装判定不能靠「路径里含 /npm/node_modules」这种宽判据
     chk("临时目录里的 npm/node_modules 不算全局安装",
         A.is_global_install(nm) is False, nm)
-    chk("APPDATA\npm\node_modules 才算全局安装",
-        A.is_global_install(os.path.join(
-            os.environ.get("APPDATA", "C:/x"), "npm", "node_modules")) is True)
+    if platform.IS_MAC:
+        with patch.object(platform, "probe_npm_global", return_value=nm):
+            chk("macOS 使用 npm 返回的全局路径", A.is_global_install(nm))
+    else:
+        chk("APPDATA\npm\node_modules 才算全局安装",
+            A.is_global_install(os.path.join(
+                os.environ.get("APPDATA", "C:/x"), "npm", "node_modules")) is True)
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 

@@ -19,6 +19,11 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
 import dsh_health as H        # noqa: E402
+import dsh_platform as platform
+
+# These fixtures model the published Windows layout on any test host.
+platform.IS_MAC, platform.IS_WINDOWS, platform.NODE_NAME = False, True, "node.exe"
+
 
 FAILS = []
 

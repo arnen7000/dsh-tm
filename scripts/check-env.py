@@ -6,6 +6,8 @@
 
 退出码 0 = 全部满足；非 0 = 有硬性缺项。警告项不影响退出码。
 """
+import argparse
+import importlib.util
 import os
 import sys
 import subprocess
@@ -20,15 +22,14 @@ ROOT = os.path.dirname(HERE)
 #   或环境变量 DSH_LANG=en（管理器就是这样调的）
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+import dsh_platform as PLATFORM
 from dsh_i18n import T, set_lang   # noqa: E402
 
-_lang = os.environ.get("DSH_LANG") or "zh"
-for _i, _a in enumerate(sys.argv):
-    if _a == "--lang" and _i + 1 < len(sys.argv):
-        _lang = sys.argv[_i + 1]
-    elif _a.startswith("--lang="):
-        _lang = _a.split("=", 1)[1]
-set_lang(_lang)
+_parser = argparse.ArgumentParser(allow_abbrev=False)
+_parser.add_argument("--lang", default=os.environ.get("DSH_LANG") or "zh")
+_parser.add_argument("--config", default=PLATFORM.default_config_path(), type=os.path.expanduser)
+_args, _unknown = _parser.parse_known_args()
+set_lang(_args.lang)
 
 MIN_PY = (3, 8)          # 见 README「运行环境」：代码未用 3.9/3.10 专有语法
 # node 版本要求分两档，别混：
@@ -73,6 +74,9 @@ def check_tkinter():
     print(T("== 2. tkinter（图形界面，必需）=="))
     try:
         import tkinter
+        if PLATFORM.IS_MAC and tkinter.TkVersion < 8.6:
+            bad("macOS needs a Python build with Tk 8.6 or newer.")
+            return
         ok(T("tkinter 可用（Tcl/Tk %s）") % tkinter.TkVersion)
     except ImportError as e:
         bad(T("缺少 tkinter：%s") % e)
@@ -99,6 +103,8 @@ def check_stdlib():
 
 
 def check_optional():
+    if PLATFORM.IS_MAC:
+        return
     print(T("== 4. 可选依赖 =="))
     try:
         import winreg
@@ -148,6 +154,8 @@ def check_node():
     #    node-pty 匹配）。有它就等于「不需要用户装 node」。
     bundled = os.path.join(ROOT, "runtime", "node",
                            "node.exe" if os.name == "nt" else "node")
+    if PLATFORM.IS_MAC:
+        bundled = PLATFORM.bundled_node()
     has_bundled = os.path.isfile(bundled)
     if has_bundled:
         v = _node_version(bundled)
@@ -171,7 +179,9 @@ def check_node():
     # ② 系统 PATH 里的 node —— 只在「用户自己动手跑 dsh / 改配置去用系统 node」时
     #    才相关，所以包内那份健康时它只是信息项。
     node = None
-    for cand in ("node", "node.exe"):
+    for cand in ((PLATFORM.resolve_node(),) if PLATFORM.IS_MAC else ("node", "node.exe")):
+        if not cand:
+            continue
         node = _node_version(cand)
         if node:
             break
@@ -199,16 +209,21 @@ def check_node():
              % (node, MIN_NODE[0], MIN_NODE[1]))
 
 
-def check_files():
+def check_files(config_path):
     print(T("== 6. 管理器文件完整性 =="))
-    need = ["dsh_manager.pyw", "dsh_kill.py", "dsh_adopt.py",
-            "dsh_install_ops.py", "dsh_uninstall_ops.py"]
-    miss = [f for f in need if not os.path.isfile(os.path.join(ROOT, f))]
+    modules = ["dsh_kill", "dsh_adopt", "dsh_install_ops", "dsh_uninstall_ops"]
+    if PLATFORM.FROZEN:
+        resources = ["config/config.example.json"]
+        miss = [module for module in modules if importlib.util.find_spec(module) is None]
+    else:
+        resources = ["dsh_manager.pyw", *(module + ".py" for module in modules)]
+        miss = []
+    miss.extend(name for name in resources if not os.path.isfile(os.path.join(ROOT, name)))
     if miss:
         bad(T("缺少文件：%s") % ", ".join(miss))
     else:
-        ok(T("%d 个核心文件齐备") % len(need))
-    if os.path.isfile(os.path.join(ROOT, "config.json")):
+        ok(T("%d 个核心文件齐备") % (len(modules) + 1))
+    if os.path.isfile(config_path):
         ok(T("config.json 已生成"))
     else:
         warn(T("config.json 不存在（首次启动会自动从 "
@@ -262,7 +277,7 @@ def check_min_version_claim():
               % MIN_PY)
     else:
         ok(T("未使用 %d.%d 以上才有的专有语法，「最低 %d.%d」的说法成立")
-           % (MIN_PY[0] + 1, MIN_PY[1], MIN_PY[0], MIN_PY[1]))
+           % (MIN_PY[0], MIN_PY[1] + 1, MIN_PY[0], MIN_PY[1]))
 
 
 def check_scope():
@@ -325,6 +340,8 @@ def check_scope():
 
 
 def check_privilege():
+    if PLATFORM.IS_MAC:
+        return
     print(T("== 9. 权限（非管理员会缺哪些能力）=="))
     try:
         import ctypes
@@ -401,8 +418,9 @@ check_tkinter()
 check_stdlib()
 check_optional()
 check_node()
-check_files()
-check_min_version_claim()
+check_files(_args.config)
+if not PLATFORM.FROZEN:
+    check_min_version_claim()
 check_scope()
 check_privilege()
 check_ports()

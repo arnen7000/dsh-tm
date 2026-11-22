@@ -1,0 +1,313 @@
+name: macOS app
+
+on:
+  pull_request:
+  push:
+    branches: [main, codex/macos-support]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_VERSION: '0.1.11'
+
+jobs:
+  package:
+    name: Build macOS (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    env:
+      ARCH: ${{ matrix.arch }}
+      UV_PYTHON_PREFERENCE: only-managed
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: '0.12.23'
+          enable-cache: false
+      - name: Install native Python with Tcl/Tk and PyInstaller
+        run: |
+          uv venv --python 3.12.15 "$RUNNER_TEMP/dsh-build-env"
+          uv pip install --python "$RUNNER_TEMP/dsh-build-env/bin/python" PyInstaller==6.22.3
+          echo "$RUNNER_TEMP/dsh-build-env/bin" >> "$GITHUB_PATH"
+      - name: Build, ZIP, and verify the packaged app
+        run: |
+          python scripts/build-macos.py --arch "$ARCH" --output "$RUNNER_TEMP/build"
+          zip="DSH-TM-$(cat VERSION)-macos-$ARCH-unsigned.zip"
+          python scripts/package-macos.py --app "$RUNNER_TEMP/build/DSH-TM.app" \
+            --arch "$ARCH" --output "$RUNNER_TEMP/artifacts/$zip"
+          (cd "$RUNNER_TEMP/artifacts" && shasum -a 256 -c "$zip.sha256")
+          ditto -x -k "$RUNNER_TEMP/artifacts/$zip" "$RUNNER_TEMP/extracted"
+          for suite in scripts/test-*.py; do
+            case "$suite" in
+              scripts/test-macos-app.py|scripts/test-slot-process.py) continue ;;
+            esac
+            python "$suite"
+          done
+          DSH_TEST_NODE="$RUNNER_TEMP/extracted/DSH-TM.app/Contents/Resources/runtime/node/bin/node" \
+            python scripts/test-slot-process.py
+          python scripts/test-macos-app.py --app "$RUNNER_TEMP/extracted/DSH-TM.app"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-${{ matrix.arch }}-unsigned
+          path: ${{ runner.temp }}/artifacts/
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+
+  windows-portable:
+    name: Verify and build Windows portable package
+    if: >-
+      github.repository == 'arnen7000/dsh-tm' &&
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/codex/macos-support' || github.ref == 'refs/heads/main')
+    uses: ./.github/workflows/windows-release.yml
+    with:
+      version: '0.1.11'
+
+  publish-github:
+    name: Publish tested GitHub release packages
+    needs: [package, windows-portable]
+    if: >-
+      github.repository == 'arnen7000/dsh-tm' &&
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      startsWith(github.event.head_commit.message, 'chore(release): publish GitHub v0.1.11')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: dsh-tm-release-v0.1.11
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: macos-*-unsigned
+          merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-portable
+      - name: Verify and publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="v${RELEASE_VERSION}"
+          packages=("dsh-tm-$RELEASE_VERSION-portable.zip"
+                    "DSH-TM-$RELEASE_VERSION-macos-arm64-unsigned.zip"
+                    "DSH-TM-$RELEASE_VERSION-macos-x64-unsigned.zip")
+          assets=()
+          for zip in "${packages[@]}"; do
+            sha256sum --check --strict "$zip.sha256"
+            assets+=("$zip" "$zip.sha256")
+          done
+          if gh api "repos/$GH_REPO/git/ref/tags/$tag" --silent 2>/dev/null; then
+            tagged_commit=$(gh api "repos/$GH_REPO/commits/$tag" --jq '.sha')
+            [[ "$tagged_commit" == "$GITHUB_SHA" ]] || {
+              echo "Tag $tag already points to a different commit."
+              exit 1
+            }
+          fi
+
+          cat > release-notes.md <<'EOF'
+          DSH 管理器（DSH-TM）首个同时支持 Windows 和 macOS 的正式 GitHub 版本。
+          两个平台共用六槽管理、配置体检和 CLI。此版本修复了 macOS 设置窗吸附和滚动、
+          卸载完成后进度窗卡住，以及浏览器认证入口的提示。
+
+          - Windows x64 下载 `dsh-tm-0.1.11-portable.zip`。
+          - Apple Silicon 下载 `DSH-TM-0.1.11-macos-arm64-unsigned.zip`。
+          - Intel Mac 下载 `DSH-TM-0.1.11-macos-x64-unsigned.zip`。
+
+          Mac 包使用临时签名，尚未取得 Developer ID 签名或 Apple 公证。macOS 可能拦截首次启动。最低部署目标为 macOS 13.5，双架构完整生命周期在 macOS 15 实测。
+
+          [Mac 安装与首次启动说明](https://github.com/arnen7000/dsh-tm/blob/v0.1.11/docs/macos.md) ·
+          [交付范围、决策和验收记录](https://github.com/arnen7000/dsh-tm/blob/v0.1.11/docs/release-v0.1.11.md)
+
+          ## SHA-256
+          EOF
+          for zip in "${packages[@]}"; do
+            printf '\n- `%s` `%s`\n' "$zip" "$(cut -d ' ' -f 1 "$zip.sha256")" >> release-notes.md
+          done
+          printf '\n[同一提交的三平台构建和测试](%s/%s/actions/runs/%s)\n' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> release-notes.md
+
+          if draft_target=$(gh release view "$tag" --json isDraft,isPrerelease,targetCommitish \
+            --jq 'select(.isDraft and (.isPrerelease | not)) | .targetCommitish' 2>/dev/null); then
+            [[ "$draft_target" == "$GITHUB_SHA" ]] || {
+              echo "Release $tag already exists. Inspect it before retrying."
+              exit 1
+            }
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
+              --notes-file release-notes.md --draft "${assets[@]}"
+          fi
+          gh release edit "$tag" --draft=false --latest
+
+  check-signing-environment:
+    name: Check human approval for macOS signing
+    if: >-
+      github.repository == 'arnen7000/dsh-tm' &&
+      github.event_name == 'push' && github.ref == 'refs/heads/codex/macos-support' &&
+      startsWith(github.event.head_commit.message, 'chore(release): request macOS signing')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - name: Require an existing environment with a reviewer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! policy=$(gh api "repos/$GITHUB_REPOSITORY/environments/macos-signing"); then
+            echo '::error::Cannot read the macos-signing environment. Check Settings → Environments in this repository.'
+            exit 1
+          fi
+          if ! jq -e 'any(.protection_rules[]?; .type == "required_reviewers" and ((.reviewers // []) | length > 0))' \
+            <<< "$policy" >/dev/null; then
+            echo '::error::Add at least one required reviewer to macos-signing before running the signing jobs.'
+            exit 1
+          fi
+
+  sign:
+    name: Sign and notarize macOS (${{ matrix.arch }})
+    needs: [package, windows-portable, check-signing-environment]
+    environment: macos-signing
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    env:
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macos-${{ matrix.arch }}-unsigned
+          path: ${{ runner.temp }}/unsigned
+      - name: Verify and extract the same-run build
+        run: |
+          zip="DSH-TM-$(cat VERSION)-macos-$ARCH-unsigned.zip"
+          (cd "$RUNNER_TEMP/unsigned" && shasum -a 256 -c "$zip.sha256")
+          ditto -x -k "$RUNNER_TEMP/unsigned/$zip" "$RUNNER_TEMP/build"
+          codesign --verify --deep --strict "$RUNNER_TEMP/build/DSH-TM.app"
+      - name: Sign, submit to Apple, and staple
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: bash scripts/sign-macos.sh "$RUNNER_TEMP/build/DSH-TM.app" "$ARCH"
+      - name: Verify the signed, notarized ZIP
+        run: |
+          zip="DSH-TM-$(cat VERSION)-macos-$ARCH.zip"
+          /usr/bin/python3 scripts/package-macos.py --app "$RUNNER_TEMP/build/DSH-TM.app" \
+            --arch "$ARCH" --signed --output "$RUNNER_TEMP/artifacts/$zip"
+          (cd "$RUNNER_TEMP/artifacts" && shasum -a 256 -c "$zip.sha256")
+          ditto -x -k "$RUNNER_TEMP/artifacts/$zip" "$RUNNER_TEMP/extracted"
+          /usr/bin/python3 scripts/test-macos-app.py --app "$RUNNER_TEMP/extracted/DSH-TM.app"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-${{ matrix.arch }}-signed
+          path: ${{ runner.temp }}/artifacts/
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+
+  publish:
+    name: Publish the verified cross-platform release
+    needs: [sign, windows-portable]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: dsh-tm-release-v0.1.11
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: macos-*-signed
+          merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-portable
+      - name: Check the merged source and publish the tested ZIPs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          candidate_tree=$(gh api "repos/$GH_REPO/git/commits/$GITHUB_SHA" --jq '.tree.sha')
+          main_tree=$(gh api "repos/$GH_REPO/commits/main" --jq '.commit.tree.sha')
+          if [[ -z "$candidate_tree" || "$main_tree" != "$candidate_tree" ]]; then
+            echo 'The signed source must match main before publishing. Merge the reviewed PR and rerun this job.'
+            exit 1
+          fi
+
+          tag="v$RELEASE_VERSION"
+          if gh api "repos/$GH_REPO/git/ref/tags/$tag" --silent 2>/dev/null; then
+            tagged_commit=$(gh api "repos/$GH_REPO/commits/$tag" --jq '.sha')
+            [[ "$tagged_commit" == "$GITHUB_SHA" ]] || {
+              echo "Tag $tag already points to a different commit."
+              exit 1
+            }
+          fi
+          packages=("dsh-tm-$RELEASE_VERSION-portable.zip"
+                    "DSH-TM-$RELEASE_VERSION-macos-arm64.zip"
+                    "DSH-TM-$RELEASE_VERSION-macos-x64.zip")
+          assets=()
+          for zip in "${packages[@]}"; do
+            sha256sum --check "$zip.sha256"
+            assets+=("$zip" "$zip.sha256")
+          done
+
+          cat > release-notes.md <<'EOF'
+          首个同时支持 Windows 和 macOS 的正式版本。两平台共用六槽管理、设置、体检和 CLI。
+
+          - Windows 10 / 11 x64 下载 `dsh-tm-0.1.11-portable.zip`。
+          - Apple Silicon 下载 `DSH-TM-0.1.11-macos-arm64.zip`。
+          - Intel Mac 下载 `DSH-TM-0.1.11-macos-x64.zip`。
+
+          macOS 的最低部署目标是 13.5。Apple Silicon 和 Intel 均在 macOS 15 通过安装、认证访问和停机测试。两个 App 已使用 Developer ID 签名，并经 Apple 公证和票据装订。
+
+          ## SHA-256
+          EOF
+          for zip in "${packages[@]}"; do
+            printf '\n- `%s` `%s`\n' "$zip" "$(cut -d ' ' -f 1 "$zip.sha256")" >> release-notes.md
+          done
+          printf '\n[测试、签名与公证记录](%s/%s/actions/runs/%s)\n' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> release-notes.md
+
+          if draft_target=$(gh release view "$tag" --json isDraft,targetCommitish \
+            --jq 'select(.isDraft) | .targetCommitish' 2>/dev/null); then
+            [[ "$draft_target" == "$GITHUB_SHA" ]] || {
+              echo "Release $tag already exists. Inspect it before retrying."
+              exit 1
+            }
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
+              --notes-file release-notes.md --draft "${assets[@]}"
+          fi
+          gh release edit "$tag" --draft=false --latest

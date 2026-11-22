@@ -260,7 +260,7 @@ chk("C3v 换版本功能已移除（按钮/对话框/取消按钮/脚本）",
     and not os.path.isfile(os.path.join(os.path.dirname(HERE),
                                         "scripts", "switch-version.ps1")))
 chk("C3w 卸载前走 dsh_kill 门控（不裸 taskkill）",
-    "dsh_kill.kill_version(key, SIG[key], port, tracked_pid=tracked)" in src)
+    "SLOT_PROCESS.stop_slot(cfg.get(\"bin_js\"), port, tracked)" in src)
 chk("C3x 卸载确认默认「否」",
     re.search(r'确认卸载.*?default="no"', src, re.S) is not None)
 chk("C3y 长操作期间冻结按钮（走通用的 _actions_enabled）",
@@ -391,7 +391,7 @@ chk("C4b kill_one 调用了复查", "_report_port_after_kill(key, port," in src,
 chk("C4c 复查用 format_port_owners（能区分是否 dsh）",
     "dsh_kill.format_port_owners(port)" in src)
 chk("C4d 区分自家 dsh 与非 dsh 残留",
-    'dsh_left' in src and 'other_left' in src)
+    'owned_pid = _dsh_pid_on_port(key)' in src)
 chk("C4e 非 dsh 占用时弹框告知", "端口被其它程序占用" in src)
 chk("C4f 自家 dsh 残留时提示再点一次", "停止未完全成功" in src)
 chk("C4g 明确说明不代杀别人的程序",
@@ -400,7 +400,7 @@ chk("C4h 端口空闲时只写日志不打扰", "已释放" in src)
 # 停不掉就静默返回是最糟的：必须能弹框。确认 kill_one 里不再只有一行 kill_version
 m = re.search(r"def kill_one.*?(?=\ndef )", src, re.S)
 chk("C4i kill_one 不再只有一行裸调用",
-    bool(m) and "killed = dsh_kill.kill_version" in m.group(0),
+    bool(m) and "count = SLOT_PROCESS.stop_slot" in m.group(0),
     "应接住返回值并复查端口")
 
 print("== C5 卡片标题不再重复浏览器名 ==")
@@ -420,9 +420,10 @@ chk("C3i 启动时**不**自动扫描（只在用户点按钮时扫）",
     # 自动扫描 + 「以后不再提示」名单是一整套，去掉扫描就没有名单存在的理由。
     re.search(r"root\.after\(\s*1500\s*,\s*scan_and_offer_adopt", src) is None
     and "def scan_and_offer_adopt():" in src)
-# tkinter 不是线程安全的：后台进度必须 root.after 切回主线程
-chk("C3j 后台进度用 root.after 切主线程",
-    "root.after(0, lambda: self.lbl.configure" in src)
+chk("C3j 后台进度和完成通知都进入主线程队列",
+    "_post_ui(lambda: self.lbl.configure" in src
+    and "_post_ui(self._finish, ok, payload, error)" in src
+    and "root.after(25, _drain_ui_queue)" in src)
 chk("C3k 长任务走线程而非 UI 线程", "run_in_thread" in src)
 # 纳入管理必须默认「否」——它会复制几百 MB 并改配置
 m = re.search(r"askyesno\(\s*\"发现已安装的 dsh\"", src)
@@ -917,9 +918,11 @@ chk("C3z10d 183 = ERROR_ALREADY_EXISTS，注释写清（后来人别改回去）
     "ERROR_ALREADY_EXISTS" in src and "use_last_error" in src.split("ERROR_ALREADY_EXISTS")[0][-400:])
 # 注意：dsh_kill 的**注释里**会提到 ctypes.GetLastError()（解释为什么不这么写），
 # 所以只能断言"不再通过 windll.kernel32 句柄调 API"这个行为特征。
-chk("C3z10e dsh_kill 的 last-error 同样走 use_last_error（诊断文本别报错数）",
-    'ctypes.WinDLL("kernel32", use_last_error=True)' in _ks
-    and "ctypes.windll.kernel32" not in _ks)
+_proc_src = io.open(
+    os.path.join(os.path.dirname(HERE), "dsh_slot_process.py"), encoding="utf-8").read()
+chk("C3z10e 进程终止使用 Windows 句柄",
+    "OpenProcess" in _proc_src and "TerminateProcess" in _proc_src
+    and "bool(api.TerminateProcess(handle, 1))" in _proc_src)
 
 # ── 浏览器可选（2026-10-31）—— 默认系统默认浏览器，每槽可改 ──────────
 print("== C3z11 每个槽用哪个浏览器（默认=系统默认）==")
@@ -1273,8 +1276,21 @@ chk("C3z20f 批量安装收尾不引用未定义的 payload（曾导致装完不
 chk("C3z20h 原地刷新重建探测缓存与状态记忆（否则新槽永远「检测中…」）",
     "_DETECT.clear()" in _rl and "_prev_state.clear()" in _rl
     and "_old_detect.get(_k)" in _rl)
-chk("C3z20i 探测线程对缺失槽键用 setdefault（防 KeyError 被吞）",
-    "_DETECT.setdefault(key" in _fn_body("_detect_worker"))
+chk("C3z20i 探测线程刷新新槽，接收时核对配置和探测时间",
+    "_refresh_detect_cache(key)" in _fn_body("_detect_worker")
+    and "VC.get(key) is not cfg" in _fn_body("_apply_detect_payload"))
+
+_old_cfg = {"port": 4080}
+_current_cfg = {"port": 5080}
+_probe, _ = harvest(["_apply_detect_payload"], ns_extra={
+    "VC": {"v1": _current_cfg}, "_DETECT": {},
+})
+_apply_payload = _probe["_apply_detect_payload"]
+_apply_payload("v1", _current_cfg, 10.0, "conflict", {})
+_apply_payload("v1", _old_cfg, 11.0, "idle", {})
+_apply_payload("v1", _current_cfg, 9.0, "idle", {})
+chk("C3z20j 旧配置或较早探测不能覆盖新槽状态",
+    _probe["_DETECT"]["v1"]["ownership"] == "conflict")
 
 # ── C3z21：移出后再「扫描并纳入」必须原样接回，不能复制成 -2 ─────────────
 # 2026-11-12 实测：移出 v3 后点「扫描并纳入」，走了复制路径 → 736 MB 拷到
@@ -1307,7 +1323,7 @@ chk("C3z29c 函数名不再叫 _set_busy（名字会让人把方向写反）",
     "_set_busy(" not in src)
 chk("C3z29d 全部停止在后台线程跑（4 个槽枚举进程会让界面卡住）",
     "threading.Thread(target=work" in _sa_body
-    and "root.after(0, done)" in _sa_body
+    and "_post_ui(done)" in _sa_body
     and "kill_one(k, report=False)" in _sa_body)
 # ── C3z30：进度窗不能有能点的「关闭」（2026-11-14 用户要求）──────────────
 # 注意：`_fn_body` 只认顶层 `def name(`，`class X.method` 形式匹配不到
@@ -1433,7 +1449,17 @@ chk("C3z34b 卡片状态行是 textvariable，靠重建卡片换语言",
 chk("C3z34i 切语言时零槽引导卡也要重画（_build_cards 零槽会直接 return）",
     "_build_fresh_guide()" in _pl_code)
 chk("C3z34c 窗口标题不是控件 text，单独设一次",
-    'root, "DSH 版本管理器"' in _pl_code and 'win, "设置"' in _pl_code)
+    'root, "DSH 管理器"' in _pl_code and 'win, "设置"' in _pl_code)
+chk("C3z34j 初次启动的窗口标题和品牌",
+    'root.title(T("DSH 管理器"))' in src and 'ttk.Label(_hdr, text="DSH-TM"' in src)
+_panel = src[src.index("def _make_side_panel("):src.index("def _dock_animate(")]
+_scroll = src[src.index("def _scroll_host("):src.index("_SETTINGS_WIN =")]
+chk("C3z34k Mac 设置窗不进入 Windows 吸附动画",
+    "if PLATFORM.IS_MAC:" in _panel.split('win.bind("<Configure>"')[0])
+chk("C3z34l 设置滚动条先分配宽度，Mac 小幅滚动有效",
+    _scroll.index('sb.pack(') < _scroll.index('canvas.pack(')
+    and 'steps = -evt.delta' in _scroll and 'win.bind("<MouseWheel>"' in _scroll
+    and 'win.bind("<TouchpadScroll>"' in _scroll and 'tk::PreciseScrollDeltas' in _scroll)
 chk("C3z34d 翻译层提供 retranslate / to_key（反查原始中文 key）",
     "def retranslate(" in src_i18n and "def to_key(" in src_i18n)
 chk("C3z34e 自定义按钮函数内部翻译（文案以位置参数传入，白名单抓不到）",
@@ -1497,7 +1523,8 @@ chk("C3z31d CLI 的 --version 与界面同源",
 
 chk("C3z29e 杀完进程立刻刷新探测缓存（否则日志里「已停止」紧跟「运行中(外部)」）",
     "_refresh_detect_cache(key)" in _fn_body("kill_one")
-    and "_DETECT[key] = {" in _fn_body("_refresh_detect_cache"))
+    and "_apply_detect_payload(" in _fn_body("_refresh_detect_cache")
+    and "_DETECT[key] = {" in _fn_body("_apply_detect_payload"))
 
 
 # ── C3z26：纳入对话框的尺寸按内容算（2026-11-14「这个界面不太合理」）────────
@@ -1552,7 +1579,7 @@ chk("C3z22a 日志 GUI 输出切回主线程",
 chk("C3z22b 进度回调先写日志、再更新标签",
     'log("[%s] %s" % (self.title, text))' in src
     and src.index('log("[%s] %s" % (self.title, text))')
-    < src.index('root.after(0, lambda: self.lbl.configure'))
+    < src.index('_post_ui(lambda: self.lbl.configure'))
 chk("C3z22c 探测数据未到时也显示端口（不再写「检测中…」）",
     'status_vars[key].set("检测中…"' not in src
     and 'T("已停止  :%d") % cfg["port"]' in _fn_body("_refresh_one"))
@@ -1565,7 +1592,49 @@ chk("C3z22d 单槽刷新有异常隔离（一个槽坏了不影响其它槽显�
 chk("C3z22e 日志扫描偏移随软刷新重建（新槽不会 KeyError）",
     "_scan_pos.update({k: _old_scan.get(k) for k in SLOT_KEYS})"
     in _fn_body("_reload_config_after_change")
-    and "_scan_pos.get(key) is None" in _fn_body("_scan_slot"))
+    and "procs.get(key)" in _fn_body("_scan_slot"))
+
+def check_slot_status(ownership, owners, age, exit_code=None):
+    from types import SimpleNamespace
+
+    rendered = []
+    proc = SimpleNamespace(pid=900, child_pid=901, poll=lambda: exit_code,
+                           child=SimpleNamespace(pid=901, birth="original"),
+                           wait=lambda **kwargs: exit_code,
+                           launched_at=time.monotonic() - age,
+                           start_confirmed=False)
+    cfg = {"port": 4080, "bin_js": "slot/bin.js"}
+    ns, _ = harvest(["proc_alive", "_refresh_one"], ns_extra={
+        "VC": {"v1": cfg}, "INSTALLED": {"v1": ""}, "procs": {"v1": proc},
+        "auth_urls": {"v1": ""}, "_DETECT": {"v1": {
+            "listen": ownership != "idle", "ext": next(iter(owners), None),
+            "ownership": ownership, "ts": time.monotonic(),
+            "owners": {pid: SimpleNamespace(birth=birth) for pid, birth in owners.items()}}},
+        "_prev_state": {}, "_scan_slot": lambda *a: None,
+        "_installed_version": lambda *a: "", "_health_mark": lambda *a: "",
+        "_log_state_change": lambda *a: None, "_STATUS_COLORS": {}, "_MUTED": "",
+        "status_vars": {"v1": SimpleNamespace(set=rendered.append)}, "status_lbls": {},
+        "SLOT_PROCESS": SimpleNamespace(START_TIMEOUT=20),
+    })
+    ns["_refresh_one"]("v1")
+    return ns["_prev_state"].get("v1"), ns["procs"]["v1"], rendered
+
+_status_foreign, _ignored, _render_foreign = check_slot_status("conflict", {}, 1)
+chk("C3z22f 跟踪的进程尚未监听时，外来监听显示端口占用",
+    _status_foreign == "external_conflict", str(_render_foreign))
+_status_timed_out, _pending_timed_out, _render_timed_out = check_slot_status("idle", {}, 21)
+chk("C3z22g 启动超时有明确状态，并允许冷启动继续初始化",
+    _status_timed_out == "start_timed_out" and _pending_timed_out is not None,
+    str(_render_timed_out))
+_status_owned, _ignored, _render_owned = check_slot_status("owned", {901: "original"}, 1)
+chk("C3z22h 端口核实属于跟踪的子进程后显示运行中",
+    _status_owned == "running_tracked" and "901" in _render_owned[0], str(_render_owned))
+_status_reused, _ignored, _render_reused = check_slot_status("owned", {901: "new"}, 1)
+chk("C3z22i PID 已复用时不把外部进程认成本窗口启动的进程",
+    _status_reused == "running_external", str(_render_reused))
+_status_exited, _stopped_exited, _render_exited = check_slot_status("idle", {}, 1, exit_code=1)
+chk("C3z22j 监听前进程退出立即显示失败",
+    _status_exited == "start_failed" and _stopped_exited is None, str(_render_exited))
 
 
 # ── C3z23：槽编号与目录一一对应（2026-11-13「为什么会有 dshV3-2」）──────────
@@ -1641,8 +1710,9 @@ chk("C3z25a 有版本在运行时拒绝移动（文件被占用会拷坏）",
     "有版本正在运行" in _mv and "port_open(" in _mv and "proc_alive(" in _mv)
 chk("C3z25b 确认框显示「需要多少 / 可用多少」",
     "need_bytes" in _mv and "free_bytes" in _mv)
-chk("C3z25c 移动完成后重写三件 bat（bat 里是绝对路径）",
-    "_rebuild_bats()" in _fn_body("_do_move_root"))
+chk("C3z25c 搬迁事务处理启动脚本，管理器完成后不重建其他槽",
+    "MV.move_now(" in _fn_body("_do_move_root")
+    and "_rebuild_bats(" not in _fn_body("_do_move_root"))
 chk("C3z25d 提示不再说「要换位置请先卸载全部版本」",
     "要换位置请先卸载全部版本" not in src)
 
@@ -1655,9 +1725,9 @@ chk("C3z28a _rebuild_bats 支持 keys / only_missing，默认仍是全槽重写"
     "def _rebuild_bats(keys=None, only_missing=False)" in src
     and "keys if keys is not None else SLOT_KEYS" in _rb
     and "= _rebuild_bats()" in src)
-chk("C3z28b 手动生成、改临时目录、移动安装位置仍重建全部槽",
+chk("C3z28b 手动生成和应用临时目录设置仍重建全部槽",
     all("= _rebuild_bats()" in _fn_body(name)
-        for name in ("gen_bats", "_apply_dir_settings", "_do_move_root")))
+        for name in ("gen_bats", "_apply_dir_settings")))
 chk("C3z28c only_missing 跳过已存在的 bat（不备份、不覆盖用户手改过的）",
     "if only_missing and os.path.isfile(path)" in _rb
     and "continue" in _rb)
@@ -1669,8 +1739,7 @@ chk("C3z28e 修复成功后在主线程补本槽缺失的 bat",
     and "keys=[key], only_missing=True" in _hd
     and "UNINST.repair_slot(" in _hd)
 chk("C3z28f 确认框列明将补哪几件 bat（不让用户点完才发现多了文件）",
-    '"dsh.bat", "dsh-cli.bat"' in _hd
-    and "kill-%s.bat" in _hd
+    "PLATFORM.slot_launcher_paths(" in _hd
     and "缺失的启动脚本" in _hd)
 chk("C3z28g bat 补全失败时改弹「修复未完成」，绝不弹「已修复」",
     "if bat_failed:" in _hd
@@ -1711,6 +1780,12 @@ def _check_readd_bat_scope():
         payload = {"added": ["v1", "v3"], "port_changed": {"v1": (64180, 64181)}}
         env, _ = harvest(names, ["_BAT_UNSAFE_CHARS"], {
             "VC": cfg, "SLOT_KEYS": list(cfg), "BASE_DIR": scratch, "HOME": scratch,
+            "PLATFORM": SimpleNamespace(
+                IS_MAC=False, slot_launcher_paths=lambda root, port: {
+                    kind: os.path.join(root, file) for kind, file in (
+                        ("start", "dsh.bat"), ("cli", "dsh-cli.bat"),
+                        ("stop", "kill-%s.bat" % port))}),
+
             "CONFIG_PATH": os.path.join(scratch, "config.json"), "MAX_SLOTS": 6, "shutil": shutil,
             "log": ignore, "_actions_enabled": ignore, "_restart_or_tell": ignore,
             "_versions_root": lambda: scratch, "_taken_ports": lambda: [64180],
@@ -1732,6 +1807,108 @@ def _check_readd_bat_scope():
 
 
 _check_readd_bat_scope()
+
+
+def _check_gui_platform_parity():
+    from types import SimpleNamespace
+
+    opened, copied, logs = [], [], []
+    live = {"owned": set(), "listening": {42}, "auth_required": False}
+    auth = {"v1": None}
+    proc = {"v1": None}
+    birth = {"value": "original"}
+    env, _ = harvest(["_slot_browser_url", "open_browser", "copy_url",
+                      "_system_is_dark", "_browser_filetypes", "stop_all_slots", "start_all_slots"], ns_extra={
+        "VC": {"v1": {"port": 4080, "browser": "default", "bin_js": "/slot/bin.js"}},
+        "SLOT_KEYS": ["v1"],
+        "PLATFORM": SimpleNamespace(IS_MAC=True),
+        "SLOT_PROCESS": SimpleNamespace(
+            slot_listeners=lambda *_: (live["owned"], live["listening"]),
+            process_info=lambda _: SimpleNamespace(birth=birth["value"])),
+        "auth_urls": auth, "procs": proc, "proc_alive": bool,
+        "_resolve_browser": lambda _: ("start", ""), "_platform_open": opened.append,
+        "_slot_needs_authentication": lambda _: live["auth_required"],
+        "port_open": lambda _: bool(live["listening"]), "log": logs.append,
+        "_dsh_pid_on_port": lambda _: next(iter(live["owned"]), None),
+        "root": SimpleNamespace(clipboard_clear=lambda: None, clipboard_append=copied.append,
+                                update_idletasks=lambda: None),
+        "subprocess": SimpleNamespace(run=lambda *a, **kw: SimpleNamespace(returncode=0, stdout="Dark\n")),
+        "messagebox": SimpleNamespace(showinfo=lambda *args, **kw: logs.append(args[-1]),
+                                    showwarning=lambda *args, **kw: logs.append(args[-1]),
+                                    askyesno=lambda *_: False),
+        "refresh": lambda **_: None,
+    })
+    env["open_browser"]("v1")
+    env["copy_url"]("v1")
+    chk("P1 端口只有外部监听者时，浏览器和剪贴板都不用这个地址",
+        not opened and not copied)
+    env["VC"]["v1"]["label"] = "dshV1"
+    env["stop_all_slots"]()
+    chk("P2 全部停止不会把只被外来监听者占端口的槽算作正在运行", "没有任何槽在运行" in logs[-1])
+
+    live["owned"] = {42}
+    env["open_browser"]("v1")
+    env["copy_url"]("v1")
+    bare = "http://127.0.0.1:4080"
+    chk("P3 属于本槽但由外部启动时，浏览器和剪贴板均提供裸地址",
+        opened == [bare] and copied == [bare])
+    live["auth_required"] = True
+    env["open_browser"]("v1")
+    env["copy_url"]("v1")
+    chk("P3b 保留运行的实例要求认证时，显示恢复方法，不打开或复制未认证地址",
+        opened == [bare] and copied == [bare] and "认证" in logs[-1])
+
+    url = bare + "/?token=abcdefgh1234"
+    proc["v1"] = SimpleNamespace(child_pid=42, child=SimpleNamespace(birth="original"), url=url)
+    env["open_browser"]("v1")
+    env["copy_url"]("v1")
+    chk("P4 本窗口启动且监听 PID 一致时，两种入口动作均保留完整认证地址",
+        opened[-1] == url and copied[-1] == url)
+    live["auth_required"] = False
+    live["owned"] = {43}
+    live["listening"] = {43}
+    env["open_browser"]("v1")
+    env["copy_url"]("v1")
+    chk("P5 同一槽在外部重启后不会沿用上一个进程的认证地址",
+        opened[-1] == bare and copied[-1] == bare)
+    live["owned"] = {42}
+    live["listening"] = {42}
+    birth["value"] = "reused"
+    env["open_browser"]("v1")
+    env["copy_url"]("v1")
+    chk("P5b 监听进程复用了 PID 时不提供前一进程的认证地址",
+        opened[-1] == bare and copied[-1] == bare)
+
+    def fail_launch(_key):
+        raise FileNotFoundError("node is missing")
+
+    proc["v1"] = None
+    env["_spawn_slot_silent"] = fail_launch
+    env["SLOT_PROCESS"].slot_state = lambda *_: "stopped"
+    env["start_all_slots"]()
+    chk("P5c Node 缺失时只说明启动失败",
+        "node is missing" in logs[-1] and "手动处理或改端口" not in logs[-1])
+    env["SLOT_PROCESS"].slot_state = lambda *_: "conflict"
+    env["start_all_slots"]()
+    chk("P5d 端口确实被占用时保留端口处理提示", "手动处理或改端口" in logs[-1])
+
+    chk("P6 macOS 系统外观可识别深色模式", env["_system_is_dark"]())
+    filetypes = env.get("_browser_filetypes")
+    chk("P7 macOS 自定义浏览器优先筛选 app 包",
+        filetypes is not None and filetypes()[0][1] == "*.app")
+    if filetypes:
+        env["PLATFORM"].IS_MAC = False
+        chk("P8 Windows 自定义浏览器保留 exe 筛选", filetypes()[0][1] == "*.exe")
+
+_check_gui_platform_parity()
+
+_dock_env, _ = harvest(["_mac_dock_x"])
+_dock_x = _dock_env["_mac_dock_x"]
+chk("P9 在右侧外接屏上跟随主窗口",
+    _dock_x(2000, 840, 380, 1728, 3648) == 2840
+    and _dock_x(2500, 840, 380, 1728, 3648) == 2120)
+chk("P10 在原点左侧的显示器上保留负坐标",
+    _dock_x(-1800, 840, 380, -1920, 0) == -960)
 
 
 print()

@@ -1,19 +1,9 @@
-# dsh_kill.py — 安全、可监控的 dsh 双版本进程清理内核（配置驱动版）
-#
-# 由 DSHweblink/dsh_kill.py 泛化而来：本文件【不写死任何路径/端口/版本号】，
-# 签名判定由调用方（dsh_manager.pyw）根据 config.json 动态构造后注入。
-#
-# 设计原则（用户硬约束）：
-#   1. 精准杀：只杀「签名白名单」命中的 dsh 进程，绝不影响另一个 dsh 版本、
-#      也绝不误杀其他 app 的 node 进程。
-#   2. 可监控：杀之前先记录 PID / 端口 / 命令行，给人看清楚杀的是谁。
-#   3. 多级回退：taskkill /F → taskkill /T /F → TerminateProcess(原生 API)，
-#      杜绝 taskkill /T 偶发 rc=255 静默失败。
-#   4. 拒绝误杀守卫：端口占用者若命令行不匹配该版本签名，一律拒绝并告警。
-#
-# 本模块不依赖 GUI、不触碰任何文件，可被 dsh_manager.pyw 与测试脚本共同 import。
+"""Guarded slot stop command, port diagnostics, and subprocess output decoding."""
 
-import subprocess, time, ctypes, csv, io, sys, os
+import argparse
+import json
+import subprocess, time, csv, io, sys, os
+import dsh_slot_process as SLOT
 from dsh_i18n import T
 
 CREATE_NO_WINDOW = 0x08000000
@@ -49,7 +39,7 @@ def run_capture(cmd, timeout=None, stdin_devnull=False, shell=False):
     在解码失败时被静默置成 None。"""
     r = subprocess.run(cmd, capture_output=True,
                        stdin=subprocess.DEVNULL if stdin_devnull else None,
-                       creationflags=CREATE_NO_WINDOW,
+                       creationflags=CREATE_NO_WINDOW if SLOT.WINDOWS else 0,
                        timeout=timeout, shell=shell)
     return r.returncode, decode_out(r.stdout), decode_out(r.stderr)
 
@@ -116,6 +106,10 @@ def _node_map():
     所以降级态下只能配合端口来判定（find_version_pids 本来就以端口为准）。
     这一点由 _node_map_degraded() 显式告知调用方，不让它误以为拿到了全量数据。
     """
+    if not SLOT.WINDOWS:
+        processes = (SLOT.process_info(pid) for pid in _pid_ports())
+        return {p.pid: " ".join(p.argv) for p in processes if p and
+                os.path.basename(p.executable).lower() in ("node", "node.exe")}
     m = _node_map_cim()
     if m:
         _NODE_MAP_DEGRADED["v"] = False
@@ -166,6 +160,8 @@ def _can_read_cmdline():
     拿不到就返回 False。非管理员下 Get-CimInstance 会报「拒绝访问」，
     此时返回 False 是正确的判定。
     """
+    if not SLOT.WINDOWS:
+        return SLOT.process_info(os.getpid()) is not None
     try:
         ps = ('Get-CimInstance Win32_Process -Filter "ProcessId=4"'
               ' -ErrorAction Stop | ForEach-Object { $_.Name }')
@@ -222,84 +218,11 @@ def _node_map_dotnet():
     return m
 
 
+
 def _pid_ports():
-    """返回 {pid: set(ports)}，仅含 LISTENING 的 TCP 端口。
-
-    注意：这里曾经用 subprocess 的 text=True，在本机（PYTHONUTF8=1 + 中文 Windows）
-    恒返回空字典 —— netstat 输出是 CP936，严格 UTF-8 解码失败被吞、stdout 变 None。
-    改用 run_capture 后实测可正常枚举（约 200+ 行）。"""
-    pp = {}
-    try:
-        _rc, out, _err = run_capture(["netstat", "-ano"])
-        for line in out.splitlines():
-            if "LISTENING" not in line:
-                continue
-            parts = line.split()
-            if len(parts) < 5:
-                continue
-            # 行格式:  Proto  Local Address  Foreign ...  State  PID
-            addr = parts[1]            # 127.0.0.1:4080
-            pid = parts[-1]
-            if ":" not in addr:
-                continue
-            port = addr.rsplit(":", 1)[-1]
-            try:
-                pp.setdefault(int(pid), set()).add(int(port))
-            except ValueError:
-                pass
-    except Exception as e:
-        LOG("[kill] netstat failed: %s" % e)
-    return pp
+    return SLOT.listener_ports()
 
 
-def _pid_alive(pid):
-    """精确判断 PID 是否存活（按 tasklist CSV 的 PID 列比对）。
-
-    旧写法是 `str(pid) in out` 的子串匹配。**实测结论：在这个调用形态下它不会
-    假阳性** —— `tasklist /FI "PID eq N"` 的过滤本身是精确的，查不存在的 pid
-    返回中文 INFO 行「信息: 没有运行的任务匹配指定标准。」，里面不含任何数字
-    （本机验证：查 1496（真实 pid 14960 的前缀）返回 False）。
-    这里仍改成按列精确比较，理由有二：
-      1. 与 dsh_manager._pid_alive 保持一致（两处语义不同是维护陷阱）；
-      2. 不再依赖"tasklist 的输出里恰好不会出现该数字串"这一隐含前提，
-         将来若有人去掉 /FI 过滤或改用别的命令，子串匹配会立刻变成 bug。"""
-    try:
-        rc, out, _err = run_capture(["tasklist", "/FI", "PID eq %d" % pid, "/FO", "CSV", "/NH"])
-    except Exception:
-        return False
-    if rc != 0:
-        return False
-    want = str(pid)
-    try:
-        rows = list(csv.reader(io.StringIO(out)))
-    except Exception:
-        return False
-    return any(len(row) > 1 and row[1].strip() == want for row in rows)
-
-
-def _terminate_api(pid):
-    """原生 TerminateProcess，绕过 taskkill（处理 rc=255 等异常）。
-
-    last-error 必须用 use_last_error=True 的句柄 + ctypes.get_last_error()：
-    ctypes.windll 的句柄不捕获 last-error，`ctypes.GetLastError()` 读的是线程的
-    「上一次错误」，可能来自更早的任意一次 Win32 调用 —— 报出来的 lastErr 数字
-    会指向完全无关的原因（2026-10-31 与 dsh_manager 的单实例互斥一起发现）。
-    这里 lastErr 只用于诊断文本、不影响控制流，但错的诊断比没有更误导。
-    """
-    try:
-        k = ctypes.WinDLL("kernel32", use_last_error=True)
-        h = k.OpenProcess(0x0001, False, pid)   # PROCESS_TERMINATE
-        if not h:
-            return False, "OpenProcess null (lastErr=%d)" % ctypes.get_last_error()
-        ok = k.TerminateProcess(h, 0)
-        err = ctypes.get_last_error()
-        k.CloseHandle(h)
-        return bool(ok), ("ok" if ok else "lastErr=%d" % err)
-    except Exception as e:
-        return False, str(e)
-
-
-# ─── 识别目标 ──────────────────────────────────────────────────────────────
 def _looks_like_dsh(cmd):
     """宽松判定：node 进程且命令行含 @deepseek-ai/dsh 即视为 dsh。
 
@@ -312,157 +235,29 @@ def _looks_like_dsh(cmd):
 
 
 def _is_node_exe(pid):
-    """针对性查询某 pid 的 ExecutablePath，判定是否为 node 进程。
-
-    用途：Get-CimInstance 偶发拿不到 commandline（cmd 为空）时，dsh 进程因此被
-    _looks_like_dsh 误判为「非 dsh」，导致端口权威命中却被拒绝收编、把自己锁死。
-    此时退一步用 ExecutablePath 确认进程映像是不是 node.exe：是 node + 命中 dsh
-    保留端口 -> 仍按 dsh 收编；非 node（真·外来进程占了保留端口）-> 仍拒绝，安全网保留。"""
-    try:
-        ps = ('Get-CimInstance Win32_Process -Filter "ProcessId=%d"'
-              ' | ForEach-Object { $_.ExecutablePath }' % int(pid))
-        _rc, out, _err = run_capture(["powershell", "-NoProfile", "-Command", ps])
-        return "node" in norm_path(out)
-    except Exception:
-        return False
+    process = SLOT.process_info(pid)
+    return bool(process and os.path.basename(process.executable).lower() in ("node", "node.exe"))
 
 
-def find_version_pids(sig, port):
-    """返回该版本应当清理的 dsh PID 集合。
-
-    端口权威：本槽端口（4080/5080/7080 之一）是 dsh 的保留端口，凡是 LISTENING
-    在该端口上的 dsh 进程一律收编——无论它是管理器绝对路径拉起、还是用户用 dsh.bat
-    相对路径拉起、还是 npm 间接启动（命令行都含 @deepseek-ai/dsh）。这修复了
-    「相对路径启动的 dsh 因签名失配而被判成非 dsh、单杀/全杀都清不掉」的问题。
-
-    安全网：端口占用者若既非 node 也非 @deepseek-ai/dsh（真·外来进程占了保留端口，
-    属异常），只告警、不杀，避免误伤别的软件。"""
-    m = _node_map()
-    pp = _pid_ports()
-    res = set()
-    for pid, ports in pp.items():
-        if port not in ports:
-            continue
-        cmd = m.get(pid, "")
-        if _looks_like_dsh(cmd):
-            res.add(pid)
-            LOG(T("[kill] 端口 %d 命中 dsh 进程 pid=%d cmd=%r") % (port, pid, cmd[:120]))
-        elif _is_node_exe(pid):
-            # 端口权威命中 + 进程确为 node，但 CIM 偶发未返回 commandline。
-            # 降级收编，避免把自己锁死；非 node 进程仍拒绝（安全网保留）。
-            res.add(pid)
-            LOG(T("[kill] 端口 %d 命中 pid=%d 为 node 进程（cmdline 未取到），按端口权威降级收编")
-                % (port, pid))
-        else:
-            LOG(T("[kill] 端口 %d 被非 dsh/非 node 进程占用 pid=%d cmd=%r -> 拒绝误杀（需人工处理）")
-                % (port, pid, cmd[:120]))
-    if res:
-        LOG(T("[kill] 端口=%s 命中 %d 个 dsh 进程: %s") % (port, len(res), sorted(res)))
-    return res
+def find_version_pids(entrypoint, port):
+    """Return exact entrypoint matches at the supplied TCP port."""
+    return SLOT.slot_listeners(entrypoint, port)[0] if isinstance(entrypoint, (str, os.PathLike)) else set()
 
 
-# ─── 单进程监控 + 清理 ─────────────────────────────────────────────────────
-def monitor_and_kill(pid, tag, port=None, sig=None):
-    """清理一个**已过门控**的 PID，并全程记录命令行备查。
-
-    sig 非空时做执行前复核（防误杀的最后一道闸）：候选集是"枚举 → 门控"两步得到
-    的，但枚举与执行之间进程可能已退出、PID 被系统复用给别的软件。不复核就会把
-    复用该 PID 的无关进程杀掉 —— 这是"杀单个版本"最容易伤到别人的路径。
-    查得到 node 进程表（m 非空）且不命中签名，一律拒绝；只有 powershell 枚举
-    整体失败（m 为空）才降级放行，否则一次枚举失败会让整条清理链路全废。"""
-    m = _node_map()
-    cmd = m.get(pid, "")
-    LOG(T("%s 目标 pid=%d 端口=%s 命令行=%r") % (tag, pid, port, cmd[:150]))
-    if sig is not None and m:
-        if not cmd:
-            # CIM 未返回 commandline：针对性查 exe，确为 node 则降级放行，
-            # 否则视为「查不到该 pid（已退出 / PID 已被复用）」拒绝，防误杀。
-            if _is_node_exe(pid):
-                LOG(T("%s pid=%d 查不到 cmdline 但确为 node 进程，降级放行") % (tag, pid))
-            else:
-                LOG(T("%s pid=%d 拒绝：进程表里查不到该 pid（已退出 / PID 已被复用）-> 不杀")
-                    % (tag, pid))
-                return False
-        elif not sig(cmd):
-            # cmd 存在但不匹配签名：若 exe 确为 node 仍降级（CIM 可能返回了残缺 cmdline），
-            # 否则拒绝，防误杀非 dsh 进程。
-            if _is_node_exe(pid):
-                LOG(T("%s pid=%d 命令行不匹配签名但确为 node 进程，降级放行 cmd=%r")
-                    % (tag, pid, cmd[:120]))
-            else:
-                LOG(T("%s pid=%d 拒绝：命令行不匹配签名，不杀（防误杀非 dsh 进程）cmd=%r")
-                    % (tag, pid, cmd[:120]))
-                return False
-    if not _pid_alive(pid):
-        LOG(T("%s pid=%d 已不存在，跳过") % (tag, pid))
-        return True
-
-    # 步骤1：taskkill /F（杀主进程，尽量不波及其他）
-    rc, _out, err = run_capture(["taskkill", "/PID", str(pid), "/F"])
-    LOG("%s taskkill /F rc=%d %r" % (tag, rc, err.strip()))
-    if not _pid_alive(pid):
-        LOG(T("%s pid=%d 步骤1后已死") % (tag, pid))
-        return True
-
-    time.sleep(0.4)
-    # 步骤2：taskkill /T /F（连带子进程）
-    rc, _out, err = run_capture(["taskkill", "/PID", str(pid), "/T", "/F"])
-    LOG("%s taskkill /T rc=%d %r" % (tag, rc, err.strip()))
-    if not _pid_alive(pid):
-        LOG(T("%s pid=%d 步骤2后已死") % (tag, pid))
-        return True
-
-    time.sleep(0.4)
-    # 步骤3：原生 TerminateProcess 兜底
-    ok, msg = _terminate_api(pid)
-    LOG("%s TerminateProcess ok=%s %s" % (tag, ok, msg))
-    time.sleep(0.3)
-    alive = _pid_alive(pid)
-    LOG("%s pid=%d %s" % (tag, pid, T("仍存活!!") if alive else T("已死")))
-    return not alive
-
-
-# ─── 对版本清理 ────────────────────────────────────────────────────────────
-def kill_version(key, sig, port, tracked_pid=None):
-    """清理某版本的 dsh 进程。tracked_pid 为本 app 自己拉起并跟踪的 PID
-    （即便签名校验偶漏也强制纳入，因为是我们自己生的）。"""
-    pids = find_version_pids(sig, port)
-    if tracked_pid is not None:
-        pids.add(int(tracked_pid))
-    if not pids:
-        LOG(T("[%s] 未找到匹配的 dsh 进程，无需清理") % key)
+def kill_version(key, entrypoint, port, tracked_pid=None):
+    """Stop an exact slot. A verified supervisor handle can include a starting child."""
+    if not isinstance(entrypoint, (str, os.PathLike)):
         return 0
-    killed = 0
-    for pid in sorted(pids):
-        if _pid_alive(pid) or pid == tracked_pid:
-            # 用宽松 dsh 判定做执行前复核（防 PID 复用误杀），不再要求绝对路径签名
-            if monitor_and_kill(pid, "[%s]" % key, port, sig=_looks_like_dsh):
-                killed += 1
-    LOG(T("[%s] 已清理 %d/%d") % (key, killed, len(pids)))
+    killed = SLOT.stop_slot(entrypoint, port, tracked=tracked_pid)
+    LOG(T("[%s] 已结束 %d 个槽进程") % (key, killed))
     return killed
 
 
 def kill_all(versions, sig_any=None):
-    """清理所有版本的 dsh。versions: {key: {"sig": sig, "port": port}}。
-
-    端口权威：只清三个 dsh 保留端口（4080/5080/7080）上的 dsh 进程。绝不扫描、也
-    绝不碰其它端口上的 node（包括用户在别的端口上启动的桌面 dsh）——符合「全杀只杀
-    这三个 dsh 版本端口」的约束。sig_any 参数保留仅为向后兼容，不再使用。"""
-    LOG(T("=== KILL ALL（端口权威，只清 dsh 保留端口） ==="))
-    for key, spec in versions.items():
-        kill_version(key, spec["sig"], spec["port"])
-    # 终检：若某保留端口清理后仍有进程监听，告警（已尽力，可能是外来非 dsh 进程）
-    pp = _pid_ports()
-    ports = [spec["port"] for spec in versions.values()]
-    for port in ports:
-        for pid, pid_ports in pp.items():
-            if port in pid_ports:
-                LOG(T("[kill-all] 端口 %d 清理后仍有进程 pid=%d 监听 -> 可能需要人工处理")
-                    % (port, pid))
-    LOG(T("=== KILL ALL 完成 ==="))
+    return sum(kill_version(key, spec.get("entrypoint"), spec["port"])
+               for key, spec in versions.items())
 
 
-# ─── 端口占用者识别（给提示用） ───────────────────────────────────────────────
 def _proc_name(pid):
     """取进程名。返回 '' 表示取不到。
 
@@ -495,174 +290,114 @@ def _proc_name(pid):
     return ""
 
 
-def describe_port(port):
-    """只读：返回端口 LISTENING 占用者的结构化列表。
-    每项 = {pid, name, cmd, kind}，kind ∈
-      'dsh'            node + 命令行含 @deepseek-ai/dsh（确属 dsh）
-      'dsh-ambiguous'  node 进程但 cmdline 取不到（CIM 偶发丢命令行），按端口权威视为自家 dsh
-      'non-dsh-node'   node 进程但命令行不含 dsh（真·外来 node 占了保留端口）
-      'non-dsh-other'  非 node 进程（其它软件占了保留端口）
-    不改动任何进程；调用方据此决定：dsh → 可清，non-dsh → 绝不自动清、只提示。"""
-    nm = _node_map()
-    pp = _pid_ports()
+def describe_port(port, entrypoint=None):
+    """Return a redacted, read-only description of listeners."""
+    owned, listeners = SLOT.slot_listeners(entrypoint, port)
     owners = []
-    for pid, ports in pp.items():
-        if port not in ports:
-            continue
-        cmd = nm.get(pid, "")
-        is_node = bool(cmd) or _is_node_exe(pid)
-        if is_node:
-            if "@deepseek-ai/dsh" in norm_path(cmd):
-                kind = "dsh"
-            elif cmd == "":
-                kind = "dsh-ambiguous"   # node 但命令行未取到，视为自家 dsh
-            else:
-                kind = "non-dsh-node"
+    for pid in sorted(listeners):
+        process = SLOT.process_info(pid)
+        name = os.path.basename(process.executable) if process else ""
+        command = " ".join(process.argv) if process else ""
+        command = SLOT.TOKEN.sub(rb"\1[redacted]", command.encode("utf-8", "replace")).decode("utf-8")
+        if pid in owned:
+            kind = "dsh"
+        elif not process:
+            kind = "unknown"
+        elif name.lower() in ("node", "node.exe"):
+            kind = "non-dsh-node"
         else:
             kind = "non-dsh-other"
-        owners.append({"pid": pid, "name": _proc_name(pid), "cmd": cmd, "kind": kind})
-    owners.sort(key=lambda o: o["pid"])
+        owners.append({"pid": pid, "name": name, "cmd": command, "kind": kind})
     return owners
 
 
 _KIND_TAG = {
-    "dsh": T("【你的 dsh 进程】"),
-    "dsh-ambiguous": T("【node 进程（疑似你的 dsh，命令行未能读取）】"),
-    "non-dsh-node": T("【非 dsh 的 node 进程】"),
-    "non-dsh-other": T("【非 dsh 的其它程序】"),
+    "dsh": "【本槽 dsh 进程】",
+    "unknown": "【进程身份未能核实】",
+    "non-dsh-node": "【其他 Node.js 进程】",
+    "non-dsh-other": "【其他进程】",
 }
 
-def format_port_owners(port):
-    """返回 (owners, text)。owners 为空表示端口空闲。text 为人类可读的多行描述，
-    明确标出占用者是谁（程序名 + PID + 命令行），便于用户判断是否要处理。
 
-    降级态的措辞
-    ------------
-    非管理员账户下取不到进程名与命令行。此时若只写「（进程名未知）」，用户会以为
-    是程序没名字，转而去折腾别的方向；真实原因是**当前账户权限不足**。
-    所以这里显式区分「读不到」与「真的没有」，并给出可执行的建议。
-    """
-    owners = describe_port(port)
+def format_port_owners(port, entrypoint=None):
+    owners = describe_port(port, entrypoint)
     if not owners:
+        if SLOT.port_reachable(port):
+            return [], T("端口 %d 被占用，未能核实进程身份。") % port
         return [], T("端口 %d 当前空闲。") % port
-    degraded = node_map_is_degraded()
     lines = [T("端口 %d 被以下进程占用：") % port]
-    for o in owners:
-        lines.append("  • PID=%d  %s  %s"
-                     % (o["pid"], _KIND_TAG.get(o["kind"], ""),
-                        o["name"] or (T("（进程名未能读取）") if degraded
-                                      else T("（进程名未知）"))))
-        if o["cmd"]:
-            lines.append(T("      命令行: %s") % o["cmd"][:400])
-        elif degraded:
-            lines.append(T("      命令行: 当前账户权限不足，无法读取"))
+    for owner in owners:
+        lines.append("  • PID=%d  %s  %s" % (owner["pid"], T(_KIND_TAG[owner["kind"]]),
+                                             owner["name"] or T("（进程名未能读取）")))
+        if owner["cmd"]:
+            lines.append(T("      命令行: %s") % owner["cmd"][:400])
         else:
-            lines.append(T("      命令行: （未能读取）"))
-    if degraded:
-        lines.append("")
-        lines.append(T("提示：当前账户读不到这些进程的完整命令行（系统限制，非故障）。"))
-        lines.append(T("      · 结束 dsh 不受影响：dsh 由管理器自己启动，普通权限即可停止"))
-        lines.append(T("      · 若只想查看是谁占了端口，可打开"
-                     "「资源管理器 → 右键任务栏 → 任务管理器 → 详细信息」按 PID 查找"))
+            lines.append(T("      命令行: 当前账户权限不足，无法读取"))
     return owners, "\n".join(lines)
 
 
-# ─── bat 启动前端口预检（2026-10-01 新增）────────────────────────────────
-# 需求：bat / 管理器启动前，若端口被「其他程序（非 dsh）」占用，
-# 必须明确告诉用户「XX软件占用了端口号，请处理」，并写日志留痕，
-# 让用户手动处理冲突。退出码：0=端口空闲（放行）；
-# 3=非 dsh 程序占用（拒绝启动）；4=自家 dsh 已在运行（不重复启动）；
-# 2=参数错误；检测自身异常时 fail-open 放行（exit 0）。
-def precheck_start(port, label=""):
-    """bat 启动前调用：检测端口占用者身份，决定是否放行启动。"""
-    mgr_log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dsh-manager.log")
-
-    def _rec(line):
-        print(line)
-        try:
-            with open(mgr_log, "a", encoding="utf-8") as f:
-                f.write("[%s] [bat-precheck]%s %s\n"
-                        % (time.strftime("%Y-%m-%d %H:%M:%S"),
-                           ("[%s]" % label) if label else "", line))
-        except Exception:
-            pass  # 日志写失败绝不拦启动
-
+def _configured_entrypoint(port):
+    # Existing launchers supply only a port. Resolve it through the common
+    # configuration when exactly one slot declares the port.
+    import dsh_platform as platform
+    path = platform.default_config_path()
     try:
-        owners, text = format_port_owners(port)
-    except Exception as e:
-        _rec(T("[precheck] 端口 %d 检测异常（%s）—— fail-open 放行，由启动路径自行报错") % (port, e))
-        sys.exit(0)
-    if not owners:
-        _rec(T("[precheck] 端口 %d 空闲，放行启动。") % port)
-        sys.exit(0)
-    dsh_o = [o for o in owners if o["kind"] in ("dsh", "dsh-ambiguous")]
-    other_o = [o for o in owners if o["kind"] not in ("dsh", "dsh-ambiguous")]
-    if other_o:
-        names = ", ".join((o["name"] or T("未知进程")) for o in other_o)
-        _rec(T("!! 端口 %d 被「%s」占用（非 dsh 程序），请处理：关闭该程序或改 config.json 端口。详情：%s")
-             % (port, names, text.replace("\n", " | ")))
-        sys.exit(3)
-    _rec(T("[precheck] 端口 %d 被自家 dsh 占用（%s），不重复启动。如需重启请先运行 kill-<端口>.bat。")
-         % (port, ", ".join("PID=%d" % o["pid"] for o in dsh_o)))
-    sys.exit(4)
+        with open(path, encoding="utf-8-sig") as config_file:
+            cfg = json.load(config_file)
+        matches = [c["bin_js"] for c in cfg["versions"].values() if SLOT.normalize_port(c.get("port")) == port]
+        if len(matches) == 1:
+            return platform.resolve_path(matches[0], base=platform.config_base(cfg, path),
+                                         npm_global=platform.probe_npm_global())
+    except (OSError, ValueError, AttributeError, KeyError, TypeError):
+        pass
+    return None
+
+
+def precheck_start(port, label="", entrypoint=None):
+    entrypoint = entrypoint or _configured_entrypoint(port)
+    state = SLOT.slot_state(entrypoint, port)
+    _, detail = format_port_owners(port, entrypoint)
+    print(detail)
+    try:
+        from dsh_platform import log_path
+        with open(log_path(), "a", encoding="utf-8") as file:
+            file.write("[%s] [bat-precheck][%s] %s\n" %
+                       (time.strftime("%Y-%m-%d %H:%M:%S"), label, detail.replace("\n", " | ")))
+    except OSError:
+        pass
+    return {"idle": 0, "conflict": 3, "owned": 4}[state]
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", "-p", type=int, required=True)
+    parser.add_argument("--entrypoint")
+    parser.add_argument("--yes", "-y", action="store_true")
+    parser.add_argument("--precheck-start", metavar="SLOT")
+    args = parser.parse_args(argv)
+    if not 0 < args.port <= 65535:
+        parser.error(T("无效的 TCP 端口"))
+    entrypoint = args.entrypoint or _configured_entrypoint(args.port)
+    if args.precheck_start is not None:
+        return precheck_start(args.port, args.precheck_start, entrypoint)
+    owners, detail = format_port_owners(args.port, entrypoint)
+    print(detail)
+    if not owners and not SLOT.port_reachable(args.port):
+        return 0
+    if not owners or any(owner["kind"] != "dsh" for owner in owners):
+        print(T("端口占用者未核实为本槽进程，已保留该进程。"))
+        return 3
+    if not args.yes:
+        try:
+            if input(T("结束本槽 dsh 进程？ [y/N] ")).strip().lower() not in ("y", "yes"):
+                return 0
+        except EOFError:
+            return 0
+    SLOT.stop_slot(entrypoint, args.port)
+    if SLOT.slot_state(entrypoint, args.port) != "idle":
+        return 3
+    return 0
 
 
 if __name__ == "__main__":
-    # 命令行用法：
-    #   python dsh_kill.py --port 4080          交互式：显示占用者，确认后结束 dsh 占用者
-    #   python dsh_kill.py --port 4080 --yes    非交互：直接结束 dsh 占用者（仍绝不碰非 dsh 程序）
-    #   python dsh_kill.py --port 4080 --precheck-start v1
-    #                                       bat 启动前预检：0=放行 3=非dsh占用 4=自家dsh在跑
-    # 设计：只结束「确实是 dsh」的占用者；非 dsh 程序（无论是不是 node）一律拒绝并提示，
-    # 避免影响其它软件运行——符合「非 dsh 不杀」的硬约束。
-    port = None
-    yes = False
-    precheck_label = None
-    args = sys.argv[1:]
-    i = 0
-    while i < len(args):
-        a = args[i]
-        if a in ("--port", "-p") and i + 1 < len(args):
-            try:
-                port = int(args[i + 1])
-            except ValueError:
-                port = None
-            i += 2
-        elif a == "--precheck-start" and i + 1 < len(args):
-            precheck_label = args[i + 1]
-            i += 2
-        elif a in ("--yes", "-y"):
-            yes = True
-            i += 1
-        else:
-            i += 1
-    if port is None:
-        print(T("用法: python dsh_kill.py --port <端口> [--yes] [--precheck-start <槽标签>]"))
-        sys.exit(2)
-    if precheck_label is not None:
-        precheck_start(port, precheck_label)  # 内部自行 sys.exit
-    owners, text = format_port_owners(port)
-    print(text)
-    if not owners:
-        sys.exit(0)
-    dsh_o = [o for o in owners if o["kind"] in ("dsh", "dsh-ambiguous")]
-    other_o = [o for o in owners if o["kind"] not in ("dsh", "dsh-ambiguous")]
-    if other_o:
-        print(T("\n[拒绝] 端口被非 dsh 程序占用（见上）。为避免影响其它软件，本工具不会自动结束它。"))
-        print(T("        请手动关闭该程序，或修改 config.json 里该版本的 port 后重启管理器。"))
-        sys.exit(3)
-    if not yes:
-        try:
-            ans = input(T("\n结束以上 dsh 进程(PID %s)? [Y/n] ")
-                        % ",".join(str(o["pid"]) for o in dsh_o)).strip().lower()
-        except EOFError:
-            ans = ""
-        if ans and ans not in ("y", "yes"):
-            print(T("已取消，未做任何改动。"))
-            sys.exit(0)
-    killed = 0
-    for o in dsh_o:
-        if monitor_and_kill(o["pid"], "[bat]", port, sig=_looks_like_dsh):
-            killed += 1
-    print(T("已结束 %d 个 dsh 进程，端口 %d 现在应已释放。") % (killed, port))
-    sys.exit(0)
+    sys.exit(main())

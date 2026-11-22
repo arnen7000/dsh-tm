@@ -1,20 +1,25 @@
-# dsh 版本管理器（dsh-tm）
+# DSH 管理器（DSH-TM）
+
+macOS 用户可按 [macOS 使用说明](docs/macos.md) 安装 App 或从源码运行管理器。下文的批处理与 PowerShell 示例适用于 Windows。
 
 **中文** · [English](README.en.md)
 
 [![check-all](https://github.com/arnen7000/dsh-tm/actions/workflows/ci.yml/badge.svg)](https://github.com/arnen7000/dsh-tm/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/arnen7000/dsh-tm?label=release)](https://github.com/arnen7000/dsh-tm/releases)
 
-在同一台 Windows 机器上**并行运行多个互相隔离的 DeepSeek Harness（dsh）版本**，并用一个图形界面统一管理：安装 / 纳入 / 启动 / 停止 / 打开浏览器 / 卸载 / 移出 / 体检。
+在同一台 Windows 或 macOS 机器上**并行运行多个互相隔离的 DeepSeek Harness（dsh）版本**，并用一个图形界面统一管理：安装 / 纳入 / 启动 / 停止 / 打开浏览器 / 卸载 / 移出 / 体检。
 
 > **一句话**：每个版本一套自己的进程、端口、数据目录、node 运行时和临时目录，互不污染。主力版本日常用，新版本隔离着装，试坏了删掉重装，不碰主力环境。
 
 **支持 1~6 个版本并存。**
 
 > ### ⬇ 下载
-> **[Releases 页面](https://github.com/arnen7000/dsh-tm/releases)** → 下 `dsh-tm-<版本>-portable.zip`
-> → 解压到任意目录 → 双击 `start-manager.bat`。
-> **不用装 Python、不用装 Node**，包里都带了。
+> 在 [GitHub Releases](https://github.com/arnen7000/dsh-tm/releases/tag/v0.1.11) 下载对应平台的 v0.1.11 安装包。
+>
+> - **Windows x64** 选 `dsh-tm-0.1.11-portable.zip`，解压后双击 `start-manager.bat`。
+> - **Mac** 根据芯片选 `macos-arm64` 或 `macos-x64`，解压后打开 `DSH-TM.app`。见 [macOS 使用说明](docs/macos.md)。
+>
+> Python 和 Node 已随包提供。
 
 ---
 
@@ -96,7 +101,7 @@
 | **Node.js** | **≥ 22.19**（各 dsh 版本要求不同，0.2.2 要 ≥ 24.9） | 跑 dsh 本体；装槽时用它跑 npm | 「安装官方版 dsh」会明确报错「找不到可用的 node.exe」，不会静默装坏 |
 | **git** | 任意近代版本 | 只在你想 `git clone` / `git pull` 更新源码时用到 | 不影响管理器任何功能 |
 | **第三方库** | **无** | 只用标准库 | — |
-| **操作系统** | Windows 10 / 11（x64） | 用了 `ctypes` 调 Win32 API、`netstat`、`tasklist`、`taskkill` | 非 Windows 一律报错退出 |
+| **操作系统** | Windows 10 / 11（x64） | 用了 `ctypes` 调 Win32 API、`netstat`、`tasklist`、`taskkill` | macOS 使用单独的平台适配，见上方使用说明 |
 
 **关于 tkinter**：它是 CPython 自带模块，但**不是所有发行版都带**。
 

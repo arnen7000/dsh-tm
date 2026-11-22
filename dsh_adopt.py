@@ -19,8 +19,10 @@ import json
 import os
 import re
 import shutil
+import stat
 import time
 from dsh_i18n import T
+import dsh_platform as PLATFORM
 
 # 官方版本号形态（实测自 npm registry dist-tags 与 versions 键）：
 #   0.0.1-rc.1 / 0.1.0-rc.2 / 0.1.2-alpha.5 / 0.1.5-alpha.1 / 0.1.6-alpha.2 / 0.2.0-rc.2
@@ -95,6 +97,11 @@ def is_global_install(node_modules):
     nm = os.path.abspath(node_modules or "").replace("\\", "/").lower()
     if not nm:
         return False
+    if PLATFORM.IS_MAC:
+        return bool(node_modules) and os.path.realpath(node_modules) in {
+            os.path.realpath(p) for p in (PLATFORM.probe_npm_global(),
+                                         "/opt/homebrew/lib/node_modules",
+                                         "/usr/local/lib/node_modules") if p}
     appdata = os.environ.get("APPDATA", "").replace("\\", "/").lower().rstrip("/")
     if appdata and nm.startswith(appdata + "/npm/"):
         return True
@@ -624,6 +631,10 @@ def copy_tree(src, dst):
 def source_node_exe(node_modules):
     """查找这份安装自带的 Node，比其它槽或系统运行时更能保持原依赖 ABI。"""
     root = os.path.dirname(os.path.abspath(node_modules))
+    if PLATFORM.IS_MAC:
+        paths = (PLATFORM.slot_node_path(root), os.path.join(root, "node", "node"),
+                 os.path.join(root, "node"))
+        return next((path for path in paths if PLATFORM.resolve_node(path)), "")
     paths = (os.path.join(root, "node", "node.exe"), os.path.join(root, "node.exe"))
     return next((path for path in paths if os.path.isfile(path)), "")
 
@@ -635,6 +646,12 @@ def copy_node_exe(src_node, dst_root):
     （既有槽就是 <槽>/node/node.exe 这种布局，调用方手上常常只有目录）。
     返回 (目标 node.exe 路径, 说明)。找不到可用源就如实报错 —— 不静默退回
     系统 node，因为 node-pty 等原生模块按 ABI 编译，版本不匹配会直接崩。"""
+    if PLATFORM.IS_MAC:
+        try:
+            return PLATFORM.copy_mac_runtime(src_node, dst_root), ""
+        except OSError as exc:
+            return None, str(exc)
+
     src_node = os.fspath(src_node or "")
     if src_node.lower() in ("node", "node.exe"):
         resolved = shutil.which(src_node)
@@ -713,7 +730,7 @@ def adopt_plan(node_modules, versions_root, slot_key, taken_ports,
         "port": port,
         "dsh_home": dsh_home,
         "temp_dir": temp_dir,
-        "node_exe": os.path.join(root, "node", "node.exe"),
+        "node_exe": PLATFORM.slot_node_path(root),
         "node_exe_source": node_exe_source or "",
         "browser": browser,
     }
@@ -729,7 +746,7 @@ def _is_reparse(path):
         st = os.stat(path, follow_symlinks=False)
     except OSError:
         return False
-    return bool(getattr(st, "st_file_attributes", 0) & 0x400)
+    return stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & 0x400)
 
 
 def collect_links(src):
@@ -739,7 +756,8 @@ def collect_links(src):
     那边不在时用本文件的兜底实现，保证纳入功能不依赖另一个模块。"""
     try:
         import dsh_uninstall_ops as _U
-        return _U._collect_links(src)
+        links = _U._collect_links(src, [])
+        return [(rel, _absolute_link_target(src, rel, target)) for rel, target in links]
     except Exception:
         pass
     out = []
@@ -753,7 +771,8 @@ def collect_links(src):
         for e in entries:
             if _is_reparse(e.path):
                 try:
-                    out.append((os.path.relpath(e.path, src), os.readlink(e.path)))
+                    relative = os.path.relpath(e.path, src)
+                    out.append((relative, _absolute_link_target(src, relative, os.readlink(e.path))))
                 except OSError:
                     out.append((os.path.relpath(e.path, src), ""))
             else:
@@ -763,6 +782,12 @@ def collect_links(src):
                 except OSError:
                     pass
     return out
+
+
+def _absolute_link_target(source, relative, target):
+    if PLATFORM.IS_MAC and target and not os.path.isabs(target):
+        return os.path.normpath(os.path.join(source, os.path.dirname(relative), target))
+    return target
 
 
 def copy_tree_nolinks(src, dst, failures=None):
@@ -850,7 +875,7 @@ def _make_junction(link, target):
     # 2026-11-11：原来直接 subprocess.run(["cmd","/c","mklink",...])，
     # list2cmdline 只给含空格的参数加引号，含 `& calc &` 的目录名会被 cmd
     # 当命令分隔符执行。这里显式拒绝，比事后转义更不容易漏。
-    if not _cmd_safe_path(link) or not _cmd_safe_path(target):
+    if not PLATFORM.IS_MAC and (not _cmd_safe_path(link) or not _cmd_safe_path(target)):
         return False
     try:
         os.makedirs(os.path.dirname(link), exist_ok=True)
@@ -858,6 +883,12 @@ def _make_junction(link, target):
         return False
     if os.path.exists(link) or _is_reparse(link):
         return True               # 已经有了，别重复建
+    if PLATFORM.IS_MAC:
+        try:
+            os.symlink(target, link)
+            return True
+        except OSError:
+            return False
     try:
         import subprocess
         r = subprocess.run(["cmd", "/c", "mklink", "/J", link, target],
