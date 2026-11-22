@@ -17,7 +17,7 @@ Windows or macOS machine, and drive them all from a single window.
 **Up to 6 versions.** GUI in **Chinese and English** (switch in Settings, takes effect immediately).
 
 > ### ⬇ Download
-> Download a trial package from [v0.1.11-preview.2](https://github.com/arnen7000/dsh-tm/releases/tag/v0.1.11-preview.2).
+> Download the package for your platform from the [v0.1.11 release](https://github.com/arnen7000/dsh-tm/releases/tag/v0.1.11).
 >
 > - **Windows x64** — unzip `dsh-tm-0.1.11-portable.zip` and double-click `start-manager.bat`.
 > - **Mac** — choose `macos-arm64` for Apple Silicon or `macos-x64` for Intel. Unzip and open `DSH-TM.app`. See [macOS setup](docs/macos.md).
