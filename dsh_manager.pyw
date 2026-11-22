@@ -6816,31 +6816,63 @@ def _undock_settings_window(win):
     _DOCK["attached"] = False
 
 
+def _mac_dock_x(main_x, main_width, panel_width, left, right):
+    right_of_main = main_x + main_width
+    left_of_main = main_x - panel_width
+    limit = max(left, right - panel_width)
+    if left <= right_of_main <= limit:
+        return right_of_main
+    if left <= left_of_main <= limit:
+        return left_of_main
+    return limit
+
+
 def _make_mac_side_panel(win, width):
     """Follow the main window. Settle a title-bar drag only after mouse-up."""
+    class Point(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+    class Size(ctypes.Structure):
+        _fields_ = [("width", ctypes.c_double), ("height", ctypes.c_double)]
+
+    class Rect(ctypes.Structure):
+        _fields_ = [("origin", Point), ("size", Size)]
+
     try:
-        button_state = ctypes.CDLL(
-            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
-        ).CGEventSourceButtonState
+        quartz = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+        button_state = quartz.CGEventSourceButtonState
         button_state.argtypes = [ctypes.c_int32, ctypes.c_uint32]
         button_state.restype = ctypes.c_bool
+        displays_at = quartz.CGGetDisplaysWithPoint
+        uint_ref = ctypes.POINTER(ctypes.c_uint32)
+        displays_at.argtypes = [Point, ctypes.c_uint32, uint_ref, uint_ref]
+        displays_at.restype = ctypes.c_int32
+        display_bounds = quartz.CGDisplayBounds
+        display_bounds.argtypes = [ctypes.c_uint32]
+        display_bounds.restype = Rect
     except (AttributeError, OSError):
         button_state = None
+        displays_at = None
 
     attached = True
     expected = None
     pending = None
     follow_job = None
 
+    def _display_edges(mx, my, mw, mh):
+        # Tk's screen width is for the primary display, even on an external monitor.
+        if displays_at is not None:
+            display, count = ctypes.c_uint32(), ctypes.c_uint32()
+            center = Point(mx + mw / 2, my + mh / 2)
+            if displays_at(center, 1, ctypes.byref(display), ctypes.byref(count)) == 0 and count.value:
+                bounds = display_bounds(display)
+                return int(bounds.origin.x), int(bounds.origin.x + bounds.size.width)
+        return 0, root.winfo_screenwidth()
+
     def _target():
         # Aqua winfo_x/y, unlike winfo_rootx/y, are in wm geometry coordinates.
-        mx, my = root.winfo_x(), root.winfo_y()
-        right = mx + root.winfo_width()
-        limit = max(0, root.winfo_screenwidth() - width)
-        x = right if right <= limit else min(max(0, mx - width), limit)
-        if right > limit and mx < width:
-            x = limit
-        return (x, my, root.winfo_height())
+        mx, my, mw, mh = root.winfo_x(), root.winfo_y(), root.winfo_width(), root.winfo_height()
+        return (_mac_dock_x(mx, mw, width, *_display_edges(mx, my, mw, mh)), my, mh)
 
     def _place():
         nonlocal expected
@@ -6899,10 +6931,11 @@ def _make_mac_side_panel(win, width):
     win.bind("<Configure>", _moved, add="+")
     # A centered main window can leave slightly less than a panel width on
     # either side. Make room on opening if both windows fit on the display.
-    mx, mw = root.winfo_x(), root.winfo_width()
-    edge = root.winfo_screenwidth() - width
-    if 0 <= edge - mw < mx < width:
-        root.geometry("+%d+%d" % (edge - mw, root.winfo_y()))
+    mx, my, mw, mh = root.winfo_x(), root.winfo_y(), root.winfo_width(), root.winfo_height()
+    left, right = _display_edges(mx, my, mw, mh)
+    edge = right - width
+    if left <= edge - mw < mx < left + width:
+        root.geometry("+%d+%d" % (edge - mw, my))
     _place()
     return win
 

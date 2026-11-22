@@ -1902,6 +1902,14 @@ def _check_gui_platform_parity():
 
 _check_gui_platform_parity()
 
+_dock_env, _ = harvest(["_mac_dock_x"])
+_dock_x = _dock_env["_mac_dock_x"]
+chk("P9 在右侧外接屏上跟随主窗口",
+    _dock_x(2000, 840, 380, 1728, 3648) == 2840
+    and _dock_x(2500, 840, 380, 1728, 3648) == 2120)
+chk("P10 在原点左侧的显示器上保留负坐标",
+    _dock_x(-1800, 840, 380, -1920, 0) == -960)
+
 
 print()
 if FAILS:

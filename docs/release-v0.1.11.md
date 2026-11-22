@@ -23,6 +23,8 @@
 
 macOS 13.5 是经包内二进制检查的部署目标。双架构生命周期在 macOS 15 运行，本机还使用 Apple Silicon macOS 27.0.1 验证 App。Windows 便携包在 GitHub 的 Windows Server 2025 x64 runner 验证。
 
+额外定位回归覆盖主屏左侧及右侧的外接屏坐标，真实窗口交互在本机单屏验证。系统发出终止信号时，正在等待确认的模态窗口可能需要先关闭，该边界和正常关窗分开验证。
+
 正式发布使用 `main` 上同一提交生成的三个包。GitHub Actions 的发布步骤等待三平台完成后校对每份 ZIP 的 SHA-256，再公开发布和校验文件。实际运行记录和产物清单随 [GitHub Release](https://github.com/arnen7000/dsh-tm/releases/tag/v0.1.11) 提供。
 
 ## 用户验收
