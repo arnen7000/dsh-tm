@@ -1451,6 +1451,14 @@ chk("C3z34c 窗口标题不是控件 text，单独设一次",
     'root, "DSH 管理器"' in _pl_code and 'win, "设置"' in _pl_code)
 chk("C3z34j 初次启动的窗口标题和品牌",
     'root.title(T("DSH 管理器"))' in src and 'ttk.Label(_hdr, text="DSH-TM"' in src)
+_panel = src[src.index("def _make_side_panel("):src.index("def _dock_animate(")]
+_scroll = src[src.index("def _scroll_host("):src.index("_SETTINGS_WIN =")]
+chk("C3z34k Mac 设置窗不进入 Windows 吸附动画",
+    "if PLATFORM.IS_MAC:" in _panel.split('win.bind("<Configure>"')[0])
+chk("C3z34l 设置滚动条先分配宽度，Mac 小幅滚动有效",
+    _scroll.index('sb.pack(') < _scroll.index('canvas.pack(')
+    and 'steps = -evt.delta' in _scroll and 'win.bind("<MouseWheel>"' in _scroll
+    and 'win.bind("<TouchpadScroll>"' in _scroll and 'tk::PreciseScrollDeltas' in _scroll)
 chk("C3z34d 翻译层提供 retranslate / to_key（反查原始中文 key）",
     "def retranslate(" in src_i18n and "def to_key(" in src_i18n)
 chk("C3z34e 自定义按钮函数内部翻译（文案以位置参数传入，白名单抓不到）",

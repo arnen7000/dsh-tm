@@ -1961,7 +1961,7 @@ try:
         _rb = _ct.windll.user32.GetClassLongPtrW(_hwnd, -14)
         log(T("已在窗口显示前设置顶层窗口(%s)图标，回读 GCLP_HICON=%s")
             % (_hwnd, T("成功") if _rb == _hb else T("失败(%s)") % _rb))
-    else:
+    elif PLATFORM.IS_WINDOWS:
         log(T("未能取到 ico 帧或顶层窗口，窗口将使用 Tk 默认图标"))
 except Exception as _e:
     log(T("替换窗口类图标失败（不影响运行）：%s") % _e)
@@ -3669,8 +3669,7 @@ def _log_orphan_shells():
         if detached_dirs:
             log(T("[编号] 这些槽目录装着完整的 dsh、但不在管理里（多半是你移出的）：%s")
                 % "、".join(detached_dirs))
-            log(T("[编号] 它们占着自己的编号 —— 新装会跳过这些编号（不会再多出 "
-                "dshVx-2）。想接着用就点「扫描已装 dsh 并纳入」；不要了就把目录删掉。"))
+            log(T("[编号] 新装会跳过这些编号。可在「设置 → 版本管理」扫描并纳入。"))
     except Exception as e:
         log(T("[清理] 空壳目录检查失败（不影响使用）：%s") % e)
 
@@ -5865,8 +5864,14 @@ for key in SLOT_KEYS:
     # 只写日志不弹框 —— 缺个 kill bat 之类不值得打断启动，但排障时能一眼看到
     # 「哪个槽和别的槽不一样」。启动失败时的弹框在 _start_slot 里另有一套。
     if OPS is not None and hasattr(OPS, "slot_shape_problems"):
-        for _lv, _t in OPS.slot_shape_problems(cfg, INSTALL_BASE, HOME, BASE_DIR):
-            log(T("[%s] 槽结构%s：%s") % (key, _lv, _t))
+        _problems = OPS.slot_shape_problems(cfg, INSTALL_BASE, HOME, BASE_DIR)
+        _errors = [detail for level, detail in _problems if level == T("错误")]
+        if _errors:
+            log(T("[%s] 槽配置需修复：%s。详见「设置 → 维护 → 槽体检」。")
+                % (key, " / ".join(_errors)))
+        elif _problems:
+            log(T("[%s] 有 %d 项槽布局提示，详见「设置 → 维护 → 槽体检」。")
+                % (key, len(_problems)))
 # 启动快照改为延迟执行：等后台探测线程出第一批数据（一轮 ≈ 3-4 秒），
 # 纯写日志零开销；窗口在此之前早已显示。
 root.after(6000, _log_state_snapshot)
@@ -6771,11 +6776,104 @@ def _undock_settings_window(win):
     _DOCK["attached"] = False
 
 
+def _make_mac_side_panel(win, width):
+    """Follow the main window. Settle a title-bar drag only after mouse-up."""
+    try:
+        button_state = ctypes.CDLL(
+            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
+        ).CGEventSourceButtonState
+        button_state.argtypes = [ctypes.c_int32, ctypes.c_uint32]
+        button_state.restype = ctypes.c_bool
+    except (AttributeError, OSError):
+        button_state = None
+
+    attached = True
+    expected = None
+    pending = None
+    follow_job = None
+
+    def _target():
+        # Aqua winfo_x/y, unlike winfo_rootx/y, are in wm geometry coordinates.
+        mx, my = root.winfo_x(), root.winfo_y()
+        right = mx + root.winfo_width()
+        limit = max(0, root.winfo_screenwidth() - width)
+        x = right if right <= limit else min(max(0, mx - width), limit)
+        if right > limit and mx < width:
+            x = limit
+        return (x, my, root.winfo_height())
+
+    def _place():
+        nonlocal expected
+        target = _target()
+        if target != expected or (win.winfo_x(), win.winfo_y()) != target[:2]:
+            expected = target
+            x, y, h = target
+            win.geometry("%dx%d+%d+%d" % (width, h, x, y))
+
+    def _settle():
+        nonlocal attached, pending
+        pending = None
+        x, y = win.winfo_x(), win.winfo_y()
+        if (x, y) == expected[:2]:
+            return
+        # Combined login-session event source and left mouse button.
+        if button_state is not None and button_state(0, 0):
+            pending = win.after(50, _settle)
+            return
+        tx, ty, _ = _target()
+        attached = max(abs(x - tx), abs(y - ty)) <= _DOCK["threshold"]
+        if attached:
+            _place()
+
+    def _moved(evt):
+        nonlocal pending
+        if evt.widget is not win or expected is None:
+            return
+        if pending is not None:
+            win.after_cancel(pending)
+        pending = win.after(120, _settle)
+
+    def _follow_settled():
+        nonlocal follow_job
+        follow_job = None
+        if attached:
+            _place()
+
+    def _follow(evt):
+        nonlocal follow_job
+        if evt.widget is root and attached and follow_job is None:
+            # Aqua can deliver Configure before winfo_x/y reflect the move.
+            follow_job = win.after_idle(_follow_settled)
+
+    follow_id = root.bind("<Configure>", _follow, add="+")
+
+    def _unbind(evt):
+        if evt.widget is win:
+            root.unbind("<Configure>", follow_id)
+            if pending is not None:
+                win.after_cancel(pending)
+            if follow_job is not None:
+                win.after_cancel(follow_job)
+
+    win.bind("<Destroy>", _unbind, add="+")
+    win.bind("<Configure>", _moved, add="+")
+    # A centered main window can leave slightly less than a panel width on
+    # either side. Make room on opening if both windows fit on the display.
+    mx, mw = root.winfo_x(), root.winfo_width()
+    edge = root.winfo_screenwidth() - width
+    if 0 <= edge - mw < mx < width:
+        root.geometry("+%d+%d" % (edge - mw, root.winfo_y()))
+    _place()
+    return win
+
+
 def _make_side_panel(win, width=380):
     """把任意 Toplevel 变成"并排可吸附"的侧栏。
 
     返回一个 bind 好的处理器；调用方只需在创建完控件后调用一次。
     """
+    if PLATFORM.IS_MAC:
+        return _make_mac_side_panel(win, width)
     # 每次打开设置窗都重新定尺寸（用户可能关掉再开）。
     _DOCK["sized"] = False
     _DOCK.pop("w", None)
@@ -7435,8 +7533,10 @@ def _scroll_host(win):
     inner = ttk.Frame(canvas)
     win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
     canvas.configure(yscrollcommand=sb.set)
-    canvas.pack(side="left", fill="both", expand=True)
     sb.pack(side="right", fill="y")
+    canvas.pack(side="left", fill="both", expand=True)
+    if PLATFORM.IS_MAC:
+        canvas.configure(yscrollincrement=1)
 
     def _sync(_e=None):
         try:
@@ -7460,46 +7560,24 @@ def _scroll_host(win):
     # 鼠标在主窗口日志区滚动也会触发这里的回调；而 Tk 在滚动越界时
     # 会尝试"滚动整个窗口"，表现为设置窗跟着乱跳。
     # 现在只在**设置窗区域内部**（canvas 及其子控件）绑定，主界面滚动与它无关。
+    def _scroll_by(steps):
+        first, last = canvas.yview()
+        if steps and not (first <= 0.0 and last >= 1.0):
+            canvas.yview_scroll(steps, "units")
+            return "break"
+
     def _wheel(evt):
-        try:
-            # 只在指针确实落在本 canvas 内时才滚
-            x, y = canvas.winfo_pointerxy()
-            cx, cy = canvas.winfo_rootx(), canvas.winfo_rooty()
-            if not (cx <= x <= cx + canvas.winfo_width() and
-                    cy <= y <= cy + canvas.winfo_height()):
-                return
-            # 2026-11-03 用户反馈：「上下长度够用的情况下为什么还能用滚轮滑动」。
-            # 内容不需要滚动时（全部可见），滚轮应当**完全无反应**，
-            # 否则画面会在边界处轻微位移，像"能滚但滚不动"，很别扭。
-            try:
-                first, last = canvas.yview()
-                if first <= 0.0 and last >= 1.0:
-                    return          # 内容全可见 → 不响应滚动
-            except Exception:
-                pass
-            canvas.yview_scroll(int(-1 * (evt.delta / 120)), "units")
-        except Exception:
-            pass
+        steps = -evt.delta if PLATFORM.IS_MAC else -int(evt.delta / 120)
+        steps = max(-6, min(6, steps))
+        return _scroll_by(steps * 12 if PLATFORM.IS_MAC else steps)
 
-    def _bind_wheel(widget):
-        """把滚轮绑到这个控件及其所有子控件（只作用于设置窗内部）。"""
-        try:
-            widget.bind("<MouseWheel>", _wheel)
-        except Exception:
-            pass
-        try:
-            for ch in widget.winfo_children():
-                _bind_wheel(ch)
-        except Exception:
-            pass
+    win.bind("<MouseWheel>", _wheel, add="+")
+    if PLATFORM.IS_MAC and win.tk.call("info", "commands", "tk::PreciseScrollDeltas"):
+        def _trackpad(evt):
+            _, vertical = win.tk.splitlist(win.tk.call("tk::PreciseScrollDeltas", evt.delta))
+            return _scroll_by(-int(vertical))
 
-    try:
-        canvas.bind("<MouseWheel>", _wheel)
-        inner.bind("<MouseWheel>", _wheel)
-        # 子控件是后续才创建的，延后一帧再统一绑一次
-        canvas.after(300, lambda: _bind_wheel(canvas))
-    except Exception:
-        pass
+        win.bind("<TouchpadScroll>", _trackpad, add="+")
     return inner
 
 
@@ -7606,7 +7684,7 @@ def settings_hub_dialog():
     try:
         # 2026-11-14：侧栏再窄，主题那三个按钮就排不下（实测三个共需 297px，
         # 减去滚动条与两级内边距后 380 是下限）。允许拉宽，但不许拉到裁字。
-        win.minsize(380, 480)
+        win.minsize(380, 200 if PLATFORM.IS_MAC else 480)
     except Exception:
         pass
 
