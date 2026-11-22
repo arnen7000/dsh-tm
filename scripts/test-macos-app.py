@@ -49,10 +49,14 @@ def verify_gui_start(exe, config):
                                (proc.poll(), output_path.read_text(errors="replace")))
         finally:
             if proc.poll() is None:
-                # This fixture only checks startup. Reap the test App independently
-                # of how the native window process handles a termination signal.
-                proc.kill()
-                proc.wait(timeout=10)
+                proc.terminate()
+                try:
+                    code = proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=10)
+                    raise
+                assert code == 0, ("Packaged manager did not quit normally", code)
 
 
 def run(app, gui=True):

@@ -420,9 +420,10 @@ chk("C3i 启动时**不**自动扫描（只在用户点按钮时扫）",
     # 自动扫描 + 「以后不再提示」名单是一整套，去掉扫描就没有名单存在的理由。
     re.search(r"root\.after\(\s*1500\s*,\s*scan_and_offer_adopt", src) is None
     and "def scan_and_offer_adopt():" in src)
-# tkinter 不是线程安全的：后台进度必须 root.after 切回主线程
-chk("C3j 后台进度用 root.after 切主线程",
-    "root.after(0, lambda: self.lbl.configure" in src)
+chk("C3j 后台进度和完成通知都进入主线程队列",
+    "_post_ui(lambda: self.lbl.configure" in src
+    and "_post_ui(self._finish, ok, payload, error)" in src
+    and "root.after(25, _drain_ui_queue)" in src)
 chk("C3k 长任务走线程而非 UI 线程", "run_in_thread" in src)
 # 纳入管理必须默认「否」——它会复制几百 MB 并改配置
 m = re.search(r"askyesno\(\s*\"发现已安装的 dsh\"", src)
@@ -1322,7 +1323,7 @@ chk("C3z29c 函数名不再叫 _set_busy（名字会让人把方向写反）",
     "_set_busy(" not in src)
 chk("C3z29d 全部停止在后台线程跑（4 个槽枚举进程会让界面卡住）",
     "threading.Thread(target=work" in _sa_body
-    and "root.after(0, done)" in _sa_body
+    and "_post_ui(done)" in _sa_body
     and "kill_one(k, report=False)" in _sa_body)
 # ── C3z30：进度窗不能有能点的「关闭」（2026-11-14 用户要求）──────────────
 # 注意：`_fn_body` 只认顶层 `def name(`，`class X.method` 形式匹配不到
@@ -1578,7 +1579,7 @@ chk("C3z22a 日志 GUI 输出切回主线程",
 chk("C3z22b 进度回调先写日志、再更新标签",
     'log("[%s] %s" % (self.title, text))' in src
     and src.index('log("[%s] %s" % (self.title, text))')
-    < src.index('root.after(0, lambda: self.lbl.configure'))
+    < src.index('_post_ui(lambda: self.lbl.configure'))
 chk("C3z22c 探测数据未到时也显示端口（不再写「检测中…」）",
     'status_vars[key].set("检测中…"' not in src
     and 'T("已停止  :%d") % cfg["port"]' in _fn_body("_refresh_one"))
@@ -1812,12 +1813,12 @@ def _check_gui_platform_parity():
     from types import SimpleNamespace
 
     opened, copied, logs = [], [], []
-    live = {"owned": set(), "listening": {42}}
+    live = {"owned": set(), "listening": {42}, "auth_required": False}
     auth = {"v1": None}
     proc = {"v1": None}
     birth = {"value": "original"}
     env, _ = harvest(["_slot_browser_url", "open_browser", "copy_url",
-                      "_system_is_dark", "_browser_filetypes", "stop_all_slots"], ns_extra={
+                      "_system_is_dark", "_browser_filetypes", "stop_all_slots", "start_all_slots"], ns_extra={
         "VC": {"v1": {"port": 4080, "browser": "default", "bin_js": "/slot/bin.js"}},
         "SLOT_KEYS": ["v1"],
         "PLATFORM": SimpleNamespace(IS_MAC=True),
@@ -1826,13 +1827,16 @@ def _check_gui_platform_parity():
             process_info=lambda _: SimpleNamespace(birth=birth["value"])),
         "auth_urls": auth, "procs": proc, "proc_alive": bool,
         "_resolve_browser": lambda _: ("start", ""), "_platform_open": opened.append,
+        "_slot_needs_authentication": lambda _: live["auth_required"],
         "port_open": lambda _: bool(live["listening"]), "log": logs.append,
         "_dsh_pid_on_port": lambda _: next(iter(live["owned"]), None),
         "root": SimpleNamespace(clipboard_clear=lambda: None, clipboard_append=copied.append,
                                 update_idletasks=lambda: None),
         "subprocess": SimpleNamespace(run=lambda *a, **kw: SimpleNamespace(returncode=0, stdout="Dark\n")),
-        "messagebox": SimpleNamespace(showinfo=lambda *args: logs.append(args[-1]),
+        "messagebox": SimpleNamespace(showinfo=lambda *args, **kw: logs.append(args[-1]),
+                                    showwarning=lambda *args, **kw: logs.append(args[-1]),
                                     askyesno=lambda *_: False),
+        "refresh": lambda **_: None,
     })
     env["open_browser"]("v1")
     env["copy_url"]("v1")
@@ -1848,13 +1852,19 @@ def _check_gui_platform_parity():
     bare = "http://127.0.0.1:4080"
     chk("P3 属于本槽但由外部启动时，浏览器和剪贴板均提供裸地址",
         opened == [bare] and copied == [bare])
+    live["auth_required"] = True
+    env["open_browser"]("v1")
+    env["copy_url"]("v1")
+    chk("P3b 保留运行的实例要求认证时，显示恢复方法，不打开或复制未认证地址",
+        opened == [bare] and copied == [bare] and "认证" in logs[-1])
 
-    proc["v1"] = SimpleNamespace(child_pid=42, child=SimpleNamespace(birth="original"))
-    auth["v1"] = bare + "/?token=abcdefgh1234"
+    url = bare + "/?token=abcdefgh1234"
+    proc["v1"] = SimpleNamespace(child_pid=42, child=SimpleNamespace(birth="original"), url=url)
     env["open_browser"]("v1")
     env["copy_url"]("v1")
     chk("P4 本窗口启动且监听 PID 一致时，两种入口动作均保留完整认证地址",
-        opened[-1] == auth["v1"] and copied[-1] == auth["v1"])
+        opened[-1] == url and copied[-1] == url)
+    live["auth_required"] = False
     live["owned"] = {43}
     live["listening"] = {43}
     env["open_browser"]("v1")
@@ -1868,6 +1878,19 @@ def _check_gui_platform_parity():
     env["copy_url"]("v1")
     chk("P5b 监听进程复用了 PID 时不提供前一进程的认证地址",
         opened[-1] == bare and copied[-1] == bare)
+
+    def fail_launch(_key):
+        raise FileNotFoundError("node is missing")
+
+    proc["v1"] = None
+    env["_spawn_slot_silent"] = fail_launch
+    env["SLOT_PROCESS"].slot_state = lambda *_: "stopped"
+    env["start_all_slots"]()
+    chk("P5c Node 缺失时只说明启动失败",
+        "node is missing" in logs[-1] and "手动处理或改端口" not in logs[-1])
+    env["SLOT_PROCESS"].slot_state = lambda *_: "conflict"
+    env["start_all_slots"]()
+    chk("P5d 端口确实被占用时保留端口处理提示", "手动处理或改端口" in logs[-1])
 
     chk("P6 macOS 系统外观可识别深色模式", env["_system_is_dark"]())
     filetypes = env.get("_browser_filetypes")

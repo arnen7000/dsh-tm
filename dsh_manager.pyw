@@ -15,8 +15,11 @@
 # 所以 T() 在这里就得可用。放在普通 import 区（87 行）会让 70 行报
 # `NameError: name 'T' is not defined` —— 2026-11-14 被 test-tk-selfheal 抓到。
 import argparse
+import http.client
 import os
+import queue
 import runpy
+import signal
 import sys
 
 import dsh_platform as PLATFORM
@@ -586,6 +589,32 @@ except Exception:
     LOG_FH = None
 
 _gui_sink = lambda line: None
+_UI_QUEUE = queue.SimpleQueue()
+
+
+def _post_ui(callback, *args):
+    _UI_QUEUE.put((callback, args))
+
+
+def _drain_ui_queue():
+    # Tcl 9 can accept a timer from a worker without delivering it to the
+    # Tk main loop. Only the main thread calls Tk, including its timer API.
+    for _ in range(100):
+        try:
+            callback, args = _UI_QUEUE.get_nowait()
+        except queue.Empty:
+            break
+        try:
+            callback(*args)
+        except Exception as exc:
+            log(T("[界面] 后台操作的结果处理失败：%s") % exc)
+        try:
+            alive = root.winfo_exists()
+        except tk.TclError:
+            return
+        if not alive:
+            return
+    root.after(25, _drain_ui_queue)
 
 def log(msg):
     # 出口统一脱敏：管理器的日志可能带上入口 URL（?token=...），
@@ -1212,7 +1241,7 @@ def stop_all_slots():
             except Exception as e:
                 results.append((k, None, False, str(e)))
         try:
-            root.after(0, done)
+            _post_ui(done)
         except Exception:
             pass
 
@@ -1262,12 +1291,14 @@ def start_all_slots():
         return
 
     started, skipped, blocked = [], [], []
+    port_conflict = False
     for k in keys:
         cfg = VC[k]
         try:
             ownership = SLOT_PROCESS.slot_state(cfg.get("bin_js"), cfg["port"])
             if ownership == "conflict":
                 blocked.append(T("%s（端口 %d 已被占用）") % (k, cfg["port"]))
+                port_conflict = True
                 continue
             if ownership == "owned" or proc_alive(procs.get(k)):
                 skipped.append(k)
@@ -1285,10 +1316,11 @@ def start_all_slots():
         log(T("[全部启动] 未能启动：%s") % _b)
 
     if blocked:
+        detail = T("以下槽未能启动：\n\n  ") + "\n  ".join(blocked)
+        if port_conflict:
+            detail += T("\n\n非 dsh 程序占用的端口不会自动结束，请手动处理或改端口。")
         messagebox.showwarning(
-            T("全部启动"),
-            T("以下槽未能启动：\n\n  ") + "\n  ".join(blocked) +
-            T("\n\n非 dsh 程序占用的端口不会自动结束，请手动处理或改端口。"))
+            T("全部启动"), detail, parent=root)
     elif not started:
         messagebox.showinfo(T("全部启动"), T("所有槽都已经在运行了。"))
     else:
@@ -1462,6 +1494,19 @@ def _resolve_browser(browser):
         return ("explicit", os.path.expandvars(browser))  # 用户写死 exe 绝对路径
     return ("start", "")                      # 交给系统默认浏览器
 
+def _slot_needs_authentication(port):
+    """Probe only the verified loopback listener, without following redirects."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=0.8)
+    try:
+        conn.request("GET", "/")
+        with conn.getresponse() as response:
+            return response.status == 401
+    except (OSError, http.client.HTTPException):
+        return False
+    finally:
+        conn.close()
+
+
 def _slot_browser_url(key):
     cfg = VC[key]
     port = cfg["port"]
@@ -1477,17 +1522,23 @@ def _slot_browser_url(key):
             log(T("[%s] 未运行，请先启动") % key)
         return None
 
-    url = auth_urls.get(key)
     if alive and tracked.child_pid in owned:
         current = SLOT_PROCESS.process_info(tracked.child_pid)
         if current and current.birth == tracked.child.birth:
-            if url:
-                return url
+            if tracked.url:
+                auth_urls[key] = tracked.url
+                return tracked.url
             log(T("[%s] 仍在启动：入口 URL 还没生成，状态变 ✓ 后再点") % key)
             return None
 
-    log(T("[%s] 未捕获到入口 URL（该实例不是本管理器启动的）；"
-        "若该版本有 token 保护，请从管理器重启它") % key)
+    if _slot_needs_authentication(port):
+        log(T("[%s] 服务正在运行，但当前窗口没有它的认证入口。") % key)
+        messagebox.showinfo(
+            T("需要认证入口"),
+            T("这个槽仍在运行，当前窗口没有它的认证链接。\n\n"
+              "可以继续使用原先已登录的浏览器标签页，或在管理器中停止并重新启动这个槽，再打开浏览器。"),
+            parent=root)
+        return None
     return "http://127.0.0.1:%d" % port
 
 
@@ -1680,7 +1731,7 @@ def _build_version_picker(parent, var, height=9, width=38, multi=False):
                 else:
                     fail(src)
             try:
-                root.after(0, back)
+                _post_ui(back)
             except Exception:
                 pass
 
@@ -3218,7 +3269,7 @@ def _health_dialog():
                             root_, _pick_node_source(T("修复")))
                 except Exception as e:
                     ok, acts, err = False, [], str(e)
-                win.after(0, lambda: _after_fix(ok, acts, err, key))
+                _post_ui(_after_fix, ok, acts, err, key)
 
             threading.Thread(target=work, daemon=True).start()
 
@@ -3287,9 +3338,9 @@ def _run_health(deep=False, dialog=False):
         try:
             res = HEALTH_MOD.check_all(VC, deep=deep)
         except Exception as e:
-            root.after(0, lambda: log(T("[体检] 失败：%s") % e))
+            _post_ui(log, T("[体检] 失败：%s") % e)
             return
-        root.after(0, lambda: _health_apply(res, dialog))
+        _post_ui(_health_apply, res, dialog)
 
     threading.Thread(target=work, daemon=True).start()
 
@@ -3745,7 +3796,7 @@ def _slot_full_reason():
 
 class _GuiProgress(OPS.Progress if OPS else object):
     """把后台线程的进度转发到主线程的日志区 + 进度条。
-    tkinter 不是线程安全的，所以一律用 root.after 切回主线程。
+    通过主线程处理的队列转发，后台线程不调用 Tk。
 
     `modal=True`（默认）用 grab 锁住整个管理器 —— 卸载 / 移出 / 移动这些会删或搬
     磁盘的操作必须如此。`modal=False` 用于**装新版本**：装的时候用户还想用别的
@@ -3920,20 +3971,12 @@ class _GuiProgress(OPS.Progress if OPS else object):
             pass
 
     def on_step(self, text):
-        # 先写日志（文件 + GUI sink 自带线程切换），再更新标签。
-        # 顺序很重要：原来先 root.after 再 log，after 一旦抛异常，
-        # 这行日志就永远不出来 —— 用户看到的只有「准备中…」一直不动。
+        # 先记录进度，再让主线程更新界面。
         log("[%s] %s" % (self.title, text))
-        try:
-            root.after(0, lambda: self.lbl.configure(text=str(text)[:180]))
-        except Exception:
-            pass
+        _post_ui(lambda: self.lbl.configure(text=str(text)[:180]))
 
     def on_done(self, ok, payload=None, error=""):
-        try:
-            root.after(0, lambda: self._finish(ok, payload, error))
-        except Exception:
-            pass
+        _post_ui(self._finish, ok, payload, error)
 
     def _finish(self, ok, payload, error):
         try:
@@ -5181,11 +5224,11 @@ def _do_uninstall(keys):
         msg = (payload or {}).get("message") or msg or ""
         if ok:
             log(T("[卸载] 完成：%s") % msg.replace("\n", " | "))
-            messagebox.showinfo(T("卸载完成"), msg)
+            messagebox.showinfo(T("卸载完成"), msg, parent=root)
             _restart_or_tell(T("槽列表"))
         else:
             log(T("[卸载] 未完成：%s") % msg.replace("\n", " | "))
-            messagebox.showerror(T("卸载未完成"), msg or T("原因未知"))
+            messagebox.showerror(T("卸载未完成"), msg or T("原因未知"), parent=root)
 
     # 进度窗必须先建并把 prog 传进 uninstall_slots：删 node_modules 在机械盘上
     # 要几十秒，没有 step 回调窗口就一直停在「准备中…」——2026-10-29 实测被当成
@@ -5452,10 +5495,7 @@ _MAIN_TID = threading.get_ident()
 
 def _gui_sink_impl(line):
     if threading.get_ident() != _MAIN_TID:
-        try:
-            root.after(0, lambda l=line: _gui_sink_impl(l))
-        except Exception:
-            pass
+        _post_ui(_gui_sink_impl, line)
         return
     log_text.configure(state="normal")
     log_text.insert("end", line + "\n", _log_tag(line))
@@ -8304,4 +8344,9 @@ try:
 except Exception as _e:
     log(T("[主题] 应用失败（回退默认配色）：%s") % _e)
 
+if PLATFORM.IS_MAC:
+    # Keep Tk's native signal handler from destroying Python-bound widgets
+    # while the main loop has released the GIL.
+    signal.signal(signal.SIGTERM, lambda _signum, _frame: _post_ui(on_close))
+root.after(0, _drain_ui_queue)
 root.mainloop()
