@@ -18,6 +18,15 @@ GitHub v0.1.11 的 `-unsigned` ZIP 使用临时签名，尚未做 Developer ID �
 macOS 可能阻止首次启动。核对来源和 SHA-256 后，可按 [Apple 的打开方式](https://support.apple.com/zh-cn/102445)
 为此 App 单独确认打开。
 
+### 安装进行中
+
+安装进度窗随管理器显示。「在后台继续」会隐藏进度窗，可从主界面的「安装进度」重新打开。
+这期间已有槽仍可启动、停止、打开浏览器或复制入口。设置、更改槽和退出管理器会等安装结束后恢复。
+安装结束时刷新槽位，并在窗口和日志里汇总成功与失败。遇到下载超时可重试，未完成的安装会清除暂存文件。
+
+维护者可在原生 Mac 上对解压后的包运行 `python3 scripts/test-macos-app.py --app /path/to/DSH-TM.app --dsh-version 0.2.2-rc.5`。
+该检查使用隔离配置验证安装、认证访问、启停和端口释放。进度窗和后台队列可用 `python3 scripts/test-macos-install-gui.py` 单独回归。
+
 App 和源码默认共用 `~/Library/Application Support/DSH-TM/config.json`。
 首次启动 Web 可能需要安装插件。等待 20 秒后，管理器会显示启动等候超时，CLI 默认返回失败，
 槽进程仍可在后台完成初始化。管理器核实槽进程开始监听后会显示运行中。也可以点「停止」取消。

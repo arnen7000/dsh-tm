@@ -1602,7 +1602,7 @@ def copy_url(key):
 # 2026-10-31 分两组：「btns」= 底部常驻按钮（一次建好不再变），
 # 「card」= 槽卡片里的按钮（改设置要重画卡片，旧的必须能从冻结清单里摘掉，
 # 否则 _actions_enabled 会去 configure 已经 destroy 的控件）。
-BUSY = {"btns": [], "card": [], "card_run": []}
+BUSY = {"btns": [], "card": [], "card_run": [], "installing": False, "install_background": False}
 
 def _slot_title(key):
     """卡片标题（单行，紧凑）：`≡ dshV1 · 0.1.5-rc.2`。
@@ -2254,6 +2254,8 @@ def _make_taskbar_window(win):
       exstyle before = 0x80 (WS_EX_TOOLWINDOW) → after = 0x40000 (WS_EX_APPWINDOW)
       最小化后 IsIconic=True、state=iconic，任务栏出现按钮，恢复后 mapped=1。
     """
+    if not PLATFORM.IS_WINDOWS:
+        return
     try:
         import ctypes
         from ctypes import wintypes
@@ -2861,6 +2863,8 @@ def _pick_up(evt):
 
 
 def _drag_start(evt, key):
+    if BUSY.get("installing"):
+        return
     _abort_drop()                              # 上一张还在落位动画里就先收尾
     job = DRAG.get("lift_job")
     if job:
@@ -3505,7 +3509,7 @@ def _build_cards():
         # 用户问「安装的时候不能用其他的 dsh 版本么」）。安装只在新建的槽目录里
         # 跑 npm、往 config 加一条记录，不碰已有槽；装完之前新槽也不在界面上，
         # 所以冻住它们纯属过度保护。见 _actions_enabled(keep_run=)。
-        BUSY["card_run"].extend([_b_start, _b_stop])
+        BUSY["card_run"].extend([_b_start, _b_stop, _b_open, _b_copy])
         # 按钮也挂拖拽（手机那种"抓哪儿都能拖"）：松手时若真拖过，
         # _drag_end_btn 会 return "break" 把这次点击吞掉，不会误触发。
         for _b in (_b_start, _b_stop, _b_open, _b_copy, _b_pdir, _b_ddir):
@@ -3806,8 +3810,11 @@ class _GuiProgress(OPS.Progress if OPS else object):
         self.title = title
         self.done_cb = done_cb
         self.modal = modal
+        self.finished = False
         self.win = tk.Toplevel(root)
-        self.win.title(title)          # 无边框窗口看不见它，但任务栏 / Alt+Tab 要用
+        if not self.modal and BUSY["install_background"]:
+            self.win.withdraw()
+        self.win.title(title)
         self.win.resizable(False, False)
         # ── 自绘标题栏（2026-11-14 用户第二次反馈）────────────────────────────
         # 用户要的是「—」在**整个窗口的右上角**，跟正常窗口的最小化按钮同一个位置。
@@ -3818,10 +3825,9 @@ class _GuiProgress(OPS.Progress if OPS else object):
         # 早先试过这条路、结论是"最小化后任务栏没入口"，其实那是个可修的细节：
         # overrideredirect 让 Tk 给窗口加了 WS_EX_TOOLWINDOW，工具窗口不进任务栏。
         # 清掉它并加 WS_EX_APPWINDOW 就好了（见 _make_taskbar_window）。
-        self.win.overrideredirect(True)
-        # 图标要在 overrideredirect **之后**设：那一步会重建窗口（新 HWND），
-        # 之前设的图标会丢。
-        _apply_icon(self.win)          # 无边框窗口也要任务栏图标
+        if PLATFORM.IS_WINDOWS:
+            self.win.overrideredirect(True)
+        _apply_icon(self.win)
         _make_taskbar_window(self.win)
         try:
             self.win.configure(bg=_APP_BG)
@@ -3834,29 +3840,30 @@ class _GuiProgress(OPS.Progress if OPS else object):
         body = tk.Frame(_border, bg=_APP_BG)
         body.pack(fill="both", expand=True, padx=1, pady=1)
 
-        # 标题栏：标题在左、「—」在右，**同一行** —— 这才是"界面右上角"。
-        self.tbar = tk.Frame(body, bg=_APP_BG, height=34)
-        self.tbar.pack(fill="x")
-        self.tbar.pack_propagate(False)      # 不随子控件缩，固定 34px
-        self.tlabel = tk.Label(self.tbar, text=title, bg=_APP_BG, fg=_INK,
-                               font=("Segoe UI", 9), anchor="w")
-        self.tlabel.pack(side="left", padx=(12, 8))
-        # 「—」用 tk.Label 不用 tk.Button：Windows 上 tk.Button 是原生控件，
-        # `bg` 基本不生效，会在浅灰窗口上贴出一块白补丁（用户截图就是它）。
-        self.mini = tk.Label(self.tbar, text="—", bg=_APP_BG, fg=_MUTED,
-                             font=("Segoe UI", 11, "bold"), padx=14,
-                             cursor="hand2")
-        # fill="y" 让整个标题栏右端都是可点区域（跟系统按钮一样好点）。
-        self.mini.pack(side="right", fill="y")
-        self.mini.bind("<Button-1>", self._minimize)
-        # 悬停加深给一点反馈，但不写文字提示（界面不写「点这里如何如何」）。
-        self.mini.bind("<Enter>", lambda e: self.mini.configure(fg=_INK))
-        self.mini.bind("<Leave>", lambda e: self.mini.configure(fg=_MUTED))
-        # 无边框窗口得自己实现拖动；只让标题栏能拖，跟正常窗口一致。
-        for _w in (self.tbar, self.tlabel):
-            _w.bind("<Button-1>", self._drag_start)
-            _w.bind("<B1-Motion>", self._drag_move)
-        tk.Frame(body, bg=_DIVIDER, height=1).pack(fill="x")
+        if PLATFORM.IS_WINDOWS:
+            # 标题栏：标题在左、「—」在右，**同一行** —— 这才是"界面右上角"。
+            self.tbar = tk.Frame(body, bg=_APP_BG, height=34)
+            self.tbar.pack(fill="x")
+            self.tbar.pack_propagate(False)      # 不随子控件缩，固定 34px
+            self.tlabel = tk.Label(self.tbar, text=title, bg=_APP_BG, fg=_INK,
+                                   font=("Segoe UI", 9), anchor="w")
+            self.tlabel.pack(side="left", padx=(12, 8))
+            # 「—」用 tk.Label 不用 tk.Button：Windows 上 tk.Button 是原生控件，
+            # `bg` 基本不生效，会在浅灰窗口上贴出一块白补丁（用户截图就是它）。
+            self.mini = tk.Label(self.tbar, text="—", bg=_APP_BG, fg=_MUTED,
+                                 font=("Segoe UI", 11, "bold"), padx=14,
+                                 cursor="hand2")
+            # fill="y" 让整个标题栏右端都是可点区域（跟系统按钮一样好点）。
+            self.mini.pack(side="right", fill="y")
+            self.mini.bind("<Button-1>", self._minimize)
+            # 悬停加深给一点反馈，但不写文字提示（界面不写「点这里如何如何」）。
+            self.mini.bind("<Enter>", lambda e: self.mini.configure(fg=_INK))
+            self.mini.bind("<Leave>", lambda e: self.mini.configure(fg=_MUTED))
+            # 无边框窗口得自己实现拖动；只让标题栏能拖，跟正常窗口一致。
+            for _w in (self.tbar, self.tlabel):
+                _w.bind("<Button-1>", self._drag_start)
+                _w.bind("<B1-Motion>", self._drag_move)
+            tk.Frame(body, bg=_DIVIDER, height=1).pack(fill="x")
 
         self.lbl = ttk.Label(body, text=T("准备中…"), wraplength=420,
                              justify="left")
@@ -3874,6 +3881,27 @@ class _GuiProgress(OPS.Progress if OPS else object):
         self._center_on_root()
         if self.modal:
             self.win.grab_set()
+        else:
+            if not PLATFORM.IS_WINDOWS:
+                self.win.transient(root)
+            self.progress_button = ttk.Button(_hdr, text=T("安装进度…"), command=self._show_progress)
+            self.progress_button.pack(side="left", padx=(8, 0))
+            ttk.Label(body, text=T("可继续启停和访问已装槽。更改槽位的操作会在安装结束后恢复。"),
+                      wraplength=400).pack(padx=20, pady=(0, 6))
+            ttk.Button(body, text=T("在后台继续"), command=self._hide_progress).pack(pady=(0, 14))
+            self.win.protocol("WM_DELETE_WINDOW", self._hide_progress)
+            if not BUSY["install_background"]:
+                self.win.after_idle(self._show_progress)
+
+    def _hide_progress(self):
+        BUSY["install_background"] = True
+        self.win.withdraw()
+
+    def _show_progress(self):
+        if self.win.winfo_exists():
+            BUSY["install_background"] = False
+            self.win.deiconify()
+            self.win.lift()
 
     def _center_on_root(self):
         """把窗口摆到主窗口正中。overrideredirect 之后没有 WM 负责初始位置。"""
@@ -3979,6 +4007,11 @@ class _GuiProgress(OPS.Progress if OPS else object):
         _post_ui(self._finish, ok, payload, error)
 
     def _finish(self, ok, payload, error):
+        if self.finished:
+            return
+        self.finished = True
+        if not self.modal:
+            self.progress_button.destroy()
         try:
             self.bar.stop()
             self.win.grab_release()
@@ -4900,6 +4933,13 @@ def _install_queue(versions):
     中途失败**不中断**：失败的版本单独记下来，最后一次性告诉用户重试哪个 ——
     装 5 个版本时因为第 2 个网络抖动就整批停下，用户体验更差。
     """
+    if BUSY.get("installing"):
+        return
+    BUSY["installing"] = True
+    BUSY["install_background"] = False
+    settings = _SETTINGS_WIN.get("win")
+    if settings is not None and settings.winfo_exists():
+        settings.destroy()
     total = len(versions)
     results = []
     log(T("[安装] 队列：共 %d 个版本 —— %s") % (total, "、".join(versions)))
@@ -4911,6 +4951,8 @@ def _install_queue(versions):
             % "、".join("dsh%s" % k.upper() for k in _occ))
 
     def finish():
+        BUSY["installing"] = False
+        BUSY["install_background"] = False
         _actions_enabled(True)
         okr = [r for r in results if r[1]]
         badr = [r for r in results if not r[1]]
@@ -4919,21 +4961,27 @@ def _install_queue(versions):
             if ok:
                 lines.append(T("  ✓ %s → 槽 %s") % (ver, key))
             else:
-                first = (msg or T("原因未知")).strip().splitlines()[0][:120]
+                first = ((msg or "").strip() or T("原因未知")).splitlines()[0][:120]
                 lines.append("  ✗ %s —— %s" % (ver, first))
         body = "\n".join(lines)
+        log(T("[安装] 安装结束（成功 %d / 失败 %d）：%s")
+            % (len(okr), len(badr), body.replace("\n", " | ")))
+        if okr:
+            _restart_or_tell(T("槽列表"), [r[2] for r in okr if r[2]])
+        # A failed refresh can relaunch the manager.
+        try:
+            alive = root.winfo_exists()
+        except tk.TclError:
+            return
+        if not alive:
+            return
         if badr:
             messagebox.showwarning(
                 T("安装结束（成功 %d / 失败 %d）") % (len(okr), len(badr)),
-                T("%s\n\n失败的版本可以直接再点「安装官方版 dsh」重试。") % body)
+                T("%s\n\n失败的版本可以直接再点「安装官方版 dsh」重试。") % body,
+                parent=root)
         else:
-            messagebox.showinfo(T("安装成功"), body)
-        if okr:
-            # payload 是 _do_install.done 的局部变量，这个作用域里根本不存在。
-            # 2026-11-12 实测：装完 v2 弹了「安装成功」，然后这里 NameError，
-            # 被 Tk 的回调静默吞掉（pythonw 没有 stderr）→ 界面既不刷新也不
-            # 重启，用户只看到"装成功了但没多出卡片"。改用 results 里的槽键。
-            _restart_or_tell(T("槽列表"), [r[2] for r in okr if r[2]])
+            messagebox.showinfo(T("安装成功"), body, parent=root)
 
     def step(i):
         if i >= total:
@@ -4992,15 +5040,14 @@ def _do_install(version, slot_key, on_done=None, index=1, total=1):
     prog = _GuiProgress(title, done, modal=False)
 
     def work():
-        ok, payload, msg = OPS.run_official_install(
+        steps = OPS.Progress()
+        steps.on_step = prog.on_step
+        ok, installed_key, msg = OPS.run_official_install(
             dsh_adopt, version, CONFIG_PATH, INSTALL_BASE, slot_key,
-            _taken_ports(), progress=prog, max_slots=MAX_SLOTS,
+            _taken_ports(), progress=steps, max_slots=MAX_SLOTS,
             versions_root=_versions_root(), temp_root=_temp_root())
-        # 把说明塞进 payload：下面只用进度窗的 done_cb 回调一次，
-        # 不再把同一个 done 同时传给 run_in_thread（那会让它被调用两次：
-        # 一次在工作线程、一次在主线程 → 两个"安装成功"弹框 + 两次重启）。
-        if isinstance(payload, dict):
-            payload["message"] = msg
+        # The worker wrapper reports completion once, after the install returns.
+        payload = {"slot_key": installed_key, "message": msg} if ok else None
         return (ok, payload, msg)
 
     OPS.run_in_thread(work, prog, None)
@@ -5026,7 +5073,7 @@ def _actions_enabled(enabled, keep_run=False):
     为什么必须冻：这些操作会在磁盘上搬 node_modules、改 config.json，
     期间点「启动」会拉起一个半装状态的实例。冻住的按钮清单见 BUSY["btns"]。
 
-    `keep_run=True` 时**保留已装槽的「启动 / 停止」**（见 BUSY["card_run"]）。
+    `keep_run=True` 时保留已装槽的启动、停止和浏览器入口（见 BUSY["card_run"]）。
     只给「装新版本」用：安装只在新建的槽目录里跑 npm、往 config 加一条记录，
     既不杀进程也不动已有槽；装完之前新槽根本不在界面上，所以用户"边装边用
     别的版本"是安全的（2026-11-14 用户提出）。卸载 / 移出 / 移动仍然全冻 ——
@@ -5764,7 +5811,18 @@ def on_close():
         pass
     root.destroy()
 
-root.protocol("WM_DELETE_WINDOW", on_close)
+def _request_close():
+    if BUSY["installing"]:
+        messagebox.showinfo(T("正在安装 dsh"),
+                            T("请等安装结束后再退出管理器。可点安装进度窗的「在后台继续」。"),
+                            parent=root)
+        return
+    on_close()
+
+
+root.protocol("WM_DELETE_WINDOW", _request_close)
+if PLATFORM.IS_MAC:
+    root.createcommand("tk::mac::Quit", _request_close)
 
 # 启动日志
 log(T("=== 管理器启动 pid=%d ===") % os.getpid())
@@ -7964,6 +8022,8 @@ def settings_dialog():
     2026-11-01：加**单例保护**。非模态之后反复点「设置」会叠出多个窗口，
     用户实测反馈"出现过几个设置页面"。已有活着的窗口就提到前面，不再新建。
     """
+    if BUSY.get("installing"):
+        return
     try:
         w = _SETTINGS_WIN.get("win")
         if w is not None and w.winfo_exists():
@@ -8285,7 +8345,9 @@ def _settings_display_dialog():
 # （这个坑本项目踩过两次，C3/C8 组断言守着。）
 # 2026-11-01：标题栏只留「设置」一个入口。
 # 「关于」「★ 在 GitHub 收藏」都收进设置页（用户要求：初始界面只有槽 + 日志 + 全启停）。
-ttk.Button(_hdr, text=T("设置"), command=settings_dialog).pack(side="right", padx=(0, 6))
+_b_settings = ttk.Button(_hdr, text=T("设置"), command=settings_dialog)
+_b_settings.pack(side="right", padx=(0, 6))
+BUSY["btns"].append(_b_settings)
 # 2026-11-03 用户要求：「把在 github 上收藏还是放进设置界面，放最下面」
 # 两个全启停按钮：放在「设置」左侧（pack side=right 时后 pack 的在更左边）
 _b_stopall = ttk.Button(_hdr, text=T("全部停止"), style="Red.TButton",

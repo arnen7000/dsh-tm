@@ -281,7 +281,7 @@ _in = _fn_body("_do_install")
 chk("C3z 卸载把进度窗传进 uninstall_slots",
     "uninstall_slots(" in _un and "progress=prog" in _un)
 chk("C3z2 安装把进度窗传进 run_official_install",
-    "run_official_install(" in _in and "progress=prog" in _in)
+    "run_official_install(" in _in and "progress=steps" in _in and "steps.on_step = prog.on_step" in _in)
 # 2026-10-30 事故回归：删 switch-version.ps1 时漏改了安装流程，
 # 点「安装官方版」直接 [WinError 2] 找不到脚本。安装路径不许再引用外部脚本。
 chk("C3z2b 安装不再依赖外部脚本（原 WinError 2 回归）",
@@ -1347,6 +1347,10 @@ chk("C3z30b 自绘窗口清 WS_EX_TOOLWINDOW、加 WS_EX_APPWINDOW（任务栏�
     and "& ~WS_EX_TOOLWINDOW" in _mtb and "| WS_EX_APPWINDOW" in _mtb)
 chk("C3z30c 取 wm_frame 之前先 update（否则 HWND 还没建好，改样式静默失败）",
     _mtb.index("win.update()") < _mtb.index("wm_frame()"))
+chk("C3z30j Win32 任务栏入口只在 Windows 调用",
+    "if not PLATFORM.IS_WINDOWS:" in _mtb.split("ctypes.WinDLL")[0])
+chk("C3z30k Mac 进度窗使用系统标题栏",
+    re.search(r"if PLATFORM\.IS_WINDOWS:\n\s+self\.win\.overrideredirect\(True\)", _gp) is not None)
 chk("C3z30d WM_DELETE_WINDOW 仍兜住 Alt+F4 / 任务栏关闭",
     'WM_DELETE_WINDOW' in _gp)
 chk("C3z30e 无边框窗口自己实现拖动（只有标题栏能拖，跟正常窗口一致）",
@@ -1421,6 +1425,13 @@ chk("C3z33c 安装队列冻结时带 keep_run=True",
     "_actions_enabled(False, keep_run=True)" in _iq)
 chk("C3z33d 装新版本的进度窗非模态（modal=False），不锁主界面",
     "_GuiProgress(title, done, modal=False)" in _fn_body("_do_install"))
+chk("C3z33i 安装进度能转到后台并从主界面打开",
+    'text=T("安装进度…"), command=self._show_progress' in _gp
+    and 'text=T("在后台继续"), command=self._hide_progress' in _gp
+    and 'self.progress_button.destroy()' in src)
+chk("C3z33j 安装期间阻止重复安装和打开设置",
+    'if BUSY.get("installing"):' in _iq
+    and 'if BUSY.get("installing"):' in _fn_body("settings_dialog"))
 # 卸载 / 移出 / 移动必须仍然是全模态全冻结 —— 那几个会删或搬磁盘上的东西
 for _fn_name in ("_do_uninstall", "_do_detach", "_do_move"):
     _b = _fn_body(_fn_name)
@@ -1429,7 +1440,7 @@ for _fn_name in ("_do_uninstall", "_do_detach", "_do_move"):
     chk("C3z33e %s 仍全冻结（不带 keep_run）" % _fn_name,
         "keep_run" not in _b)
 chk("C3z33f 卡片创建时把启动/停止单独登记进 card_run",
-    'BUSY["card_run"].extend([_b_start, _b_stop])' in src)
+    'BUSY["card_run"].extend([_b_start, _b_stop, _b_open, _b_copy])' in src)
 chk("C3z33g 重画卡片要清空 card_run（否则残留已销毁的按钮）",
     'BUSY["card_run"] = []' in _fn_body("_clear_cards"))
 # ── C3z34：切换界面语言不该要求重启（2026-11-14 用户反馈）────────────────

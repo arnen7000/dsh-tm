@@ -16,6 +16,44 @@ import dsh_install_ops
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS")
 class MacPlatformTests(unittest.TestCase):
+    def test_staged_npm_timeout_reports_timeout_and_leaves_config_unchanged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            config = base / "config.json"
+            config.write_text('{"versions":{}}', encoding="utf-8")
+            before = config.read_bytes()
+            versions = base / "versions"
+            target = versions / "dshV2"
+            with patch.object(dsh_install_ops, "_pick_node_exe", return_value="/fixture/node"), \
+                    patch.object(dsh_adopt, "copy_node_exe", return_value=("/fixture/node", "")), \
+                    patch.object(dsh_install_ops, "_npm_install_slot",
+                                 return_value=(124, "npm warn deprecated fixture")):
+                ok, key, message = dsh_install_ops._staged_mac_install(
+                    dsh_adopt, "0.2.2-rc.5", "v2", str(target), str(versions),
+                    directory, str(config), 5080, "default", dsh_install_ops.Progress())
+            self.assertFalse(ok)
+            self.assertEqual(key, "")
+            self.assertIn("超时（10 分钟）", message)
+            self.assertNotIn("deprecated", message)
+            self.assertEqual(config.read_bytes(), before)
+            self.assertEqual(list(versions.iterdir()), [])
+
+    def test_mac_npm_timeout_retries_with_mirror_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "package.json").write_text("{}", encoding="utf-8")
+            with patch.object(dsh_install_ops, "_npm_cli", return_value=("/fixture/node", "/fixture/npm")), \
+                    patch.object(dsh_install_ops, "_pick_registry", return_value=(True, "", "")), \
+                    patch.object(dsh_install_ops, "_run_npm",
+                                 side_effect=[(124, "only a warning"), (0, "installed")]) as run:
+                rc, _ = dsh_install_ops._npm_install_slot("/fixture/node", directory, "0.2.2-rc.5")
+            self.assertEqual(rc, 0)
+            self.assertEqual(run.call_count, 2)
+            first, retry = (call.args[2] for call in run.call_args_list)
+            self.assertIn("--fetch-timeout=45000", first)
+            self.assertIn("--prefer-offline", first)
+            self.assertNotIn("--registry", first)
+            self.assertEqual(retry[-2:], ["--registry", dsh_install_ops.FALLBACK_REGISTRY])
+
     def test_legacy_base_resolves_only_when_old_slot_exists(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory) / "Library/Application Support/DSH-TM"
