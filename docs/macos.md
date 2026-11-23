@@ -6,7 +6,7 @@ architectures.
 
 ## 使用 App
 
-1. 在 [GitHub Releases](https://github.com/arnen7000/dsh-tm/releases/tag/v0.1.11) 下载对应架构的
+1. 在 [GitHub Releases](https://github.com/arnen7000/dsh-tm/releases/latest) 下载对应架构的
    App ZIP 和同名 `.sha256`。Apple Silicon 选 `macos-arm64`，Intel 选 `macos-x64`。
 2. 核对清单后解压，把 `DSH-TM.app` 移到「应用程序」。`v0.1.11-preview.1` 的包内名称为 `DS-Manager.app`。
 3. 双击启动，选择「安装官方版 dsh」或纳入已有 npm 版。管理器内置 Python/Tk、
@@ -14,9 +14,18 @@ architectures.
 4. 用槽位卡片打开浏览器。需要从终端运行槽时，在槽目录运行
    `./dsh.command` 或 `./dsh-cli.command`。停止脚本会核对该槽的进程身份。
 
-GitHub v0.1.11 的 `-unsigned` ZIP 使用临时签名，尚未做 Developer ID 签名和 Apple 公证。
+GitHub 上名称带 `-unsigned` 的 ZIP 使用临时签名，尚未做 Developer ID 签名和 Apple 公证。
 macOS 可能阻止首次启动。核对来源和 SHA-256 后，可按 [Apple 的打开方式](https://support.apple.com/zh-cn/102445)
 为此 App 单独确认打开。
+
+### 安装进行中
+
+安装进度窗随管理器显示。「在后台继续」会隐藏进度窗，可从主界面的「安装进度」重新打开。
+这期间已有槽仍可启动、停止、打开浏览器或复制入口。设置和更改槽会暂停。关闭主窗或用 Command-Q 退出时，管理器会提示先等待安装结束。
+安装结束时刷新槽位，并在窗口和日志里汇总成功与失败。遇到下载超时可重试，未完成的安装会清除暂存文件。
+
+维护者可在原生 Mac 上对解压后的包运行 `python3 scripts/test-macos-app.py --app /path/to/DSH-TM.app --dsh-version 0.2.2-rc.5`。
+该检查使用隔离配置验证安装、认证访问、启停和端口释放。进度窗和后台队列可用 `python3 scripts/test-macos-install-gui.py` 单独回归。
 
 App 和源码默认共用 `~/Library/Application Support/DSH-TM/config.json`。
 首次启动 Web 可能需要安装插件。等待 20 秒后，管理器会显示启动等候超时，CLI 默认返回失败，

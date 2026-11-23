@@ -59,7 +59,7 @@ def verify_gui_start(exe, config):
                 assert code == 0, ("Packaged manager did not quit normally", code)
 
 
-def run(app, gui=True):
+def run(app, gui=True, dsh_version=DSH_VERSION):
     app = app.resolve()
     with (app / "Contents/Info.plist").open("rb") as source:
         info = plistlib.load(source)
@@ -87,7 +87,7 @@ def run(app, gui=True):
             verify_gui_start(exe, config)
 
         ok, key, detail = dsh_install_ops.run_official_install(
-            dsh_adopt, DSH_VERSION, str(config), str(base), "v1", [])
+            dsh_adopt, dsh_version, str(config), str(base), "v1", [])
         if not ok:
             raise RuntimeError(detail)
         saved = json.loads(config.read_text(encoding="utf-8-sig"))
@@ -147,12 +147,13 @@ def run(app, gui=True):
         finally:
             if dsh_slot_process.port_reachable(port):
                 dsh_slot_process.stop_slot(slot["bin_js"], port)
-        print("Packaged dsh lifecycle passed")
+        print("Packaged dsh lifecycle passed for " + dsh_version)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--app", type=Path, required=True)
     parser.add_argument("--skip-gui", action="store_true")
+    parser.add_argument("--dsh-version", default=DSH_VERSION)
     options = parser.parse_args()
-    run(options.app, gui=not options.skip_gui)
+    run(options.app, gui=not options.skip_gui, dsh_version=options.dsh_version)

@@ -20,6 +20,7 @@ import filecmp
 import json
 import os
 import shutil
+import signal
 import subprocess
 import threading
 import tempfile
@@ -743,8 +744,15 @@ def _staged_mac_install(adopt_mod, version, key, root, versions_root,
             rc, output = _npm_install_slot(node, payload, version, progress=progress)
             package = os.path.join(payload, "node_modules", "@deepseek-ai", "dsh")
             entry = os.path.join(package, "lib", "bin.js")
-            if rc or not os.path.isfile(entry):
-                return False, "", T("安装失败：%s") % _tail(output)
+            if rc == NPM_TIMEOUT_EXIT:
+                return False, "", T("npm 安装超时（%d 分钟），已清理本次暂存文件。") % (NPM_TIMEOUT_SECONDS // 60)
+            if rc:
+                errors = [line for line in (output or "").splitlines()
+                          if line.strip().lower().startswith(("npm error", "npm err!"))]
+                detail = _tail("\n".join(errors) if errors else output)
+                return False, "", T("npm 安装失败（退出码 %d）：%s") % (rc, detail)
+            if not os.path.isfile(entry):
+                return False, "", T("npm 安装结束，但没有找到 dsh 程序入口。")
             actual = adopt_mod.read_package_version(package)
             if not actual or (version[0].isdigit() and actual != version):
                 return False, "", T("npm 安装结果与请求版本不一致。")
@@ -1245,6 +1253,13 @@ def _npm_env(node_exe):
     return env
 
 
+NPM_TIMEOUT_SECONDS = 600
+NPM_TIMEOUT_EXIT = 124
+_NPM_FETCH_RETRY = ("--fetch-retries=1", "--fetch-retry-mintimeout=3000",
+                    "--fetch-retry-maxtimeout=15000")
+_MAC_NPM_FETCH = ("--prefer-offline", "--fetch-timeout=45000")
+
+
 def _run_npm(node_exe, npm_cli, args, cwd=None):
     """跑一次 npm，返回 (rc, 输出文本)。
 
@@ -1260,14 +1275,22 @@ def _run_npm(node_exe, npm_cli, args, cwd=None):
         with open(tmp, "wb") as out:
             proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT,
                                     cwd=cwd or None, env=_npm_env(node_exe),
+                                    start_new_session=PLATFORM.IS_MAC,
                                     creationflags=getattr(subprocess,
-                                                          "CREATE_NO_WINDOW", 0))
+                                                          "CREATE_NO_WINDOW", 0) if PLATFORM.IS_WINDOWS else 0)
             try:
-                rc = proc.wait(timeout=600)
+                rc = proc.wait(timeout=NPM_TIMEOUT_SECONDS)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                if PLATFORM.IS_MAC:
+                    # npm lifecycle children can still have the staged slot open.
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                else:
+                    proc.kill()
                 proc.wait()
-                rc = 124
+                rc = NPM_TIMEOUT_EXIT
     except Exception as e:
         os.unlink(tmp)
         return (-1, T("无法启动 npm（%s）：%s") % (node_exe, e))
@@ -1306,6 +1329,10 @@ def _looks_like_network_error(text):
     return any(sig in t for sig in _NET_SIGNATURES)
 
 
+def _registry_unreachable(rc, output):
+    return rc < 0 or (PLATFORM.IS_MAC and rc == NPM_TIMEOUT_EXIT) or _looks_like_network_error(output)
+
+
 def _pick_registry(node_exe, npm_cli, spec, slow_secs=4.0):
     """npm view 预检：确认 <spec> 存在，并挑出可用的 registry。
 
@@ -1323,9 +1350,12 @@ def _pick_registry(node_exe, npm_cli, spec, slow_secs=4.0):
 
     def _probe(reg):
         t0 = time.monotonic()
-        rc, out = _run_npm(node_exe, npm_cli,
-                           ["view", spec, "version"] +
-                           (["--registry", reg] if reg else []))
+        args = ["view", spec, "version"]
+        if PLATFORM.IS_MAC:
+            args.extend(_NPM_FETCH_RETRY + _MAC_NPM_FETCH)
+        if reg:
+            args.extend(("--registry", reg))
+        rc, out = _run_npm(node_exe, npm_cli, args)
         return rc, out, (time.monotonic() - t0)
 
     rc, out, dt = _probe("")
@@ -1338,7 +1368,7 @@ def _pick_registry(node_exe, npm_cli, spec, slow_secs=4.0):
         if rc2 == 0 and dt2 < dt:
             return (True, FALLBACK_REGISTRY, "")
         return (True, "", "")
-    if not (rc < 0 or _looks_like_network_error(out)):
+    if not _registry_unreachable(rc, out):
         # 到这里才是真的「版本不存在」（E404/ETARGET）。换源也没用，直接报。
         return (False, "", T("npm 上找不到 %s（npm 默认源 返回 %d）。\n%s\n"
                            "请确认版本号是否写对（可用 npm view @deepseek-ai/dsh "
@@ -1349,7 +1379,7 @@ def _pick_registry(node_exe, npm_cli, spec, slow_secs=4.0):
     tried.append(FALLBACK_REGISTRY)
     if rc2 == 0:
         return (True, FALLBACK_REGISTRY, "")
-    if not (rc2 < 0 or _looks_like_network_error(out2)):
+    if not _registry_unreachable(rc2, out2):
         return (False, "", T("npm 上找不到 %s（镜像 返回 %d）。\n%s\n"
                            "请确认版本号是否写对（可用 npm view @deepseek-ai/dsh "
                            "versions 查全部版本）。")
@@ -1392,18 +1422,21 @@ def _npm_install_slot(node_exe, slot_dir, version, progress=None):
     p.on_step(T("下载并安装 %s（要几分钟，请勿关闭管理器）…") % spec)
     # npm 默认会为 ECONNRESET 自己重试很久（实测整段 5 分钟才报错）。这里把重试
     # 压到 1 次、退避上限 15 秒 —— 失败要快，好让下面的"换镜像重试"接上。
-    fast_fail = ["--fetch-retries=1",
-                 "--fetch-retry-mintimeout=3000",
-                 "--fetch-retry-maxtimeout=15000"]
+    fast_fail = list(_NPM_FETCH_RETRY)
     if PLATFORM.IS_MAC:
-        fast_fail.append("--engine-strict")
+        fast_fail.extend(("--engine-strict",) + _MAC_NPM_FETCH)
     args = ["install", spec] + fast_fail + (["--registry", reg] if reg else [])
     rc, out = _run_npm(exe, cli, args, cwd=slot_dir)
     # 网络中断（ECONNRESET / ETIMEDOUT / EAI_AGAIN …）→ 换镜像重试一次。
     # 判据是**输出内容**，不是退出码：npm 这里返回的是 1，不是负数。
-    if rc != 0 and not reg and _looks_like_network_error(out):
-        p.on_step(T("默认源网络中断，改用镜像 %s 重试一次（只影响本次安装）…")
-                  % FALLBACK_REGISTRY)
+    timed_out_on_mac = PLATFORM.IS_MAC and rc == NPM_TIMEOUT_EXIT
+    if rc != 0 and not reg and (timed_out_on_mac or _looks_like_network_error(out)):
+        if timed_out_on_mac:
+            p.on_step(T("默认源安装超时，改用镜像 %s 重试一次（只影响本次安装）…")
+                      % FALLBACK_REGISTRY)
+        else:
+            p.on_step(T("默认源网络中断，改用镜像 %s 重试一次（只影响本次安装）…")
+                      % FALLBACK_REGISTRY)
         rc, out = _run_npm(exe, cli, ["install", spec] + fast_fail +
                            ["--registry", FALLBACK_REGISTRY],
                            cwd=slot_dir)
