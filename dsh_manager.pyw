@@ -4584,6 +4584,8 @@ def scan_and_offer_adopt():
     扫描只在这个按钮被点的时候发生，每次都是当场查磁盘；勾了就纳入，
     没勾就什么都不做，下次点还会重新列出来。
     """
+    if BUSY["installing"]:
+        return
     if dsh_adopt is None:
         messagebox.showerror(T("无法扫描"), T("缺少 dsh_adopt.py 模块。"))
         return
@@ -4824,6 +4826,8 @@ def install_official_version():
     `0.2.0-rc.2, 0.2.1-alpha.2`。安装按填写顺序逐个进行（每个装进当时的下一个
     空槽），中途某个失败不影响后面的，全部结束后只重启一次管理器。
     """
+    if BUSY["installing"]:
+        return
     if OPS is None or dsh_adopt is None:
         messagebox.showerror(T("无法安装"), T("缺少 dsh_install_ops.py / dsh_adopt.py 模块。"))
         return
@@ -6043,11 +6047,12 @@ def _build_fresh_guide():
 
         _b = ttk.Frame(_f, style="Card.TFrame")
         _b.pack(anchor="w")
-        ttk.Button(_b, text=T("安装 dsh"), style="Brand.TButton",
-                   command=install_official_version).pack(side="left", padx=(0, 8))
-        ttk.Button(_b, text=T("扫描并纳入"),
-                   command=lambda: scan_and_offer_adopt()
-                   ).pack(side="left")
+        install_button = ttk.Button(_b, text=T("安装 dsh"), style="Brand.TButton",
+                                    command=install_official_version)
+        install_button.pack(side="left", padx=(0, 8))
+        adopt_button = ttk.Button(_b, text=T("扫描并纳入"), command=scan_and_offer_adopt)
+        adopt_button.pack(side="left")
+        BUSY["card"].extend((install_button, adopt_button))
     except Exception as e:
         log(T("[引导] 零槽引导构建失败（不影响使用，可在「设置 → 版本管理」里安装）：%s") % e)
 

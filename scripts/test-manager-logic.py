@@ -639,8 +639,8 @@ chk("C8d 零槽时画空槽卡片而非空白页",
     or "_build_fresh_guide" in src)
 chk("C8e 零槽引导提供安装与纳入两个入口",
     # 2026-11-01 定稿：不再画假槽卡，改为一段说明 + 两个真按钮
-    "install_official_version" in _fn_body("_build_fresh_guide")
-    and "scan_and_offer_adopt()" in _fn_body("_build_fresh_guide"))
+    "command=install_official_version" in _fn_body("_build_fresh_guide")
+    and "command=scan_and_offer_adopt" in _fn_body("_build_fresh_guide"))
 chk("C8e2 零槽时不再有「快速开始」大卡片（与底部按钮重复）",
     'text=T("快速开始")' not in src)
 chk("C8f 示例配置是零槽",

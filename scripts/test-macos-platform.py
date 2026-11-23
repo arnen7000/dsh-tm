@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -16,6 +17,35 @@ import dsh_install_ops
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS")
 class MacPlatformTests(unittest.TestCase):
+    def test_npm_timeout_also_stops_lifecycle_children(self):
+        child = (
+            "from pathlib import Path; import time; "
+            "Path('started').touch(); time.sleep(2); Path('survived').touch()"
+        )
+        parent = (
+            "import subprocess, sys, time; "
+            f"subprocess.Popen([sys.executable, '-c', {child!r}]); time.sleep(10)"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(dsh_install_ops, "NPM_TIMEOUT_SECONDS", 1):
+                rc, _ = dsh_install_ops._run_npm(sys.executable, "-c", [parent], cwd=directory)
+            self.assertEqual(rc, dsh_install_ops.NPM_TIMEOUT_EXIT)
+            self.assertTrue((Path(directory) / "started").is_file())
+            time.sleep(1.5)
+            self.assertFalse((Path(directory) / "survived").exists())
+
+    def test_mac_view_timeout_uses_mirror_and_reports_network_failure(self):
+        with patch.object(dsh_install_ops, "_run_npm", return_value=(124, "")) as run:
+            ok, registry, message = dsh_install_ops._pick_registry(
+                "node", "npm", "@deepseek-ai/dsh@0.2.2-rc.5")
+        self.assertFalse(ok)
+        self.assertEqual(registry, "")
+        self.assertIn("均不可达", message)
+        self.assertEqual(run.call_count, 2)
+        first, second = (call.args[2] for call in run.call_args_list)
+        self.assertIn("--fetch-timeout=45000", first)
+        self.assertEqual(second[-2:], ["--registry", dsh_install_ops.FALLBACK_REGISTRY])
+
     def test_staged_npm_timeout_reports_timeout_and_leaves_config_unchanged(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

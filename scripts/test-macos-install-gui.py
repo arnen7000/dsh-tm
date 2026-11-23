@@ -19,12 +19,15 @@ sys.path.insert(0, str(REPO))
 import dsh_install_ops as ops
 
 names = {"_make_taskbar_window", "_GuiProgress", "_install_queue", "_do_install",
-         "_actions_enabled", "_request_close"}
+         "_actions_enabled", "_request_close", "_build_fresh_guide",
+         "install_official_version", "scan_and_offer_adopt"}
 parsed = ast.parse((REPO / "dsh_manager.pyw").read_text(encoding="utf-8"))
 root = tk.Tk()
 root.geometry("720x420")
 header = ttk.Frame(root)
 header.pack(fill="x")
+cards = ttk.Frame(root)
+cards.pack(fill="x")
 stoppable = ttk.Button(root, text="Start existing")
 browser = ttk.Button(root, text="Open existing")
 settings_button = ttk.Button(root, text="Settings")
@@ -68,6 +71,7 @@ env = {
     "_restart_or_tell": lambda what, keys: events.append(("refresh", keys)),
     "messagebox": SimpleNamespace(showwarning=notify, showinfo=notify, showerror=notify),
     "on_close": lambda: events.append(("close",)),
+    "cards_frame": cards, "SLOT_KEYS": [], "_clear_cards": lambda: None,
 }
 definitions = [node for node in parsed.body
                if isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in names]
@@ -105,6 +109,10 @@ def descendants(widget):
 
 
 try:
+    env["_build_fresh_guide"]()
+    empty_slot_buttons = [widget for widget in descendants(cards) if isinstance(widget, ttk.Button)]
+    assert len(empty_slot_buttons) == 2
+    assert all(not button.instate(["disabled"]) for button in empty_slot_buttons)
     env["_install_queue"](["0.2.2-rc.5", "0.2.2-rc.4"])
     pump(lambda: len(attempts) == 1 and progresses[0].lbl.cget("text") == "Download")
     first = progresses[0]
@@ -112,6 +120,10 @@ try:
     assert not first.win.overrideredirect() and root.grab_current() is None
     assert not stoppable.instate(["disabled"]) and not browser.instate(["disabled"])
     assert settings_button.instate(["disabled"])
+    assert all(button.instate(["disabled"]) for button in empty_slot_buttons)
+    env["install_official_version"]()
+    env["scan_and_offer_adopt"]()
+    assert not events
     env["_request_close"]()
     assert len(events) == 1 and events.pop()[:2] == ("notice", "正在安装 dsh")
     hide = next(widget for widget in descendants(first.win)
@@ -135,6 +147,7 @@ try:
     assert events[0] == ("refresh", ["v2"]), events
     assert "成功 1 / 失败 1" in events[1][1] and "timed out" in events[1][2], events
     assert not busy["installing"] and not settings_button.instate(["disabled"])
+    assert all(not button.instate(["disabled"]) for button in empty_slot_buttons)
     assert len(attempts) == 2 and not header.winfo_children()
     assert sum("[安装] 安装结束" in line for line in logs) == 1, logs
     env["_request_close"]()
