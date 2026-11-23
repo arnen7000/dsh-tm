@@ -6,7 +6,7 @@ architectures.
 
 ## 使用 App
 
-1. 在 [GitHub Releases](https://github.com/arnen7000/dsh-tm/releases/tag/v0.1.11) 下载对应架构的
+1. 在 [GitHub Releases](https://github.com/arnen7000/dsh-tm/releases/latest) 下载对应架构的
    App ZIP 和同名 `.sha256`。Apple Silicon 选 `macos-arm64`，Intel 选 `macos-x64`。
 2. 核对清单后解压，把 `DSH-TM.app` 移到「应用程序」。`v0.1.11-preview.1` 的包内名称为 `DS-Manager.app`。
 3. 双击启动，选择「安装官方版 dsh」或纳入已有 npm 版。管理器内置 Python/Tk、
@@ -14,7 +14,7 @@ architectures.
 4. 用槽位卡片打开浏览器。需要从终端运行槽时，在槽目录运行
    `./dsh.command` 或 `./dsh-cli.command`。停止脚本会核对该槽的进程身份。
 
-GitHub v0.1.11 的 `-unsigned` ZIP 使用临时签名，尚未做 Developer ID 签名和 Apple 公证。
+GitHub 上名称带 `-unsigned` 的 ZIP 使用临时签名，尚未做 Developer ID 签名和 Apple 公证。
 macOS 可能阻止首次启动。核对来源和 SHA-256 后，可按 [Apple 的打开方式](https://support.apple.com/zh-cn/102445)
 为此 App 单独确认打开。
 

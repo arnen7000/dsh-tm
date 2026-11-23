@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  RELEASE_VERSION: '0.1.11'
+  RELEASE_VERSION: '0.1.12'
 
 jobs:
   package:
@@ -58,6 +58,8 @@ jobs:
           DSH_TEST_NODE="$RUNNER_TEMP/extracted/DSH-TM.app/Contents/Resources/runtime/node/bin/node" \
             python scripts/test-slot-process.py
           python scripts/test-macos-app.py --app "$RUNNER_TEMP/extracted/DSH-TM.app"
+          python scripts/test-macos-app.py --app "$RUNNER_TEMP/extracted/DSH-TM.app" \
+            --skip-gui --dsh-version 0.2.2-rc.5
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-${{ matrix.arch }}-unsigned
@@ -74,7 +76,7 @@ jobs:
       (github.ref == 'refs/heads/codex/macos-support' || github.ref == 'refs/heads/main')
     uses: ./.github/workflows/windows-release.yml
     with:
-      version: '0.1.11'
+      version: '0.1.12'
 
   publish-github:
     name: Publish tested GitHub release packages
@@ -82,11 +84,11 @@ jobs:
     if: >-
       github.repository == 'arnen7000/dsh-tm' &&
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-      startsWith(github.event.head_commit.message, 'chore(release): publish GitHub v0.1.11')
+      startsWith(github.event.head_commit.message, 'chore(release): publish GitHub v0.1.12')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
-      group: dsh-tm-release-v0.1.11
+      group: dsh-tm-release-v0.1.12
     permissions:
       contents: write
     steps:
@@ -121,18 +123,18 @@ jobs:
           fi
 
           cat > release-notes.md <<'EOF'
-          DSH 管理器（DSH-TM）首个同时支持 Windows 和 macOS 的正式 GitHub 版本。
-          两个平台共用六槽管理、配置体检和 CLI。此版本修复了 macOS 设置窗吸附和滚动、
-          卸载完成后进度窗卡住，以及浏览器认证入口的提示。
+          此版修复 macOS 安装进度窗被主界面遮挡、npm 超时误报和超时后残留子进程的问题。
+          可从进度窗主动转入后台，安装期间继续使用已装槽。结束后刷新槽位并汇总成功与失败。
 
-          - Windows x64 下载 `dsh-tm-0.1.11-portable.zip`。
-          - Apple Silicon 下载 `DSH-TM-0.1.11-macos-arm64-unsigned.zip`。
-          - Intel Mac 下载 `DSH-TM-0.1.11-macos-x64-unsigned.zip`。
+          - Windows x64 下载 `dsh-tm-0.1.12-portable.zip`。
+          - Apple Silicon 下载 `DSH-TM-0.1.12-macos-arm64-unsigned.zip`。
+          - Intel Mac 下载 `DSH-TM-0.1.12-macos-x64-unsigned.zip`。
 
-          Mac 包使用临时签名，尚未取得 Developer ID 签名或 Apple 公证。macOS 可能拦截首次启动。最低部署目标为 macOS 13.5，双架构完整生命周期在 macOS 15 实测。
+          Mac 包使用临时签名，尚未取得 Developer ID 签名或 Apple 公证。macOS 可能拦截首次启动。
+          最低部署目标为 macOS 13.5。两种架构在 macOS 15 运行了 0.2.2-rc.1 和 0.2.2-rc.5 的安装、认证及启停验收。
 
-          [Mac 安装与首次启动说明](https://github.com/arnen7000/dsh-tm/blob/v0.1.11/docs/macos.md) ·
-          [交付范围、决策和验收记录](https://github.com/arnen7000/dsh-tm/blob/v0.1.11/docs/release-v0.1.11.md)
+          [Mac 安装与首次启动说明](https://github.com/arnen7000/dsh-tm/blob/v0.1.12/docs/macos.md) ·
+          [变更记录](https://github.com/arnen7000/dsh-tm/blob/v0.1.12/CHANGELOG.md)
 
           ## SHA-256
           EOF
@@ -241,7 +243,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
-      group: dsh-tm-release-v0.1.11
+      group: dsh-tm-release-v0.1.12
     permissions:
       contents: write
     steps:
@@ -283,11 +285,11 @@ jobs:
           done
 
           cat > release-notes.md <<'EOF'
-          首个同时支持 Windows 和 macOS 的正式版本。两平台共用六槽管理、设置、体检和 CLI。
+          此版修复安装进度和 npm 超时反馈。两平台共用六槽管理、设置、体检和 CLI。
 
-          - Windows 10 / 11 x64 下载 `dsh-tm-0.1.11-portable.zip`。
-          - Apple Silicon 下载 `DSH-TM-0.1.11-macos-arm64.zip`。
-          - Intel Mac 下载 `DSH-TM-0.1.11-macos-x64.zip`。
+          - Windows 10 / 11 x64 下载 `dsh-tm-0.1.12-portable.zip`。
+          - Apple Silicon 下载 `DSH-TM-0.1.12-macos-arm64.zip`。
+          - Intel Mac 下载 `DSH-TM-0.1.12-macos-x64.zip`。
 
           macOS 的最低部署目标是 13.5。Apple Silicon 和 Intel 均在 macOS 15 通过安装、认证访问和停机测试。两个 App 已使用 Developer ID 签名，并经 Apple 公证和票据装订。
 
