@@ -255,7 +255,6 @@ def check_min_version_claim():
         (r"\bremoveprefix\(|\bremovesuffix\(", "3.9", "str.removeprefix/suffix"),
         (r"\bfunctools\s*\.\s*cache\b", "3.9", "functools.cache"),
         (r"\bgraphlib\b|\bzoneinfo\b", "3.9", "graphlib / zoneinfo"),
-        (r":\s*[\w\.]+\s*\|\s*(None|[\w\.]+)\s*[,)=]", "3.10", T("X | Y 类型注解")),
         (r"\bdirs\(\s*\)", "3.10", T("dirs() 无参调用")),
     ]
     files = ["dsh_manager.pyw", "dsh_kill.py", "dsh_adopt.py",
@@ -267,15 +266,23 @@ def check_min_version_claim():
         p = os.path.join(ROOT, rel)
         if not os.path.isfile(p):
             continue
-        src = open(p, encoding="utf-8").read()
+        with open(p, encoding="utf-8") as source:
+            src = source.read()
         for pat, ver, desc in PATTERNS:
             if _re.search(pat, src):
                 problems.append(T("%s 用了 %s（需 %s+）") % (rel, desc, ver))
-        # AST 确认 match 语句（正则可能漏）
+        # Inspect annotation nodes so regex alternatives do not look like unions.
         try:
             for n in ast.walk(ast.parse(src)):
                 if type(n).__name__ == "Match":
                     problems.append(T("%s 第 %d 行有 match 语句（需 3.10+）") % (rel, n.lineno))
+                annotation = (n.returns if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                              else getattr(n, "annotation", None))
+                if annotation is not None and any(
+                        isinstance(part, ast.BinOp) and isinstance(part.op, ast.BitOr)
+                        for part in ast.walk(annotation)):
+                    problems.append(T("%s 用了 %s（需 %s+）")
+                                    % (rel, T("X | Y 类型注解"), "3.10"))
         except SyntaxError as e:
             problems.append(T("%s 语法错误：%s") % (rel, e))
     if problems:

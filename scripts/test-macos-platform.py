@@ -1,4 +1,5 @@
 """Exercise the shared Darwin paths and standalone launchers without an npm download."""
+import ast
 import os
 from pathlib import Path
 import subprocess
@@ -17,6 +18,26 @@ import dsh_install_ops
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS")
 class MacPlatformTests(unittest.TestCase):
+    def test_source_version_check_distinguishes_annotations_from_regex_strings(self):
+        script = Path(__file__).with_name("check-env.py").read_text(encoding="utf-8")
+        definitions = [node for node in ast.parse(script).body
+                       if isinstance(node, ast.FunctionDef) and node.name == "check_min_version_claim"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "dsh_install_ops.py").write_text(
+                'pattern = r"(?:ETARGET|E404)"\n', encoding="utf-8")
+            (root / "dsh_adopt.py").write_text(
+                "def choose(value: str | None) -> str:\n    return value or ''\n",
+                encoding="utf-8")
+            problems = []
+            namespace = {"ROOT": directory, "os": os, "MIN_PY": (3, 8), "T": lambda text: text,
+                         "bad": problems.append, "ok": lambda text: None}
+            exec(compile(ast.Module(body=definitions, type_ignores=[]), "check-env.py", "exec"), namespace)
+            namespace["check_min_version_claim"]()
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("dsh_adopt.py", problems[0])
+        self.assertIn("3.10", problems[0])
+
     def test_zero_slot_check_does_not_warn_about_missing_slot_directories(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
