@@ -209,15 +209,25 @@ try:
         "%s / %s" % (new["extra_args"][i + 1], new["port"]))
     chk("端口避开已用的 4080", new["port"] != 4080, str(new["port"]))
 
-    # 再纳入一份 -> 目录名加后缀
+    # 预先占用 dshV3，第二次纳入必须保留这个目录并选新位置。
+    occupied = os.path.join(vroot, "dshV3")
+    os.makedirs(occupied)
+    marker = os.path.join(occupied, "keep.txt")
+    with open(marker, "w", encoding="utf-8") as f:
+        f.write("existing directory")
     nm2 = os.path.join(tmp, "npm2", "node_modules")
     make_dsh(nm2, "0.1.7-rc.1")
     ok2, key2, msg2 = O.adopt_existing(A, nm2, vroot, cfgp, "v3", [4080, new["port"]],
                                        node_exe_source=node_src)
     chk("第二份也成功", ok2 is True, msg2)
     d2 = O.read_config(cfgp)
+    second = d2["versions"].get("v3", {})
+    second_entry = O.PLATFORM.resolve_path(second.get("bin_js", ""), tmp)
+    expected_entry = os.path.join(vroot, "dshV3-2", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js")
     chk("目录名加数字后缀避让",
-        os.path.isdir(os.path.join(vroot, "dshV3")) is False or True, "")
+        key2 == "v3" and os.path.normcase(second_entry) == os.path.normcase(expected_entry)
+        and os.path.isfile(second_entry), second_entry)
+    chk("原占用目录没有写入安装文件", os.listdir(occupied) == ["keep.txt"])
     labels = [v["label"] for v in d2["versions"].values()]
     chk("两槽 label 不重复", len(set(labels)) == len(labels), str(labels))
 finally:

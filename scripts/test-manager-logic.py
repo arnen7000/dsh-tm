@@ -655,6 +655,8 @@ chk("C8h 标题栏不再有「检查运行环境」（日常用户用不着，�
     and "_hdr, text=T(\"检查运行环境\")" not in src)
 chk("C8h2 零槽引导卡仍留一个入口（那是唯一「我这机器行不行」的场合）",
     src.count("检查运行环境") >= 1 and "_show_env_report" in src)
+chk("C8h3 启动自检提示实际完整报告的位置",
+    'log(T("[环境] 完整报告：%s") % tmp)' in _fn_body("_log_fresh_env"))
 
 
 # ── 一次装多个 / 卸载单个（2026-10-30 起）────────────────────────────
@@ -1605,7 +1607,7 @@ chk("C3z22e 日志扫描偏移随软刷新重建（新槽不会 KeyError）",
     in _fn_body("_reload_config_after_change")
     and "procs.get(key)" in _fn_body("_scan_slot"))
 
-def check_slot_status(ownership, owners, age, exit_code=None):
+def check_slot_status(ownership, owners, age, exit_code=None, uninstalling=False):
     from types import SimpleNamespace
 
     rendered = []
@@ -1617,6 +1619,7 @@ def check_slot_status(ownership, owners, age, exit_code=None):
     cfg = {"port": 4080, "bin_js": "slot/bin.js"}
     ns, _ = harvest(["proc_alive", "_refresh_one"], ns_extra={
         "VC": {"v1": cfg}, "INSTALLED": {"v1": ""}, "procs": {"v1": proc},
+        "BUSY": {"uninstalling": {"v1"}} if uninstalling else {},
         "auth_urls": {"v1": ""}, "_DETECT": {"v1": {
             "listen": ownership != "idle", "ext": next(iter(owners), None),
             "ownership": ownership, "ts": time.monotonic(),
@@ -1646,6 +1649,10 @@ chk("C3z22i PID 已复用时不把外部进程认成本窗口启动的进程",
 _status_exited, _stopped_exited, _render_exited = check_slot_status("idle", {}, 1, exit_code=1)
 chk("C3z22j 监听前进程退出立即显示失败",
     _status_exited == "start_failed" and _stopped_exited is None, str(_render_exited))
+_state_removing, _, _render_removing = check_slot_status(
+    "owned", {901: "original"}, 1, exit_code=0, uninstalling=True)
+chk("C3z22k 卸载期间的旧监听快照不会显示为外部运行",
+    _state_removing is None and _render_removing == ["正在卸载…"], str(_render_removing))
 
 
 # ── C3z23：槽编号与目录一一对应（2026-11-13「为什么会有 dshV3-2」）──────────

@@ -138,9 +138,15 @@ try:
     # 判据用**当前**仓库目录名，而不是某个写死的旧名字 —— 改名之后这条约束
     # 不该跟着失效（否则就成了"只在旧名字下有效"的假绿）。
     _repo_name = os.path.basename(REPO)
+    # Some callers put TMPDIR below REPO. The known fixture paths are legal
+    # even there. Keep checking any other reference to the repository.
+    kill_refs = kill
+    for path in (GHOST, cfg["bin_js"], node):
+        if os.path.isabs(path):
+            kill_refs = kill_refs.replace(path, "<fixture>")
     chk("B5 kill bat 不写死管理器所在的仓库路径（仓库改名也照样拦得住）",
-        _repo_name not in kill and REPO not in kill,
-        [l for l in kill.splitlines() if _repo_name in l])
+        _repo_name not in kill_refs and REPO not in kill_refs,
+        " / ".join(l for l in kill_refs.splitlines() if _repo_name in l))
     chk("B6 kill bat 缺 dsh_kill.py 时给的是可操作提示（netstat + 按 PID 结束）",
         "netstat -ano" in kill and "PID" in kill)
     chk("B7 kill bat 缺脚本时 goto :eof（优雅退出，不是报错退出）",

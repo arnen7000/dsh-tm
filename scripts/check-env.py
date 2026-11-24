@@ -9,6 +9,7 @@
 import argparse
 import importlib.util
 import os
+import shutil
 import sys
 import subprocess
 import platform
@@ -179,15 +180,22 @@ def check_node():
     # ② 系统 PATH 里的 node —— 只在「用户自己动手跑 dsh / 改配置去用系统 node」时
     #    才相关，所以包内那份健康时它只是信息项。
     node = None
-    for cand in ((PLATFORM.resolve_node(),) if PLATFORM.IS_MAC else ("node", "node.exe")):
+    if PLATFORM.IS_MAC:
+        system_node = shutil.which("node") if has_bundled else PLATFORM.resolve_node()
+        candidates = (system_node,)
+    else:
+        candidates = ("node", "node.exe")
+    for cand in candidates:
         if not cand:
+            continue
+        if bundled and os.path.realpath(cand) == os.path.realpath(bundled):
             continue
         node = _node_version(cand)
         if node:
             break
     if not node:
         if has_bundled:
-            print(T("         PATH 里没有 node —— 不影响使用（装 dsh 走包内那份）"))
+            print("         " + T("安装 dsh 使用包内 Node"))
         else:
             bad(T("包内没有 node，PATH 里也没有 —— 装不了 dsh（安装走 npm）"))
             print(T("         装 Node.js >= %d.%d：https://nodejs.org/"
@@ -280,7 +288,7 @@ def check_min_version_claim():
            % (MIN_PY[0], MIN_PY[1] + 1, MIN_PY[0], MIN_PY[1]))
 
 
-def check_scope():
+def check_scope(config_path):
     """校验本机已装的 dsh 是否落在管理器声明的适用范围内。
 
     为什么要有：README 承诺「0.1.2-rc.1 及以后」。但 dsh 是外部项目，
@@ -292,10 +300,26 @@ def check_scope():
     import glob as _glob
     import json as _json
     vroot = os.path.join(os.path.expanduser("~"), "dsh-versions")
+    if PLATFORM.IS_MAC:
+        try:
+            with open(config_path, encoding="utf-8-sig") as source:
+                cfg = _json.load(source)
+        except (OSError, ValueError):
+            cfg = None
+        if isinstance(cfg, dict):
+            if cfg.get("versions") == {}:
+                ok(T("当前没有配置 dsh 版本槽"))
+                return
+            base = PLATFORM.config_base(cfg, config_path)
+            if isinstance(base, str):
+                vroot = os.path.join(base, "dsh-versions")
     roots = sorted([d for d in _glob.glob(os.path.join(vroot, "dsh*"))
                      if os.path.isdir(d)])
     if not roots:
-        warn(T("没找到 %s\\dsh*槽目录（若你还没装dsh 可忽略）") % vroot)
+        if PLATFORM.IS_MAC:
+            warn(T("未找到版本槽目录：%s") % os.path.join(vroot, "dsh*"))
+        else:
+            warn(T("没找到 %s\\dsh*槽目录（若你还没装dsh 可忽略）") % vroot)
         return
     problems = []
     for root in roots:
@@ -421,7 +445,7 @@ check_node()
 check_files(_args.config)
 if not PLATFORM.FROZEN:
     check_min_version_claim()
-check_scope()
+check_scope(_args.config)
 check_privilege()
 check_ports()
 print()

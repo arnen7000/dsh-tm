@@ -4968,8 +4968,12 @@ def _install_queue(versions):
                 first = ((msg or "").strip() or T("原因未知")).splitlines()[0][:120]
                 lines.append("  ✗ %s —— %s" % (ver, first))
         body = "\n".join(lines)
-        log(T("[安装] 安装结束（成功 %d / 失败 %d）：%s")
-            % (len(okr), len(badr), body.replace("\n", " | ")))
+        summary = body.replace("\n", " | ")
+        if badr:
+            log(T("[安装] 安装结束（成功 %d / 失败 %d）：%s")
+                % (len(okr), len(badr), summary))
+        else:
+            log(T("[安装] 安装成功（共 %d 个）：%s") % (len(okr), summary))
         if okr:
             _restart_or_tell(T("槽列表"), [r[2] for r in okr if r[2]])
         # A failed refresh can relaunch the manager.
@@ -5267,10 +5271,12 @@ def uninstall_versions_dialog():
 
 def _do_uninstall(keys):
     """后台卸载若干槽。进度窗在主线程回调 done 一次（不重复调）。"""
+    BUSY["uninstalling"] = set(keys)
     _actions_enabled(False)
     log(T("[卸载] 开始：%s") % ", ".join(keys))
 
     def done(ok, payload, msg):
+        BUSY.pop("uninstalling", None)
         _actions_enabled(True)
         msg = (payload or {}).get("message") or msg or ""
         if ok:
@@ -5606,6 +5612,9 @@ def _refresh_one(key):
     后面所有槽的状态行就都停在初始的「—」，界面看起来就是「这个槽没有端口号」。
     现在 refresh 逐个调用并用 try 兜住 —— 一个槽出错只影响它自己。
     """
+    if key in BUSY.get("uninstalling", ()):
+        status_vars[key].set(T("正在卸载…"))
+        return
     cfg = VC[key]
     # 实装版本每次刷新轻量重读：换了版本 / 外部重装都能自动反映到标题
     ver = _installed_version(cfg)
@@ -8429,8 +8438,7 @@ def _log_fresh_env():
         for ln in raw.splitlines():
             if ln.strip().startswith(("[OK]", T("[注意]"), T("[缺失]"))):
                 log(T("[环境] ") + ln.strip())
-        log(T("[环境] 完整报告见 dsh-manager.log；要自己再跑一遍："
-            "python scripts\\check-env.py（换新机器 / 排查管理器起不来时用）"))
+        log(T("[环境] 完整报告：%s") % tmp)
     except Exception as e:
         log(T("[环境] 自动体检失败：%s") % e)
 

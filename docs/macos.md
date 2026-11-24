@@ -1,8 +1,9 @@
 # macOS
 
-DSH-TM supports Apple Silicon (arm64) and Intel (x64). The builds target macOS
-13.5 and newer. The GitHub Actions smoke tests run on macOS 15 on both
-architectures.
+DSH-TM builds for Apple Silicon (arm64) and Intel (x64) with macOS 13.5 as the
+minimum deployment target. GitHub Actions tests both architectures on macOS 15.
+Testing on 13.5 and the results from physical hardware are tracked separately.
+[v0.1.12 test coverage](test-coverage-v0.1.12.md)
 
 ## 使用 App
 
@@ -25,7 +26,7 @@ macOS 可能阻止首次启动。核对来源和 SHA-256 后，可按 [Apple 的
 安装结束时刷新槽位，并在窗口和日志里汇总成功与失败。遇到下载超时可重试，未完成的安装会清除暂存文件。
 
 维护者可在原生 Mac 上对解压后的包运行 `python3 scripts/test-macos-app.py --app /path/to/DSH-TM.app --dsh-version 0.2.2-rc.5`。
-该检查使用隔离配置验证安装、认证访问、启停和端口释放。进度窗和后台队列可用 `python3 scripts/test-macos-install-gui.py` 单独回归。
+该检查使用隔离配置验证安装、认证访问、启停、卸载备份和端口释放。进度窗和后台队列可用 `python3 scripts/test-macos-install-gui.py` 单独回归。在本机用 GitHub Actions 同款 Python 3.12 / Tk 9 执行这项原生窗口测试。
 
 App 和源码默认共用 `~/Library/Application Support/DSH-TM/config.json`。
 首次启动 Web 可能需要安装插件。等待 20 秒后，管理器会显示启动等候超时，CLI 默认返回失败，
@@ -51,6 +52,15 @@ python3 dsh-tm.py --config /path/to/old/config.json doctor --json
   将旧停止脚本移到别处，再用「槽体检 → 修复」补上缺失的停止脚本。
 - Windows 可在体检中把旧 PATH Node 固定到槽内。macOS 新装槽自带 Node 和 npm，
   旧配置仍可使用共享 Node。迁移旧数据时保留来源目录后，可重新纳入已有安装。
+
+## 环境自检
+
+零槽启动后的完整环境报告与配置同目录。App 中可使用「设置 → 维护」查看结果，也可以在终端直接运行。
+
+```sh
+/Applications/DSH-TM.app/Contents/MacOS/DSH-TM --check-env
+/Applications/DSH-TM.app/Contents/MacOS/DSH-TM --cli --json doctor
+```
 
 ## Run from source
 
