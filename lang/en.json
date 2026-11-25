@@ -290,6 +290,7 @@
   "[环境] ": "[Env] ",
   "[环境] 完整报告见 dsh-manager.log；要自己再跑一遍：python scripts\\check-env.py（换新机器 / 排查管理器起不来时用）": "[Env] Full report in dsh-manager.log; to run it yourself: python scripts\\check-env.py (useful on a new machine, or when the manager will not start)",
   "[环境] 完整报告：%s": "[Env] Full report: %s",
+  "[环境] 正在后台检查运行环境…": "[Env] Checking the runtime environment in the background…",
   "[环境] 自动体检失败：%s": "[Env] Automatic environment check failed: %s",
   "[界面] 最小化进度窗失败：%s": "[UI] Failed to minimise the progress window: %s",
   "[界面] 后台操作的结果处理失败：%s": "[UI] Could not apply the result of a background operation: %s",

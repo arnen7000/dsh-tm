@@ -55,7 +55,7 @@ python3 dsh-tm.py --config /path/to/old/config.json doctor --json
 
 ## 环境自检
 
-零槽启动后的完整环境报告与配置同目录。App 中可使用「设置 → 维护」查看结果，也可以在终端直接运行。
+零槽启动后会在后台生成完整环境报告，文件为配置目录下的 `temp/env-check.out`。App 中可用「设置 → 维护 → 检查运行环境」查看结果。自检进行中仍可使用窗口，也可以在终端直接运行。
 
 ```sh
 /Applications/DSH-TM.app/Contents/MacOS/DSH-TM --check-env

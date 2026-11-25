@@ -656,7 +656,83 @@ chk("C8h 标题栏不再有「检查运行环境」（日常用户用不着，�
 chk("C8h2 零槽引导卡仍留一个入口（那是唯一「我这机器行不行」的场合）",
     src.count("检查运行环境") >= 1 and "_show_env_report" in src)
 chk("C8h3 启动自检提示实际完整报告的位置",
-    'log(T("[环境] 完整报告：%s") % tmp)' in _fn_body("_log_fresh_env"))
+    '_start_env_report("summary")' in _fn_body("_log_fresh_env")
+    and 'log(T("[环境] 完整报告：%s") % tmp)' in _fn_body("_start_env_report"))
+
+
+def _check_background_env_report():
+    from pathlib import Path
+    from queue import Queue
+    import subprocess
+    import tempfile
+    import threading
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    with tempfile.TemporaryDirectory() as directory:
+        folder = Path(directory)
+        scripts = folder / "scripts"
+        scripts.mkdir()
+        (scripts / "check-env.py").touch()
+        started, release = threading.Event(), threading.Event()
+        posts = Queue()
+        calls, dialogs, logs = [], [], []
+        report = "[OK]   fixture environment"
+
+        def slow_check(args, *, stdout, **kwargs):
+            calls.append(args)
+            started.set()
+            release.wait(1)
+            stdout.write(report.encode())
+            return SimpleNamespace(returncode=0)
+
+        def post(callback, *args):
+            posts.put((callback, args))
+
+        def dialog(title, body, **_):
+            dialogs.append((title, body))
+
+        env, _ = harvest(["_show_env_report", "_log_fresh_env", "_start_env_report"],
+                         ["_ENV_REPORT"], {
+            "BASE_DIR": directory, "CONFIG_PATH": str(folder / "config.json"),
+            "CREATE_NO_WINDOW": 0, "PLATFORM": SimpleNamespace(FROZEN=False, IS_WINDOWS=False),
+            "I18N": SimpleNamespace(lang=lambda: "zh"), "log": logs.append,
+            "root": None, "sys": sys, "threading": threading, "subprocess": subprocess,
+            "_post_ui": post,
+            "messagebox": SimpleNamespace(showinfo=dialog, showwarning=dialog, showerror=dialog),
+        })
+        with patch.object(subprocess, "run", slow_check):
+            env["_show_env_report"]()
+            started.wait(1)
+            responsive = not dialogs and len(calls) == 1
+            env["_log_fresh_env"]()
+            env["_show_env_report"]()
+            release.set()
+            if responsive:
+                callback, args = posts.get(timeout=3)
+                callback(*args)
+        chk("C8h4 慢自检返回主线程且并发入口共用同一结果",
+            responsive and len(calls) == 1 and len(dialogs) == 1
+            and report in dialogs[0][1] and any(report in line for line in logs))
+        report_path = folder / "temp" / "env-check.out"
+        chk("C8h5 完整报告保留原始检查输出",
+            report_path.read_text(encoding="utf-8") == report)
+
+        def failed_check(args, *, stdout, **kwargs):
+            stdout.write(b"incomplete output")
+            raise OSError("fixture I/O failure")
+
+        with patch.object(subprocess, "run", failed_check):
+            env["_show_env_report"]()
+            callback, args = posts.get(timeout=3)
+            callback(*args)
+        chk("C8h6 自检写入失败保留上一份完整报告并清理暂存",
+            report_path.read_text(encoding="utf-8") == report
+            and not list(report_path.parent.glob("env-check.out.tmp-*"))
+            and dialogs[-1][0] == "检查失败" and "fixture I/O failure" in dialogs[-1][1])
+
+
+_check_background_env_report()
 
 
 # ── 一次装多个 / 卸载单个（2026-10-30 起）────────────────────────────

@@ -1552,7 +1552,7 @@ def open_browser(key):
         # 两种情形都落到这里：① 配置就是 default（默认值）；② 配了某个浏览器
         # 但本机没装。两者都交给系统默认浏览器，日志要分清，否则用户会以为
         # 「我没配 Chrome 啊，怎么提示找不到 Chrome」。
-        # 各槽即使用同一个浏览器也不串台：cookie 绑定 host:port，端口不同就隔离。
+        # 使用该槽已核实的入口地址，浏览器会话由 dsh 自己建立。
         _b = (cfg["browser"] or "default").strip()
         if _b.lower() in ("", "default"):
             log(T("[%s] 用系统默认浏览器打开 %s") % (key, url))
@@ -2362,42 +2362,73 @@ def _refresh_header_style():
 # 按钮放在函数定义之后创建（见下方），避免又出现"引用早于定义"的 NameError——
 # .pyw 无控制台，这种错误会表现为"双击没反应"，极难定位。
 
-def _show_env_report():
-    """在界面里显示环境体检结果（不要求用户另开命令行）。
+_ENV_REPORT = set()
 
-    为什么要有：README 让人"先跑 check-env.py"对不熟悉命令行的用户是道坎。
-    这里直接跑那个脚本并把输出收进弹窗，一步就能确认"我这台机器行不行"。
-    """
+
+def _start_env_report(mode):
+    """Run one check for pending startup and Settings requests."""
+    if _ENV_REPORT:
+        _ENV_REPORT.add(mode)
+        return
+    _ENV_REPORT.add(mode)
+    tmp = os.path.join(os.path.dirname(CONFIG_PATH), "temp", "env-check.out")
+    scratch = "%s.tmp-%d" % (tmp, os.getpid())
     script = os.path.join(BASE_DIR, "scripts", "check-env.py")
-    if not os.path.isfile(script):
-        messagebox.showerror(T("无法检查"), T("找不到 %s") % script)
-        return
-    try:
-        # pythonw 没有控制台，子进程输出重定向到临时文件再读
-        tmp = os.path.join(os.path.dirname(CONFIG_PATH), "temp", "env-check.out")
-        os.makedirs(os.path.dirname(tmp), exist_ok=True)
-        import subprocess as _sp
-        with open(tmp, "wb") as out:
-            # check-env.py 是独立进程，把当前语言传过去，否则它只会输出中文
-            _env = dict(os.environ)
-            _env["DSH_LANG"] = I18N.lang()
-            rc = _sp.run([sys.executable, "--check-env" if PLATFORM.FROZEN else script,
-                          "--config", CONFIG_PATH], stdout=out,
-                         stderr=_sp.STDOUT, env=_env,
-                         creationflags=CREATE_NO_WINDOW).returncode
-        raw = open(tmp, "rb").read().decode("utf-8", "replace")
-    except Exception as e:
-        messagebox.showerror(T("检查失败"), T("运行环境检查出错：\n%s") % e)
-        return
-    # 只保留有意义的行，压掉分隔线与空行
-    lines = [ln.rstrip() for ln in raw.splitlines()
-             if ln.strip() and not set(ln.strip()) <= set("=-")]
-    body = "\n".join(lines[-40:])
-    log(T("=== 环境检查（rc=%d）===\n%s") % (rc, body))
-    (messagebox.showinfo if rc == 0 else messagebox.showwarning)(
-        T("运行环境检查"), "%s\n\n%s" % (
-            T("环境满足要求。") if rc == 0 else T("环境有不满足项，请看下面的说明。"),
-            body))
+    env = dict(os.environ, DSH_LANG=I18N.lang())
+    markers = ("[OK]", T("[注意]"), T("[缺失]"))
+    log(T("[环境] 正在后台检查运行环境…"))
+
+    def done(rc, raw, error=""):
+        requests = set(_ENV_REPORT)
+        _ENV_REPORT.clear()
+        if rc is None:
+            log(T("[环境] 自动体检失败：%s") % error)
+            if "dialog" in requests:
+                messagebox.showerror(T("检查失败"), T("运行环境检查出错：\n%s") % error,
+                                     parent=root)
+            return
+        if "summary" in requests:
+            for line in raw.splitlines():
+                if line.strip().startswith(markers):
+                    log(T("[环境] ") + line.strip())
+        log(T("[环境] 完整报告：%s") % tmp)
+        if "dialog" in requests:
+            lines = [line.rstrip() for line in raw.splitlines()
+                     if line.strip() and not set(line.strip()) <= set("=-")]
+            body = "\n".join(lines[-40:])
+            log(T("=== 环境检查（rc=%d）===\n%s") % (rc, body))
+            (messagebox.showinfo if rc == 0 else messagebox.showwarning)(
+                T("运行环境检查"), "%s\n\n%s" % (
+                    T("环境满足要求。") if rc == 0 else T("环境有不满足项，请看下面的说明。"),
+                    body), parent=root)
+
+    def work():
+        try:
+            if not PLATFORM.FROZEN and not os.path.isfile(script):
+                raise FileNotFoundError(T("找不到 %s") % script)
+            os.makedirs(os.path.dirname(tmp), exist_ok=True)
+            with open(scratch, "wb") as out:
+                result = subprocess.run([sys.executable, "--check-env" if PLATFORM.FROZEN else script,
+                                         "--config", CONFIG_PATH], stdout=out,
+                                        stderr=subprocess.STDOUT, env=env,
+                                        creationflags=CREATE_NO_WINDOW if PLATFORM.IS_WINDOWS else 0)
+            with open(scratch, encoding="utf-8", errors="replace") as source:
+                raw = source.read()
+            os.replace(scratch, tmp)
+        except (OSError, subprocess.SubprocessError) as exc:
+            try:
+                os.unlink(scratch)
+            except OSError:
+                pass
+            _post_ui(done, None, "", str(exc))
+            return
+        _post_ui(done, result.returncode, raw)
+
+    threading.Thread(target=work, daemon=True).start()
+
+
+def _show_env_report():
+    _start_env_report("dialog")
 
 # 2026-10-31：标题栏的「检查运行环境」按钮撤掉了。它查的是**管理器自己**的前置条件
 # （Python / tkinter / 标准库 / node / 权限 / 端口）—— 而这些在管理器已经打开的
@@ -8420,27 +8451,7 @@ if FRESH_START:
 
 def _log_fresh_env():
     """零槽启动时把环境体检摘要写进日志（界面不打扰，想看滚日志即可）。"""
-    try:
-        import subprocess as _sp
-        tmp = os.path.join(os.path.dirname(CONFIG_PATH), "temp", "env-check.out")
-        os.makedirs(os.path.dirname(tmp), exist_ok=True)
-        with open(tmp, "wb") as out:
-            # 语言必须传过去：下面按 T("[注意]") / T("[缺失]") 过滤行，
-            # 子进程若仍输出中文而界面是英文，一条都匹配不上，日志就是空的。
-            _env = dict(os.environ)
-            _env["DSH_LANG"] = I18N.lang()
-            rc = _sp.run([sys.executable,
-                          "--check-env" if PLATFORM.FROZEN else
-                          os.path.join(BASE_DIR, "scripts", "check-env.py"), "--config", CONFIG_PATH],
-                         stdout=out, stderr=_sp.STDOUT, env=_env,
-                         creationflags=CREATE_NO_WINDOW).returncode
-        raw = open(tmp, "rb").read().decode("utf-8", "replace")
-        for ln in raw.splitlines():
-            if ln.strip().startswith(("[OK]", T("[注意]"), T("[缺失]"))):
-                log(T("[环境] ") + ln.strip())
-        log(T("[环境] 完整报告：%s") % tmp)
-    except Exception as e:
-        log(T("[环境] 自动体检失败：%s") % e)
+    _start_env_report("summary")
 
 # ── 主题（2026-11-01）───────────────────────────────────────────────
 # 必须放在文件末尾：_apply_palette() 定义在下方，而这里要**调用**它；
