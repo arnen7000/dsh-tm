@@ -160,7 +160,9 @@ class SlotFilesystemTests(unittest.TestCase):
         self.assertFalse(ok, message)
         self.assertEqual(payload["removed"], [])
         self.assertEqual(payload["kept_in_config"], ["v1"])
-        self.assertIn(str(self.slots / "dsh-versions" / self.slot.name), message)
+        reported_path = payload["details"][0]["root"]
+        self.assertEqual(Path(reported_path), self.slots / "dsh-versions" / self.slot.name)
+        self.assertIn(reported_path, message)
         self.assertNotIn("没有用户数据", message)
         self.assertEqual(stop_calls, [])
         self.assertEqual(self.config_path.read_bytes(), previous)
@@ -395,7 +397,7 @@ class SlotFilesystemTests(unittest.TestCase):
         launchers = platform.write_slot_launchers(self.slot, resolved)
         self.assertEqual(len(launchers), 3)
         output = subprocess.check_output(
-            ["/bin/sh", str(self.slot / "dsh.command")], text=True,
+            ["/bin/sh", str(self.slot / "dsh.command")], encoding="utf-8", errors="strict",
             creationflags=platform.CREATE_NO_WINDOW if platform.IS_WINDOWS else 0,
         )
         self.assertEqual(output.splitlines(), [str(self.home), resolved["bin_js"]])
