@@ -3575,13 +3575,21 @@ except Exception:
     OPS = None
 
 def _versions_root():
-    """版本包根目录。优先按既有槽的 bin_js 反推（认得离线包布局），
-    兜底用 install_base/dsh-versions（与既有三槽一致）。"""
+    """优先按磁盘上仍存在的已登记槽确认版本根。"""
+    fallback = ""
     for _k in SLOT_KEYS:
         root = _version_root(VC[_k])
         if root:
-            return os.path.dirname(root)
-    return os.path.join(INSTALL_BASE, "dsh-versions")
+            parent = os.path.dirname(root)
+            if os.path.isdir(root):
+                return parent
+            fallback = fallback or parent
+    # Some older setups used the versions directory itself as install_base.
+    name = os.path.basename(os.path.normpath(INSTALL_BASE))
+    if name.lower() == "dsh-versions" and dsh_adopt:
+        if dsh_adopt.scan_managed_dirs(INSTALL_BASE, ()):
+            return INSTALL_BASE
+    return fallback or os.path.join(INSTALL_BASE, "dsh-versions")
 
 def _temp_root():
     """临时目录根：所有槽的 TEMP 都落在它下面的 `<槽目录名>` 里。
@@ -4137,7 +4145,7 @@ def _relaunch_self():
     return True, ""
 
 
-def _reload_config_after_change(new_keys=None):
+def _reload_config_after_change(new_keys=None, check_health=True):
     """config.json 变了之后，**不重启进程**，把界面原地刷新成"重启后"的样子。
 
     2026-11-12 用户要求：装第一个版本、加装第二个、纳入、移出、卸载之后，
@@ -4185,7 +4193,7 @@ def _reload_config_after_change(new_keys=None):
         _old_procs, _old_urls = procs, auth_urls
         procs = {k: _old_procs.get(k) for k in SLOT_KEYS}
         auth_urls = {k: _old_urls.get(k) for k in SLOT_KEYS}
-        HEALTH = {k: v for k, v in HEALTH.items() if k in SLOT_KEYS}
+        HEALTH = {k: v for k, v in HEALTH.items() if k in VC and _old_vc.get(k) == VC[k]}
         DRIFT.clear()
         status_vars = {k: tk.StringVar(value="—") for k in SLOT_KEYS}
         # 探测缓存 / 状态记忆必须跟着槽键重建：新槽在 _DETECT 里没有条目时，
@@ -4255,10 +4263,11 @@ def _reload_config_after_change(new_keys=None):
         _drift_seed()
     except Exception:
         pass
-    try:
-        _run_health(deep=False)
-    except Exception:
-        pass
+    if check_health:
+        try:
+            _run_health(deep=False)
+        except Exception:
+            pass
     try:
         refresh(once=True)
     except Exception:
@@ -4274,16 +4283,16 @@ def _reload_config_after_change(new_keys=None):
     return True, ""
 
 
-def _restart_or_tell(what=T("版本列表"), new_keys=None):
+def _restart_or_tell(what=T("版本列表"), new_keys=None, check_health=True):
     """配置变了之后刷新界面：**先原地刷新，失败才退回重启进程**。
 
     2026-11-12 用户要求：装 / 纳入 / 移出 / 卸载之后直接显示结果界面，
     不要提示"即将重启"，也不要用户手动重开。
     重启进程只作为兜底（配置被写坏、原地重建失败等极端情况）。
     """
-    ok, why = _reload_config_after_change(new_keys)
+    ok, why = _reload_config_after_change(new_keys, check_health=check_health)
     if ok:
-        return
+        return True
     log(T("[配置] 原地刷新失败：%s，尝试重启管理器") % why)
     ok2, why2 = _relaunch_self()
     if ok2:
@@ -4291,7 +4300,7 @@ def _restart_or_tell(what=T("版本列表"), new_keys=None):
             root.destroy()
         except Exception:
             pass
-        return
+        return False
     try:
         messagebox.showwarning(
             T("已更新，但界面没能刷新"),
@@ -4300,6 +4309,7 @@ def _restart_or_tell(what=T("版本列表"), new_keys=None):
             % (why, why2, what))
     except Exception:
         pass
+    return False
 
 
 def _adopt_loc_nm(loc):
@@ -4324,9 +4334,11 @@ def _adopt_loc_nm(loc):
 def _adopt_row_info(version, loc):
     """给纳入对话框准备一行：返回 dict（ok/title/组件/问题/提醒）。"""
     nm = _adopt_loc_nm(loc)
+    _root = os.path.dirname(os.path.abspath(nm)) if nm else ""
+    in_place = bool(_root and _is_under_path(_root, _versions_root()))
     info = {}
     try:
-        info = dsh_adopt.inspect_adopt_source(nm) if dsh_adopt else {}
+        info = dsh_adopt.inspect_adopt_source(nm, in_place=in_place) if dsh_adopt else {}
     except Exception as e:
         info = {"ok": False, "problems": [T("体检失败：%s") % e], "warnings": []}
     kind = T("npm 全局") if (loc or {}).get("kind") == "npm-global" else T("版本目录")
@@ -4355,12 +4367,7 @@ def _adopt_row_info(version, loc):
         _summary = T("这个安装不完整，暂时不能纳入")
     # 2026-11-14：告诉用户「勾了之后会发生什么」—— 版本根下的原地接回（几秒），
     # 别处的要复制一份（几百 MB）。原来只在顶部写一段笼统说明，看不出这一行是哪种。
-    _root = os.path.dirname(os.path.abspath(nm)) if nm else ""
-    try:
-        _action = (T("原地接回") if _is_under_path(_root, _versions_root())
-                   else T("复制一份"))
-    except Exception:
-        _action = ""
+    _action = T("原地接回") if in_place else T("复制一份")
     return {"ok": bool(info.get("ok")), "version": ver, "kind": kind, "nm": nm,
             "summary": _summary, "action": _action, "root": _root,
             "component": "  ".join(comp),
@@ -4474,7 +4481,7 @@ def _adopt_picker_dialog(found):
               font=("Microsoft YaHei UI", 10, "bold")).pack(padx=18, pady=(14, 2))
     ttk.Label(win, foreground=_MUTED, wraplength=510, justify="left",
               # 显式分行：交给 Tk 自动换行会从「几百MB」中间断开（实测很难看）。
-              text=T("勾选要纳入的版本。原地接回 = 只改配置（几秒）；\n"
+              text=T("勾选要纳入的版本。原地接回 = 使用原目录并补齐启动脚本；\n"
                    "复制一份 = 拷进版本根（几百 MB，较慢），原安装不动。")
               ).pack(padx=18, pady=(0, 8), anchor="w")
 
@@ -5193,10 +5200,8 @@ def uninstall_versions_dialog():
     win.transient(root)
     win.resizable(False, False)
     _apply_icon(win)
-    ttk.Label(win, text=T("卸载 = 删掉它；移出管理 = 放它自己跑"),
+    ttk.Label(win, text=T("卸载会删除槽目录，移出管理会保留文件"),
               font=("Microsoft YaHei UI", 10, "bold")).pack(padx=20, pady=(16, 4))
-    ttk.Label(win, text=T("两个动作改的都是 config.json；区别在磁盘上的文件动没动。"),
-              foreground=_MUTED).pack(padx=20, pady=(0, 8))
 
     pick = tk.StringVar(value=SLOT_KEYS[0] if SLOT_KEYS else "")
     if SLOT_KEYS:
@@ -5208,18 +5213,11 @@ def uninstall_versions_dialog():
 
     backup_root = os.path.join(INSTALL_BASE, "dsh备份")
     ttk.Label(win, justify="left", wraplength=470, foreground=_MUTED,
-              text=(T("【卸载】停进程 → 备份 → 删除整个槽目录 → 从 config 移除\n"
-                    "  备份到 %s\\<槽>-userdata-<时间>\\：.dsh-home（会话/设置/凭据/\n"
-                    "  插件配置）+ 插件清单 + 版本信息；不含 node_modules 与 node。\n"
-                    "  ⚠ 你自己放进槽目录的东西（笔记、补丁、下载的文件）也会一起删掉且不进备份。\n"
-                    "    要留请先复制出去。\n\n"
-                    "【移出管理】只从 config 移除，磁盘一个字节都不动\n"
-                    "  · 槽里的 dsh.bat / kill-<端口>.bat / dsh-cli.bat 全都还在，\n"
-                    "    双击就能启动 —— 管理器从没装过它也一样（bat 里全是绝对路径）\n"
-                    "  · 之后点「扫描已装 dsh 并纳入」还能重新发现它，\n"
-                    "    原样接回（端口沿用、不复制文件）\n"
-                    "  · 正在运行的槽要先点卡片上的「停止」才允许移出\n"
-                    "  · 全部移出后安装根解锁，可以换到别的位置再装 / 纳入新的 dsh")
+              text=(T("卸载会先停止槽进程，备份并校验用户数据，再删除整个槽目录。\n"
+                    "  备份目录：%s\n"
+                    "  备份包含 .dsh-home、插件清单和版本信息。要保留自己放进槽目录的其他文件，请先复制出去。\n\n"
+                    "移出管理仅取消登记，保留槽内文件和已有的启动脚本。先停止运行中的槽，"
+                    "之后可通过「扫描已装 dsh 并纳入」原地接回。")
                     % backup_root)).pack(padx=20, pady=(0, 10), anchor="w")
 
     def on_ok():
@@ -5228,12 +5226,13 @@ def uninstall_versions_dialog():
             messagebox.showwarning(T("还没选版本"), T("请选中一个要卸载的版本槽。"))
             return
         keys = [key]
-        detail = "\n".join("  · " + _slot_brief(k) for k in keys)
+        detail = "  · " + _slot_brief(key)
+        slot_dir = _version_root(VC[key])
         # 2026-11-14：槽目录里可能有用户自己放的文件（笔记/自定义插件/备份），
         # 卸载会把它们一并删掉。这里**点名列出**，别只说"会删目录"。
         _foreign = []
         try:
-            _foreign = UNINST.slot_foreign_entries(_version_root(VC[key]))
+            _foreign = UNINST.slot_foreign_entries(slot_dir)
         except Exception:
             pass
         _extra = ""
@@ -5246,12 +5245,14 @@ def uninstall_versions_dialog():
         if not messagebox.askyesno(
                 T("确认卸载"),
                 T("即将卸载这个版本：\n\n%s\n\n"
+                "登记的槽目录：\n%s\n\n"
                 "整个槽目录会被删除 —— 包括你自己放进这个槽目录里的任何文件。\n"
                 "有备份的只有：.dsh-home（会话/凭据/插件配置）、槽的 package.json 与"
                 "版本信息。\n%s\n"
                 "备份会放到：\n%s\n\n"
                 "只想让它脱离管理、文件都留着？请按「取消」，改用「移出管理」。\n\n"
-                "确定继续？") % (detail, _extra, backup_root), default="no", icon="warning"):
+                "确定继续？") % (detail, slot_dir or "—", _extra, backup_root),
+                default="no", icon="warning"):
             return
         try:
             win.destroy()
@@ -5264,7 +5265,6 @@ def uninstall_versions_dialog():
         if not key or key not in SLOT_KEYS:
             messagebox.showwarning(T("还没选版本"), T("请选中一个要移出的版本槽。"))
             return
-        cfgk = VC.get(key) or {}
         if not messagebox.askyesno(
                 T("确认移出管理"),
                 T("即将把这个版本移出管理：\n\n  · %s\n\n"
@@ -5272,9 +5272,9 @@ def uninstall_versions_dialog():
                 ".dsh-home（会话/凭据/插件配置）全都原样保留。\n\n"
                 "移出后：\n"
                 "  · 管理器不再显示它、也不再管它的进程；\n"
-                "  · 直接双击 %s\\dsh.bat 就能启动它；\n"
-                "  · 它会被记进「已移出」列表，随时可以重新纳入。\n\n"
-                "确定继续？") % (_slot_brief(key), cfgk.get("label") or key),
+                "  · 可以使用槽里的已有启动脚本；\n"
+                "  · 可从「扫描已装 dsh 并纳入」重新接回。\n\n"
+                "确定继续？") % _slot_brief(key),
                 default="no"):
             return
         try:
@@ -5311,8 +5311,12 @@ def _do_uninstall(keys):
         _actions_enabled(True)
         msg = (payload or {}).get("message") or msg or ""
         if ok:
-            log(T("[卸载] 完成：%s") % msg.replace("\n", " | "))
-            messagebox.showinfo(T("卸载完成"), msg, parent=root)
+            if (payload or {}).get("kept_in_config"):
+                log(T("[卸载] 未完成：%s") % msg.replace("\n", " | "))
+                messagebox.showwarning(T("卸载未完成"), msg, parent=root)
+            else:
+                log(T("[卸载] 完成：%s") % msg.replace("\n", " | "))
+                messagebox.showinfo(T("卸载完成"), msg, parent=root)
             _restart_or_tell(T("槽列表"))
         else:
             log(T("[卸载] 未完成：%s") % msg.replace("\n", " | "))
@@ -5387,27 +5391,37 @@ def _bats_missing(key):
 def _do_readd(roots, on_done=None):
     """重新登记已移出的槽，再按每个槽的端口是否变化补齐或重建脚本。"""
     _actions_enabled(False)
-    log(T("[纳入] 重新纳入已移出的槽：%s") % ", ".join(roots))
+    log(T("[纳入] 原地接回槽：%s") % ", ".join(roots))
 
     def done(ok, payload, msg):
         _actions_enabled(True)
         msg = (payload or {}).get("message") or msg or ""
         if ok:
-            log(T("[纳入] 完成：%s") % msg.replace("\n", " | "))
-            messagebox.showinfo(T("已重新纳入"), msg)
             keys = _installed_keys_from(payload)
-            _restart_or_tell(T("槽列表"), keys)
+            if not _restart_or_tell(T("槽列表"), keys, check_health=False):
+                return
             port_changed = (payload or {}).get("port_changed") or {}
+            launcher_issues = []
             for key in keys:
                 only_missing = key not in port_changed
                 if only_missing and not _bats_missing(key):
                     continue
                 try:
                     made, failed, skipped = _rebuild_bats(keys=[key], only_missing=only_missing)
-                    log(T("[纳入] 槽 %s 的启动脚本：成功 %d，失败 %d，跳过 %d")
-                        % (key, len(made), len(failed), len(skipped)))
+                    if made:
+                        log(T("[纳入] 已为槽 %s 生成 %d 个启动脚本") % (key, len(made)))
+                    launcher_issues.extend(failed)
+                    launcher_issues.extend(skipped)
                 except Exception as e:
-                    log(T("[纳入] 重写启动脚本失败（可到「设置 → 维护」重新生成）：%s") % e)
+                    launcher_issues.append("%s: %s" % (key, e))
+            _run_health(deep=False)
+            log(T("[纳入] 完成：%s") % msg.replace("\n", " | "))
+            if launcher_issues:
+                warning = T("部分启动脚本未生成，可到「设置 → 维护」重新生成：%s") % "；".join(launcher_issues)
+                log("[纳入] " + warning)
+                messagebox.showwarning(T("已重新纳入"), msg + "\n\n" + warning)
+            else:
+                messagebox.showinfo(T("已重新纳入"), msg)
         else:
             log(T("[纳入] 未完成：%s") % msg.replace("\n", " | "))
             messagebox.showerror(T("重新纳入未完成"), msg or T("原因未知"))
@@ -7815,8 +7829,8 @@ def _dir_group_single(parent):
                           foreground=_MUTED, justify="left")
         _hint.pack(anchor="w", pady=(4, 0))
         _auto_wrap(_hint, pad=28)
-        _where = ttk.Label(df, text=T("版本装在：<安装根>\\dsh-versions\\<槽>；"
-                                    "临时文件在各槽的 .tmp 下"),
+        _where = ttk.Label(df, text=T("版本根：%s\n临时文件默认位于各槽的 .tmp")
+                                    % _versions_root(),
                            foreground=_MUTED, justify="left")
         _where.pack(anchor="w", pady=(6, 0))
         _auto_wrap(_where, pad=28)

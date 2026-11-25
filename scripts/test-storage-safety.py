@@ -12,6 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import dsh_move as move
+import dsh_adopt as adopt
 import dsh_platform as platform
 import dsh_uninstall_ops as uninstall
 
@@ -142,6 +143,51 @@ class SlotFilesystemTests(unittest.TestCase):
         self.assertTrue(ok, message)
         backup = Path(payload["details"][0]["backup"])
         self.assertEqual((backup / "session").read_text(), "user data")
+
+    def test_uninstall_rejects_a_missing_registered_root_without_dropping_the_slot(self):
+        self.install_package_fixture()
+        self.config["install_base"] = str(self.slots)
+        self.write_config()
+        previous = self.config_path.read_bytes()
+        stop_calls = []
+
+        ok, payload, message = uninstall.uninstall_slots(
+            ["v1"], str(self.config_path), str(self.work), str(self.work),
+            str(self.work), versions_root=str(self.slots),
+            stop_fn=lambda key, port: stop_calls.append((key, port)),
+        )
+
+        self.assertFalse(ok, message)
+        self.assertEqual(payload["removed"], [])
+        self.assertEqual(payload["kept_in_config"], ["v1"])
+        reported_path = payload["details"][0]["root"]
+        self.assertEqual(Path(reported_path), self.slots / "dsh-versions" / self.slot.name)
+        self.assertIn(reported_path, message)
+        self.assertNotIn("没有用户数据", message)
+        self.assertEqual(stop_calls, [])
+        self.assertEqual(self.config_path.read_bytes(), previous)
+        self.assertEqual(self.data.read_text(), "user data")
+        self.assertTrue((self.slot / "node_modules/@deepseek-ai/dsh/lib/bin.js").is_file())
+
+    def test_uninstall_reports_missing_root_in_a_partially_completed_batch(self):
+        missing = self.slots / "missing" / "dshV3"
+        self.config["versions"]["v3"] = {
+            "bin_js": str(missing / "node_modules/@deepseek-ai/dsh/lib/bin.js"),
+            "port": 6080,
+        }
+        self.write_config()
+
+        ok, payload, message = uninstall.uninstall_slots(
+            ["v1", "v3"], str(self.config_path), str(self.work), str(self.work),
+            str(self.work), versions_root=str(self.slots),
+        )
+
+        self.assertTrue(ok, message)
+        self.assertEqual(payload["removed"], ["v1"])
+        self.assertEqual(payload["kept_in_config"], ["v3"])
+        self.assertIn(str(missing), message)
+        self.assertFalse(self.slot.exists())
+        self.assertEqual(list(json.loads(self.config_path.read_text())["versions"]), ["v3"])
 
     def test_stop_failure_leaves_files_and_config(self):
         def cannot_stop(key, port):
@@ -316,6 +362,84 @@ class SlotFilesystemTests(unittest.TestCase):
         installed = self.slot / "node" / "bin" / "node"
         self.assertEqual(installed.read_bytes(), source.read_bytes())
         self.assertTrue(os.access(installed, os.X_OK))
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS launchers")
+    def test_reattach_when_install_base_is_the_version_root(self):
+        self.install_package_fixture()
+        node = self.slot / "node" / "bin" / "node"
+        node.parent.mkdir(parents=True)
+        node.write_text('#!/bin/sh\nprintf "%s\\n" "$DSH_HOME" "$1"\n', encoding="utf-8")
+        node.chmod(0o755)
+        (self.slot / "node_modules" / "node-pty").mkdir()
+        self.config["install_base"] = str(self.slots)
+        self.config["versions"] = {}
+        self.config["detached"] = [{"root": str(self.slot)}]
+        self.write_config()
+
+        ok, payload, message = uninstall.readd_slots(
+            [str(self.slot)], str(self.config_path), str(self.work), str(self.work),
+            str(self.work), versions_root=str(self.slots), probe=lambda port: False,
+        )
+
+        self.assertTrue(ok, message)
+        self.assertEqual(payload["added"], ["v1"])
+        saved = json.loads(self.config_path.read_text())
+        self.assertNotIn("detached", saved)
+        stored = saved["versions"]["v1"]
+        self.assertEqual(stored["bin_js"], "<base>/dshV1/node_modules/@deepseek-ai/dsh/lib/bin.js")
+        resolved = {key: platform.resolve_path(value, str(self.slots)) for key, value in stored.items()}
+        self.assertEqual(Path(resolved["node_exe"]), node)
+        self.assertEqual(Path(resolved["dsh_home"]), self.home)
+        self.assertEqual(Path(resolved["temp_dir"]), self.slot / ".tmp")
+        self.assertEqual(self.data.read_text(), "user data")
+        self.assertIn("node-pty", message)
+        self.assertNotIn("复制", message)
+        launchers = platform.write_slot_launchers(self.slot, resolved)
+        self.assertEqual(len(launchers), 3)
+        output = subprocess.check_output(
+            ["/bin/sh", str(self.slot / "dsh.command")], encoding="utf-8", errors="strict",
+            creationflags=platform.CREATE_NO_WINDOW if platform.IS_WINDOWS else 0,
+        )
+        self.assertEqual(output.splitlines(), [str(self.home), resolved["bin_js"]])
+
+    def test_reattach_repairs_the_exact_legacy_registration_in_place(self):
+        self.install_package_fixture()
+        node_modules = str(self.slot / "node_modules")
+        self.assertTrue(adopt.inspect_adopt_source(node_modules)["ok"])
+        preflight = adopt.inspect_adopt_source(node_modules, in_place=True)
+        self.assertFalse(preflight["ok"])
+        self.assertIn("Node.js", preflight["problems"][0])
+        node = Path(platform.slot_node_path(self.slot))
+        node.parent.mkdir(parents=True)
+        node.touch(mode=0o755)
+        node_suffix = node.relative_to(self.slot).as_posix()
+        stored = self.config["versions"]["v1"]
+        stored.update({
+            "node_exe": "<base>/dsh-versions/dshV1/" + node_suffix,
+            "temp_dir": "<base>/dsh-versions/dshV1/.tmp",
+            "port": 43835,
+            "browser": "custom",
+            "extra_args": ["web", "--host", "127.0.0.1", "--port", "43835", "--no-open"],
+        })
+        self.config["install_base"] = str(self.slots)
+        self.write_config()
+
+        ok, payload, message = uninstall.readd_slots(
+            [str(self.slot)], str(self.config_path), str(self.work), str(self.work),
+            str(self.work), versions_root=str(self.slots), taken_ports=[43835],
+            probe=lambda port: False,
+        )
+
+        self.assertTrue(ok, message)
+        self.assertEqual(payload["added"], ["v1"])
+        self.assertEqual(payload["port_changed"], {"v1": (0, 43835)})
+        saved = json.loads(self.config_path.read_text())["versions"]
+        self.assertEqual(list(saved), ["v1"])
+        self.assertEqual(saved["v1"]["bin_js"], "<base>/dshV1/node_modules/@deepseek-ai/dsh/lib/bin.js")
+        self.assertEqual(saved["v1"]["node_exe"], "<base>/dshV1/" + node_suffix)
+        self.assertEqual(saved["v1"]["browser"], "custom")
+        self.assertEqual(saved["v1"]["extra_args"], stored["extra_args"])
+        self.assertEqual(self.data.read_text(), "user data")
 
     @unittest.skipUnless(sys.platform == "darwin", "macOS launchers")
     def test_reattach_reads_the_command_port_and_records_the_native_runtime(self):

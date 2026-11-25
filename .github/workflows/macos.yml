@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  RELEASE_VERSION: '0.1.14'
+  RELEASE_VERSION: '0.1.15'
 
 jobs:
   package:
@@ -76,7 +76,7 @@ jobs:
       (github.ref == 'refs/heads/codex/macos-support' || github.ref == 'refs/heads/main')
     uses: ./.github/workflows/windows-release.yml
     with:
-      version: '0.1.14'
+      version: '0.1.15'
 
   publish-github:
     name: Publish tested GitHub release packages
@@ -84,11 +84,11 @@ jobs:
     if: >-
       github.repository == 'arnen7000/dsh-tm' &&
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-      startsWith(github.event.head_commit.message, 'chore(release): publish GitHub v0.1.14')
+      startsWith(github.event.head_commit.message, 'chore(release): publish GitHub v0.1.15')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
-      group: dsh-tm-release-v0.1.14
+      group: dsh-tm-release-v0.1.15
     permissions:
       contents: write
     steps:
@@ -123,15 +123,19 @@ jobs:
           fi
 
           cat > release-notes.md <<'EOF'
-          运行环境检查现在在后台执行。启动自检与手动检查可以共用一次运行，窗口保持响应，完整报告写好后才替换上一份。
+          修复旧槽接回时重复拼接版本目录和卸载结果误报。扫描找到符合标准的旧槽后，可原地修复登记和启动脚本。卸载找不到登记目录时会保留槽位并说明原因。
 
-          - Windows x64 下载 `dsh-tm-0.1.14-portable.zip`。
-          - Apple Silicon 下载 `DSH-TM-0.1.14-macos-arm64-unsigned.zip`。
-          - Intel Mac 下载 `DSH-TM-0.1.14-macos-x64-unsigned.zip`。
+          - Windows x64 下载 `dsh-tm-0.1.15-portable.zip`。
+          - Apple Silicon 下载 `DSH-TM-0.1.15-macos-arm64-unsigned.zip`。
+          - Intel Mac 下载 `DSH-TM-0.1.15-macos-x64-unsigned.zip`。
 
           Mac 包使用临时签名，尚未取得 Developer ID 签名或 Apple 公证。macOS 可能拦截首次启动。
 
           ## 验证范围
+
+          **本机成品实测**
+
+          - Apple Silicon macOS 27.0.1。用隔离的真实 dsh `0.2.0-rc.2` 在成品 GUI 实测扫描、原地接回、启动、取消卸载及确认卸载。核对弹窗、备份内容、整槽目录删除和端口释放。
 
           **本次 CI 实测**
 
@@ -143,10 +147,10 @@ jobs:
           - macOS arm64 和 x64 包的最低部署目标是 13.5。此次 CI 只覆盖 macOS 15。最低系统版本上的实际启动、物理双屏和成品 GUI 安装卸载全流程未由此运行验证。
           - Windows 便携包面向 Windows 10 / 11 x64。普通桌面安装上的端到端实测未由此运行验证。
 
-          [Mac 安装与首次启动说明](https://github.com/arnen7000/dsh-tm/blob/v0.1.14/docs/macos.md) ·
-          [变更记录](https://github.com/arnen7000/dsh-tm/blob/v0.1.14/CHANGELOG.md) ·
-          [使用手册与开发文档](https://github.com/arnen7000/dsh-tm/tree/v0.1.14/docs) ·
-          [本地验收记录](https://github.com/arnen7000/dsh-tm/blob/v0.1.14/docs/test-coverage-v0.1.14.md)
+          [Mac 安装与首次启动说明](https://github.com/arnen7000/dsh-tm/blob/v0.1.15/docs/macos.md) ·
+          [变更记录](https://github.com/arnen7000/dsh-tm/blob/v0.1.15/CHANGELOG.md) ·
+          [使用手册与开发文档](https://github.com/arnen7000/dsh-tm/tree/v0.1.15/docs) ·
+          [本地验收记录](https://github.com/arnen7000/dsh-tm/blob/v0.1.15/docs/test-coverage-v0.1.15.md)
 
           ## SHA-256
           EOF
@@ -255,7 +259,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
-      group: dsh-tm-release-v0.1.14
+      group: dsh-tm-release-v0.1.15
     permissions:
       contents: write
     steps:
@@ -297,11 +301,11 @@ jobs:
           done
 
           cat > release-notes.md <<'EOF'
-          运行环境检查现在在后台执行，启动与手动检查可以共用一次运行。
+          修复旧槽接回时重复拼接版本目录和卸载结果误报。
 
-          - Windows 10 / 11 x64 下载 `dsh-tm-0.1.14-portable.zip`。
-          - Apple Silicon 下载 `DSH-TM-0.1.14-macos-arm64.zip`。
-          - Intel Mac 下载 `DSH-TM-0.1.14-macos-x64.zip`。
+          - Windows 10 / 11 x64 下载 `dsh-tm-0.1.15-portable.zip`。
+          - Apple Silicon 下载 `DSH-TM-0.1.15-macos-arm64.zip`。
+          - Intel Mac 下载 `DSH-TM-0.1.15-macos-x64.zip`。
 
           两个 Mac App 已使用 Developer ID 签名，并经 Apple 公证和票据装订。
 
@@ -317,7 +321,7 @@ jobs:
           - macOS arm64 和 x64 包的最低部署目标是 13.5。此次 CI 只覆盖 macOS 15。最低系统版本上的实际启动、物理双屏和成品 GUI 安装卸载全流程未由此运行验证。
           - Windows 便携包面向 Windows 10 / 11 x64。普通桌面安装上的端到端实测未由此运行验证。
 
-          [本地验收记录](https://github.com/arnen7000/dsh-tm/blob/v0.1.14/docs/test-coverage-v0.1.14.md)
+          [本地验收记录](https://github.com/arnen7000/dsh-tm/blob/v0.1.15/docs/test-coverage-v0.1.15.md)
 
           ## SHA-256
           EOF

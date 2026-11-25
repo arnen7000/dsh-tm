@@ -129,6 +129,8 @@ def make_slot(key, with_home=True):
     node = P.slot_node_path(d)
     os.makedirs(os.path.dirname(node), exist_ok=True)
     open(node, "wb").write(b"x" * 1024)
+    if not P.IS_WINDOWS:
+        os.chmod(node, 0o755)
     if with_home:
         os.makedirs(os.path.join(d, ".dsh-home"), exist_ok=True)
         open(os.path.join(d, ".dsh-home", "settings.yaml"), "w", encoding="utf-8").write("a: 1")
@@ -222,8 +224,12 @@ chk("全局安装 → 阻断（不能按槽删）",
 
 cfg_gone = {"install_base": "<self>", "versions": {"v9": slot_cfg("v9", 9080)}}
 pl_gone = U.plan_many(cfg_gone, ["v9"], HOME, REPO, FAKE, VER)[0]
-chk("目录已不在 → 不阻断（仍可从配置移除）",
-    (pl_gone["blocked"] == "" and pl_gone["exists"] is False))
+chk("管理器卸载找不到登记目录时阻断，并报告原路径",
+    "槽根目录不存在" in pl_gone["blocked"]
+    and pl_gone["root"] in pl_gone["blocked"] and not pl_gone["exists"])
+pl_gone_cli = U.plan_many(cfg_gone, ["v9"], HOME, REPO, FAKE, VER, retain_runtime=True)[0]
+chk("便携卸载入口仍能清理失效的登记项",
+    not pl_gone_cli["blocked"] and not pl_gone_cli["exists"])
 
 chk("human_size 单位", U.human_size(0) == "0 B" and U.human_size(2048) == "2.0 KB",
     U.human_size(0) + "/" + U.human_size(2048))
@@ -881,6 +887,8 @@ def _mk_slot(ver_dir, name, port, version="0.1.5-rc.2"):
     node = P.slot_node_path(d)
     os.makedirs(os.path.dirname(node), exist_ok=True)
     open(node, "wb").write(b"x" * 512)
+    if not P.IS_WINDOWS:
+        os.chmod(node, 0o755)
     os.makedirs(os.path.join(d, ".dsh-home"), exist_ok=True)
     open(os.path.join(d, ".dsh-home", "settings.yaml"), "w", encoding="utf-8").write("a: 1")
     start = P.slot_launcher_paths(d, port)["start"]

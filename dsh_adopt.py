@@ -141,7 +141,14 @@ def guess_source_home(node_modules):
     return ("", "")
 
 
-def inspect_adopt_source(node_modules, report_limit=5):
+def existing_slot_node(root):
+    for path in (PLATFORM.slot_node_path(root), os.path.join(root, "node", "node")):
+        if os.path.isfile(path) and (PLATFORM.IS_WINDOWS or os.access(path, os.X_OK)):
+            return path
+    return ""
+
+
+def inspect_adopt_source(node_modules, report_limit=5, *, in_place=False):
     """体检一份「别人装好的 dsh」能不能规范地纳入管理（纯只读）。
 
     为什么必须体检：纳入的动作是「复制一份到我们的槽目录并登记」，如果来源本身
@@ -235,9 +242,7 @@ def inspect_adopt_source(node_modules, report_limit=5):
             "全局那份不受影响，但两者以后各升各的") % nm)
     if os.path.isdir(os.path.join(nm, "node-pty")) or \
             os.path.isdir(os.path.join(dsh_dir, "node_modules", "node-pty")):
-        info["warnings"].append(
-            T("含原生模块 node-pty：复制过来的那份必须配同 ABI 的 node，"
-            "所以纳入时会一并复制一个自带 node"))
+        info["warnings"].append(T("含原生模块 node-pty：需要与该模块 ABI 兼容的 Node.js"))
 
     home, why = guess_source_home(nm)
     info["source_home"], info["source_home_why"] = home, why
@@ -245,6 +250,12 @@ def inspect_adopt_source(node_modules, report_limit=5):
         info["warnings"].append(
             T("没找到原来的用户数据目录（.dsh-home / ~/.dsh）—— 纳入后是一个干净的新槽"))
 
+    if in_place:
+        root = os.path.dirname(nm)
+        info["node_exe"] = existing_slot_node(root)
+        if not info["node_exe"]:
+            info["problems"].append(T("槽里缺少可用的自带 Node.js（%s）")
+                                    % os.path.relpath(PLATFORM.slot_node_path(root), root))
     info["ok"] = not info["problems"]
     return info
 
