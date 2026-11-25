@@ -961,7 +961,8 @@ chk("C3z8h 体检窗口默认只报告；修复是**显式按钮**（2026-11-14 
     and "repair_slot" in _fn_body("_health_dialog")
     and "askyesno" in _fn_body("_health_dialog"))
 chk("C3z8i 卸载提示写明「自己放进槽目录的文件也会一起删」",
-    "也会一起删掉且不进备份" in _fn_body("uninstall_versions_dialog"))
+    "包括你自己放进这个槽目录里的任何文件" in _fn_body("uninstall_versions_dialog")
+    and "登记的槽目录" in _fn_body("uninstall_versions_dialog"))
 chk("C3z8j 卸载二次确认带 warning 图标（默认按钮仍是「否」）",
     'icon="warning"' in _fn_body("uninstall_versions_dialog"))
 
@@ -1209,6 +1210,15 @@ chk("C3z17d 运行中的槽拒绝移出（判据与卡片上的「运行中」�
     and "proc_alive(procs.get(key))" in _fn_body("_do_detach"))
 chk("C3z17e 重新纳入走 UNINST.readd_slots",
     "UNINST.readd_slots(" in _fn_body("_do_readd"))
+chk("C3z17e3 批量卸载保留槽位时显示未完成并刷新列表",
+    '.get("kept_in_config")' in _un
+    and 'messagebox.showwarning(T("卸载未完成")' in _un
+    and _un.find('messagebox.showwarning(T("卸载未完成")') < _un.find("_restart_or_tell("))
+_readd_gui = _fn_body("_do_readd")
+chk("C3z17e2 重新纳入先刷新并补齐启动脚本，再报告结果",
+    0 <= _readd_gui.find("_restart_or_tell(") < _readd_gui.find("_rebuild_bats(")
+    < _readd_gui.find("messagebox.showinfo(")
+    and "messagebox.showwarning(" in _readd_gui)
 chk("C3z17f 已移出的槽由「扫描并纳入」原样接回（不再有独立窗口）",
     # 2026-11-12 用户反馈：没必要记住移出了哪个版本，扫描能重新发现。
     "_do_readd(_readd_roots, on_done=copy_next)" in _fn_body("scan_and_offer_adopt")
@@ -1345,7 +1355,7 @@ chk("C3z20d 所有收尾路径都不再对用户说「即将重启」",
         ("_adopt_one", "_install_queue", "_do_install", "_do_uninstall",
          "_do_detach", "_do_readd", "_do_move_root")))
 chk("C3z20e 刷新失败才退回重启进程",
-    "_reload_config_after_change(new_keys)" in _fn_body("_restart_or_tell")
+    "_reload_config_after_change(new_keys, check_health=check_health)" in _fn_body("_restart_or_tell")
     and "_relaunch_self()" in _fn_body("_restart_or_tell"))
 _iq_code = "\n".join(l for l in _fn_body("_install_queue").splitlines()
                      if not l.lstrip().startswith("#"))
@@ -1383,7 +1393,7 @@ chk("C3z21a 分流只看位置：版本根下→原地接回，别处→复制�
 _pk2 = _fn_body("_adopt_picker_dialog")
 chk("C3z21b 纳入候选对话框按**位置**说明：原地接回 / 复制一份",
     # 2026-11-14：说明压成一句，并且**每一行**都标出自己属于哪种。
-    "原地接回 = 只改配置" in _pk2 and "复制一份 = 拷进版本根" in _pk2
+    "原地接回 = 使用原目录并补齐启动脚本" in _pk2 and "复制一份 = 拷进版本根" in _pk2
     and 'r.get("action")' in _pk2)
 
 # ── C3z29：按钮冻结的方向不能写反（2026-11-14「全部停止后按钮全失灵」）────
@@ -1868,6 +1878,16 @@ def _check_readd_bat_scope():
         def files(key):
             return {p.name: p.read_bytes() for p in roots[key].iterdir()}
 
+        events = []
+
+        def refresh_slots(_what, keys, check_health):
+            events.append(("refresh", keys, check_health))
+            return True
+
+        def check_health(deep):
+            events.append(("health", deep, "kill-64181.bat" in files("v1"),
+                           "dsh-cli.bat" in files("v3")))
+
         names = ["_do_readd", "_installed_keys_from", "_bats_missing", "_rebuild_bats",
                  "_version_root", "_bat_unsafe_fields", "_bat_text_start", "_bat_text_kill",
                  "_bat_text_cli", "_write_bat"]
@@ -1881,12 +1901,16 @@ def _check_readd_bat_scope():
                         ("stop", "kill-%s.bat" % port))}),
 
             "CONFIG_PATH": os.path.join(scratch, "config.json"), "MAX_SLOTS": 6, "shutil": shutil,
-            "log": ignore, "_actions_enabled": ignore, "_restart_or_tell": ignore,
+            "log": ignore, "_actions_enabled": ignore, "_restart_or_tell": refresh_slots,
+            "_run_health": check_health,
             "_versions_root": lambda: scratch, "_taken_ports": lambda: [64180],
             "_GuiProgress": lambda _title, done: done,
             "OPS": SimpleNamespace(run_in_thread=run_worker),
             "UNINST": SimpleNamespace(readd_slots=lambda *args, **kwargs: (True, payload, "")),
-            "messagebox": SimpleNamespace(showinfo=ignore, showerror=ignore),
+            "messagebox": SimpleNamespace(
+                showinfo=lambda title, msg: events.append(("info", title, msg)),
+                showwarning=lambda title, msg: events.append(("warning", title, msg)),
+                showerror=lambda title, msg: events.append(("error", title, msg))),
         })
         before_v2, before_v3 = files("v2"), files("v3")
         env["_do_readd"]([str(roots[key]) for key in ("v1", "v3")])
@@ -1898,6 +1922,15 @@ def _check_readd_bat_scope():
             set(v3) - set(before_v3) == {"dsh-cli.bat"}
             and all(v3[name] == content for name, content in before_v3.items()))
         chk("C3z35c 接回不写入其他在管槽的脚本", files("v2") == before_v2)
+        chk("C3z35d 脚本已经落盘才体检和显示成功",
+            events == [("refresh", ["v1", "v3"], False),
+                       ("health", False, True, True), ("info", "已重新纳入", "")])
+        events.clear()
+        env["_rebuild_bats"] = lambda **kwargs: ([], ["v1: permission denied"], [])
+        env["_do_readd"]([str(roots[key]) for key in ("v1", "v3")])
+        chk("C3z35e 补脚本失败时给出一条说明，保留接回结果",
+            len(events) == 3 and events[-1][0:2] == ("warning", "已重新纳入")
+            and "v1: permission denied" in events[-1][2])
 
 
 _check_readd_bat_scope()

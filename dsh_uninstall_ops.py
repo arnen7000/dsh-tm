@@ -20,6 +20,7 @@ import time
 # 与 dsh_install_ops 共用同一套配置读写（原子写、备份），不重复实现。
 import dsh_install_ops as OPS
 import dsh_platform as PLATFORM
+from dsh_adopt import existing_slot_node
 from dsh_i18n import T
 
 
@@ -768,8 +769,10 @@ def plan_slot(key, cfg, base, home, repo, self_dir, versions_root="",
         keep.append(default_home)
     plan["exists"] = os.path.isdir(root)
     if not plan["exists"]:
-        # 目录已不在（手工删过 / 装到一半失败）：仍允许把它从 config.json 移除，
-        # 这样用户能自己收尾。删除阶段会跳过。
+        # The GUI cannot tell a removed directory from a stale registered path.
+        # Keep the entry available for repair or explicit detachment.
+        if not retain_runtime:
+            plan["blocked"] = T("槽根目录不存在：%s") % root
         return plan
 
     try:
@@ -1027,11 +1030,6 @@ def detach_slots(keys, config_path, home, repo, self_dir, versions_root="",
     return (True, payload, "\n".join(parts))
 
 
-def _existing_slot_node(root):
-    paths = (PLATFORM.slot_node_path(root), os.path.join(root, "node", "node"))
-    return next((path for path in paths if os.path.isfile(path)), "")
-
-
 def _copy_new_file(source, destination):
     # Exclusive creation also preserves an existing file if another repair
     # completed after the initial existence check.
@@ -1066,7 +1064,7 @@ def repair_slot(root, node_src=""):
                 T("缺 lib/bin.js —— 这是程序本体，补不了（等于重装）。\n"
                 "请删掉这个目录后用「安装官方版 dsh」重装一份。"))
 
-    if not _existing_slot_node(root):
+    if not existing_slot_node(root):
         if not (node_src and os.path.isfile(node_src)):
             return (False, actions,
                     T("缺 node 运行时，而且没有可复制的来源（先装/保留一个别的槽）。"))
@@ -1183,8 +1181,8 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
         # 比当场拒绝更难排查。缺什么就说什么，并给出下一步。
         try:
             import dsh_adopt as _A
-            _info = _A.inspect_adopt_source(
-                os.path.join(root, "node_modules")) or {}
+            _info = _A.inspect_adopt_source(os.path.join(root, "node_modules"),
+                                            in_place=True) or {}
         except Exception as _e:
             _info = {"ok": False, "problems": [T("体检失败：%s") % _e]}
         for _w in (_info.get("warnings") or []):
@@ -1198,15 +1196,7 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
                 "可以手动删掉这个目录；或用「安装官方版 dsh」装到别的编号"
                 "（它占着自己的编号，不会被自动复用）。") % _why)
             continue
-        # 缺 node 运行时 → **不代劳**。用户可能是故意删的（省空间 / 换自己那份），
-        # 自动从别的槽复制会悄悄推翻他的意图，还可能带进不同 ABI 的 node
-        # （node-pty 这类原生模块会崩）。如实说明，让他自己决定（2026-11-14）。
-        node_exe = _existing_slot_node(root)
-        if not node_exe:
-            d["errors"].append(
-                T("槽里缺少自带的 node 运行时（%s），不能接回。")
-                % os.path.relpath(PLATFORM.slot_node_path(root), root))
-            continue
+        node_exe = _info["node_exe"]
         if norm(root) in managed:
             d["errors"].append(T("这个目录已经在管理里（槽 %s），不需要重复纳入")
                                % managed[norm(root)])
@@ -1214,6 +1204,39 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
 
         # ── 槽键：目录名说了算 ────────────────────────────────
         key0 = slot_key_from_dir(root)
+        stale_root = os.path.join(base, "dsh-versions", os.path.basename(root))
+        old_slot = versions.get(key0)
+        # Recognize the precise legacy duplicate directory before assigning another key.
+        if (old_slot and norm(os.path.dirname(root)) == norm(base)
+                and norm(stale_root) == norm(slot_root(old_slot, base, home, self_dir))
+                and not os.path.lexists(stale_root)):
+            try:
+                port = int(old_slot.get("port") or 0)
+            except (TypeError, ValueError):
+                port = 0
+            if not 1 <= port <= 65535:
+                d["errors"].append(T("原登记端口无效，无法修复路径：%s") % key0)
+                continue
+            defaults = _A.build_slot_config(
+                key0, d["label"], root, os.path.join(root, ".dsh-home"),
+                os.path.join(root, ".tmp"), port, node_exe, install_base=base,
+            )
+            fixed = {**defaults, **old_slot}
+            for field in ("bin_js", "node_exe", "dsh_home", "temp_dir"):
+                old_path = resolve(old_slot.get(field) or "", base, home, self_dir)
+                if not old_path or is_under(old_path, stale_root):
+                    fixed[field] = defaults[field]
+            versions[key0] = fixed
+            launcher_port = PLATFORM.read_slot_port(root) if PLATFORM.IS_MAC else port_from_bats(root)
+            if launcher_port != port:
+                port_changed[key0] = (launcher_port or 0, port)
+            managed[norm(root)] = key0
+            added.append(key0)
+            drop.extend((root, stale_root))
+            d["key"] = key0
+            d["warnings"].append(T("已修正槽 %s 的登记路径，保留原端口 %d") % (key0, port))
+            p.on_step(T("[%s] 接回：%s（端口 %d）") % (key0, root, port))
+            continue
         key = key0
         if not key or key in versions:
             key = ""
@@ -1261,28 +1284,14 @@ def readd_slots(roots, config_path, home, repo, self_dir, versions_root="",
             port_changed[key] = (0, newp)
             port = newp
 
-        # ── 路径：按它现在的位置写（在版本根下就用占位符）────────
-        rel = ""
-        try:
-            _rel = os.path.relpath(root, vr)
-            if not _rel.startswith(".."):
-                rel = _rel.replace("\\", "/")
-        except Exception:
-            rel = ""
-        pre = ("<base>/dsh-versions/" + rel) if rel else root.replace("\\", "/")
-
-        versions[key] = {
-            "label": label,
-            "node_exe": pre + "/" + os.path.relpath(node_exe, root).replace(os.sep, "/"),
-            "bin_js": pre + "/node_modules/@deepseek-ai/dsh/lib/bin.js",
-            "dsh_home": pre + "/.dsh-home",
-            "temp_dir": pre + "/.tmp",
-            "port": int(port),
-            "browser": "default",
-            "extra_args": ["web", "--host", "127.0.0.1",
-                           "--port", str(port), "--no-open"],
-        }
+        # The version root may be the install base itself or live elsewhere.
+        # Encode <base> relative to the same directory used to resolve it.
+        versions[key] = _A.build_slot_config(
+            key, label, root, os.path.join(root, ".dsh-home"), os.path.join(root, ".tmp"),
+            port, node_exe, install_base=base if is_under(root, vr) else "",
+        )
         taken.add(int(port))
+        managed[norm(root)] = key
         added.append(key)
         drop.append(root)
         d["key"] = key
@@ -1531,6 +1540,9 @@ def uninstall_slots(keys, config_path, home, repo, self_dir,
                             + ("…" if len(_f) > 6 else "")))
     if kept:
         parts.append(T("保留在配置里（未完全清理，可重试）：%s") % ", ".join(kept))
+        for d in details:
+            if d["errors"]:
+                parts.append("  · %s：%s" % (d["key"], "；".join(d["errors"])))
     _with_bak = [d for d in details if d.get("backup")]
     _no_bak = [d for d in details if not d.get("backup") and not d.get("errors")]
     if _with_bak:
