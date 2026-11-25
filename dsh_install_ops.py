@@ -19,6 +19,7 @@
 import filecmp
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -1258,6 +1259,8 @@ NPM_TIMEOUT_EXIT = 124
 _NPM_FETCH_RETRY = ("--fetch-retries=1", "--fetch-retry-mintimeout=3000",
                     "--fetch-retry-maxtimeout=15000")
 _MAC_NPM_FETCH = ("--prefer-offline", "--fetch-timeout=45000")
+_NPM_METADATA_ERROR = re.compile(r"^npm (?:error|err!) code (?:ETARGET|E404)\s*$",
+                                 re.IGNORECASE | re.MULTILINE)
 
 
 def _run_npm(node_exe, npm_cli, args, cwd=None):
@@ -1312,6 +1315,18 @@ def _run_npm(node_exe, npm_cli, args, cwd=None):
     return (rc, raw.decode("utf-8", "replace"))
 
 
+def _run_npm_cached(node_exe, npm_cli, args, cwd=None, progress=None):
+    """Recheck stale version metadata once, using the same registry and slot."""
+    rc, output = _run_npm(node_exe, npm_cli, args, cwd=cwd)
+    if not (rc and "--prefer-offline" in args and _NPM_METADATA_ERROR.search(output or "")):
+        return rc, output
+    if progress is not None:
+        progress.on_step(T("正在向 npm 源重新核对版本信息并重试…"))
+    retry = ["--prefer-offline=false" if arg == "--prefer-offline" else arg for arg in args]
+    retry.append("--prefer-online")
+    return _run_npm(node_exe, npm_cli, retry, cwd=cwd)
+
+
 # npm 的网络类报错特征（2026-11-13）。
 # 为什么要认字符串而不是只看退出码：npm 遇到 ECONNRESET 时**退出码是 1**，
 # 不是负数 —— 旧代码只在 `rc < 0` 时换镜像，于是下载中断（实测 5 分钟白等）
@@ -1355,7 +1370,7 @@ def _pick_registry(node_exe, npm_cli, spec, slow_secs=4.0):
             args.extend(_NPM_FETCH_RETRY + _MAC_NPM_FETCH)
         if reg:
             args.extend(("--registry", reg))
-        rc, out = _run_npm(node_exe, npm_cli, args)
+        rc, out = _run_npm_cached(node_exe, npm_cli, args)
         return rc, out, (time.monotonic() - t0)
 
     rc, out, dt = _probe("")
@@ -1369,7 +1384,7 @@ def _pick_registry(node_exe, npm_cli, spec, slow_secs=4.0):
             return (True, FALLBACK_REGISTRY, "")
         return (True, "", "")
     if not _registry_unreachable(rc, out):
-        # 到这里才是真的「版本不存在」（E404/ETARGET）。换源也没用，直接报。
+        # 缓存的 E404/ETARGET 已核对一次，仍找不到则报告所用源的实际结果。
         return (False, "", T("npm 上找不到 %s（npm 默认源 返回 %d）。\n%s\n"
                            "请确认版本号是否写对（可用 npm view @deepseek-ai/dsh "
                            "versions 查全部版本）。")
@@ -1409,7 +1424,7 @@ def _npm_install_slot(node_exe, slot_dir, version, progress=None):
     if not ok:
         return (1, why)
     if reg:
-        p.on_step(T("默认源不可达，本次安装改用镜像 %s（仅本次生效，不改全局配置）") % reg)
+        p.on_step(T("本次安装使用 npm 镜像 %s") % reg)
 
     # 槽根没有 package.json 时先 npm init -y：否则 npm 会往上找父目录的
     # package.json，把依赖装到槽外去（多槽共用同一父目录时必然踩）。
@@ -1419,14 +1434,14 @@ def _npm_install_slot(node_exe, slot_dir, version, progress=None):
         if rc != 0:
             return (rc, T("npm init -y 失败（退出码 %d）：\n%s") % (rc, _tail(out)))
 
-    p.on_step(T("下载并安装 %s（要几分钟，请勿关闭管理器）…") % spec)
+    p.on_step(T("下载并安装 %s（可能需要几分钟）…") % spec)
     # npm 默认会为 ECONNRESET 自己重试很久（实测整段 5 分钟才报错）。这里把重试
     # 压到 1 次、退避上限 15 秒 —— 失败要快，好让下面的"换镜像重试"接上。
     fast_fail = list(_NPM_FETCH_RETRY)
     if PLATFORM.IS_MAC:
         fast_fail.extend(("--engine-strict",) + _MAC_NPM_FETCH)
     args = ["install", spec] + fast_fail + (["--registry", reg] if reg else [])
-    rc, out = _run_npm(exe, cli, args, cwd=slot_dir)
+    rc, out = _run_npm_cached(exe, cli, args, cwd=slot_dir, progress=p)
     # 网络中断（ECONNRESET / ETIMEDOUT / EAI_AGAIN …）→ 换镜像重试一次。
     # 判据是**输出内容**，不是退出码：npm 这里返回的是 1，不是负数。
     timed_out_on_mac = PLATFORM.IS_MAC and rc == NPM_TIMEOUT_EXIT
@@ -1437,9 +1452,9 @@ def _npm_install_slot(node_exe, slot_dir, version, progress=None):
         else:
             p.on_step(T("默认源网络中断，改用镜像 %s 重试一次（只影响本次安装）…")
                       % FALLBACK_REGISTRY)
-        rc, out = _run_npm(exe, cli, ["install", spec] + fast_fail +
-                           ["--registry", FALLBACK_REGISTRY],
-                           cwd=slot_dir)
+        rc, out = _run_npm_cached(exe, cli, ["install", spec] + fast_fail +
+                                  ["--registry", FALLBACK_REGISTRY],
+                                  cwd=slot_dir, progress=p)
         if rc == 0:
             out = (out or "") + T("\n（本次安装改走了镜像 %s）") % FALLBACK_REGISTRY
     return (rc, out)

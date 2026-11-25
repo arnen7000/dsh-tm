@@ -1,4 +1,5 @@
 """Exercise the shared Darwin paths and standalone launchers without an npm download."""
+import ast
 import os
 from pathlib import Path
 import subprocess
@@ -17,6 +18,40 @@ import dsh_install_ops
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS")
 class MacPlatformTests(unittest.TestCase):
+    def test_source_version_check_distinguishes_annotations_from_regex_strings(self):
+        script = Path(__file__).with_name("check-env.py").read_text(encoding="utf-8")
+        definitions = [node for node in ast.parse(script).body
+                       if isinstance(node, ast.FunctionDef) and node.name == "check_min_version_claim"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "dsh_install_ops.py").write_text(
+                'pattern = r"(?:ETARGET|E404)"\n', encoding="utf-8")
+            (root / "dsh_adopt.py").write_text(
+                "def choose(value: str | None) -> str:\n    return value or ''\n",
+                encoding="utf-8")
+            problems = []
+            namespace = {"ROOT": directory, "os": os, "MIN_PY": (3, 8), "T": lambda text: text,
+                         "bad": problems.append, "ok": lambda text: None}
+            exec(compile(ast.Module(body=definitions, type_ignores=[]), "check-env.py", "exec"), namespace)
+            namespace["check_min_version_claim"]()
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("dsh_adopt.py", problems[0])
+        self.assertIn("3.10", problems[0])
+
+    def test_zero_slot_check_does_not_warn_about_missing_slot_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config = home / "config.json"
+            config.write_text('{"versions":{}}', encoding="utf-8")
+            report = subprocess.run(
+                [sys.executable, str(Path(__file__).with_name("check-env.py")),
+                 "--config", str(config), "--lang", "zh"],
+                env=dict(os.environ, HOME=directory), capture_output=True,
+                encoding="utf-8", timeout=30,
+            )
+            self.assertIn("[OK]   当前没有配置 dsh 版本槽", report.stdout)
+            self.assertNotIn("dsh-versions", report.stdout)
+
     def test_npm_timeout_also_stops_lifecycle_children(self):
         child = (
             "from pathlib import Path; import time; "
@@ -46,27 +81,67 @@ class MacPlatformTests(unittest.TestCase):
         self.assertIn("--fetch-timeout=45000", first)
         self.assertEqual(second[-2:], ["--registry", dsh_install_ops.FALLBACK_REGISTRY])
 
-    def test_staged_npm_timeout_reports_timeout_and_leaves_config_unchanged(self):
-        with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            config = base / "config.json"
-            config.write_text('{"versions":{}}', encoding="utf-8")
-            before = config.read_bytes()
-            versions = base / "versions"
-            target = versions / "dshV2"
-            with patch.object(dsh_install_ops, "_pick_node_exe", return_value="/fixture/node"), \
-                    patch.object(dsh_adopt, "copy_node_exe", return_value=("/fixture/node", "")), \
-                    patch.object(dsh_install_ops, "_npm_install_slot",
-                                 return_value=(124, "npm warn deprecated fixture")):
-                ok, key, message = dsh_install_ops._staged_mac_install(
-                    dsh_adopt, "0.2.2-rc.5", "v2", str(target), str(versions),
-                    directory, str(config), 5080, "default", dsh_install_ops.Progress())
-            self.assertFalse(ok)
-            self.assertEqual(key, "")
-            self.assertIn("超时（10 分钟）", message)
-            self.assertNotIn("deprecated", message)
-            self.assertEqual(config.read_bytes(), before)
-            self.assertEqual(list(versions.iterdir()), [])
+    def test_mac_preflight_rechecks_cached_version_error_on_same_registry(self):
+        with patch.object(dsh_install_ops, "_run_npm",
+                          side_effect=[(1, "npm ERR! code E404"), (0, "0.2.2-rc.5")]) as run:
+            ok, registry, message = dsh_install_ops._pick_registry(
+                "node", "npm", "@deepseek-ai/dsh@0.2.2-rc.5")
+        self.assertEqual((ok, registry, message), (True, "", ""))
+        first, retry = (call.args[2] for call in run.call_args_list)
+        self.assertIn("--prefer-offline", first)
+        self.assertNotIn("--registry", retry)
+        self.assertNotIn("--prefer-offline", retry)
+        self.assertIn("--prefer-online", retry)
+
+    def test_mac_install_rechecks_transitive_version_error_once(self):
+        for retry_code in (0, 1):
+            with self.subTest(retry_code=retry_code), tempfile.TemporaryDirectory() as directory:
+                (Path(directory) / "package.json").write_text("{}", encoding="utf-8")
+                error = "npm error code ETARGET\nnpm error No matching version found for dependency@1.0.0."
+                mirror = dsh_install_ops.FALLBACK_REGISTRY
+                with patch.object(dsh_install_ops, "_npm_cli", return_value=("node", "npm")), \
+                        patch.object(dsh_install_ops, "_pick_registry", return_value=(True, mirror, "")), \
+                        patch.object(dsh_install_ops, "_run_npm",
+                                     side_effect=[(1, error), (retry_code, "online result")]) as run:
+                    result = dsh_install_ops._npm_install_slot("node", directory, "0.2.2-rc.5")
+                self.assertEqual(result, (retry_code, "online result"))
+                first, retry = (call.args[2] for call in run.call_args_list)
+                self.assertIn("--prefer-offline", first)
+                self.assertIn("--prefer-online", retry)
+                self.assertNotIn("--prefer-offline", retry)
+                self.assertEqual(retry[retry.index("--registry") + 1], mirror)
+                self.assertEqual([call.kwargs["cwd"] for call in run.call_args_list],
+                                 [directory, directory])
+
+    def test_failed_staged_install_reports_cause_and_discards_partial_files(self):
+        cases = (
+            (124, "npm warn deprecated fixture", "超时（10 分钟）"),
+            (1, "npm error fixture EIO\nnpm warn deprecated fixture", "npm error fixture EIO"),
+            (0, "npm warn deprecated fixture", "没有找到 dsh 程序入口"),
+        )
+        for code, output, cause in cases:
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as directory:
+                base = Path(directory)
+                config = base / "config.json"
+                config.write_text('{"versions":{},"unknown_field":true}', encoding="utf-8-sig")
+                before = config.read_bytes()
+                versions = base / "dsh-versions"
+
+                def install_partial(node, payload, version, progress):
+                    (Path(payload) / "partial-download").write_bytes(b"fixture data")
+                    return code, output
+
+                with patch.object(dsh_install_ops, "_pick_node_exe", return_value="/fixture/node"), \
+                        patch.object(dsh_adopt, "copy_node_exe", return_value=("/fixture/node", "")), \
+                        patch.object(dsh_install_ops, "_npm_install_slot", side_effect=install_partial):
+                    ok, key, message = dsh_install_ops.run_official_install(
+                        dsh_adopt, "0.2.2-rc.5", str(config), directory, "v2", [])
+                self.assertFalse(ok)
+                self.assertEqual(key, "")
+                self.assertIn(cause, message)
+                self.assertNotIn("deprecated", message)
+                self.assertEqual(config.read_bytes(), before)
+                self.assertEqual(list(versions.iterdir()), [])
 
     def test_mac_npm_timeout_retries_with_mirror_once(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -19,7 +19,7 @@ sys.path.insert(0, str(REPO))
 import dsh_install_ops as ops
 
 names = {"_make_taskbar_window", "_GuiProgress", "_install_queue", "_do_install",
-         "_actions_enabled", "_request_close", "_build_fresh_guide",
+         "_actions_enabled", "_request_close", "_build_fresh_guide", "_post_ui", "_drain_ui_queue",
          "install_official_version", "scan_and_offer_adopt"}
 parsed = ast.parse((REPO / "dsh_manager.pyw").read_text(encoding="utf-8"))
 root = tk.Tk()
@@ -62,7 +62,7 @@ env = {
     "PLATFORM": SimpleNamespace(IS_WINDOWS=False), "T": lambda s: s, "log": logs.append,
     "OPS": SimpleNamespace(Progress=ops.Progress, run_official_install=installer,
                            run_in_thread=ops.run_in_thread),
-    "_post_ui": lambda f, *args: pending.put((f, args)), "_apply_icon": lambda win: None,
+    "queue": queue, "_UI_QUEUE": pending, "_apply_icon": lambda win: None,
     "_APP_BG": "white", "_CARD_BD": "gray", "_INK": "black", "_MUTED": "gray", "_DIVIDER": "gray",
     "BUSY": busy, "_SETTINGS_WIN": {"win": None}, "_occupied_unmanaged_keys": lambda: [],
     "_next_free_slot_key_live": lambda: next(keys), "dsh_adopt": None,
@@ -92,9 +92,6 @@ env["_GuiProgress"] = progress
 def pump(predicate=lambda: True):
     deadline = time.monotonic() + 8
     while time.monotonic() < deadline:
-        while not pending.empty():
-            callback, args = pending.get_nowait()
-            callback(*args)
         root.update()
         if predicate():
             return
@@ -109,6 +106,7 @@ def descendants(widget):
 
 
 try:
+    root.after(0, env["_drain_ui_queue"])
     env["_build_fresh_guide"]()
     empty_slot_buttons = [widget for widget in descendants(cards) if isinstance(widget, ttk.Button)]
     assert len(empty_slot_buttons) == 2
@@ -123,6 +121,8 @@ try:
     assert all(button.instate(["disabled"]) for button in empty_slot_buttons)
     env["install_official_version"]()
     env["scan_and_offer_adopt"]()
+    env["_install_queue"](["0.2.2-rc.3"])
+    assert len(progresses) == 1 and len(attempts) == 1
     assert not events
     env["_request_close"]()
     assert len(events) == 1 and events.pop()[:2] == ("notice", "正在安装 dsh")
@@ -136,7 +136,7 @@ try:
     assert first.win.winfo_ismapped()
     assert not any("WinDLL" in log for log in logs)
     print("PASS native first show, background, reopen, and action restrictions", flush=True)
-    hide.invoke()
+    first.win.tk.call(first.win.protocol("WM_DELETE_WINDOW"))
     jobs[0].set()
     pump(lambda: len(attempts) == 2)
     assert not progresses[1].win.winfo_ismapped()
@@ -149,6 +149,7 @@ try:
     assert not busy["installing"] and not settings_button.instate(["disabled"])
     assert all(not button.instate(["disabled"]) for button in empty_slot_buttons)
     assert len(attempts) == 2 and not header.winfo_children()
+    assert not any("后台操作的结果处理失败" in line for line in logs), logs
     assert sum("[安装] 安装结束" in line for line in logs) == 1, logs
     env["_request_close"]()
     assert events[-1] == ("close",)

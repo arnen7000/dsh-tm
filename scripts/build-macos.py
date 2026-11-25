@@ -94,7 +94,8 @@ def write_spec(work, runtime, arch):
     files = (
         'VERSION', 'LICENSE', 'dsh_manager.pyw', 'dsh-tm.py', 'config/config.example.json',
         'config/cordis.patch.yml.template', 'lang/en.json', 'scripts/check-env.py',
-        'docs/dsh管理器使用说明.md', 'docs/user-guide.en.md',
+        'docs/dsh管理器使用说明.md', 'docs/user-guide.en.md', 'docs/macos.md',
+        'docs/架构与性能.md', 'docs/agent-api.md',
         'assets/dsh-icon.ico', 'assets/dsh-icon-violet.ico',
     )
     datas = [(str(REPO / name), str(Path(name).parent)) for name in files]

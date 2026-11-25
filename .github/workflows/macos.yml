@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  RELEASE_VERSION: '0.1.12'
+  RELEASE_VERSION: '0.1.13'
 
 jobs:
   package:
@@ -76,7 +76,7 @@ jobs:
       (github.ref == 'refs/heads/codex/macos-support' || github.ref == 'refs/heads/main')
     uses: ./.github/workflows/windows-release.yml
     with:
-      version: '0.1.12'
+      version: '0.1.13'
 
   publish-github:
     name: Publish tested GitHub release packages
@@ -84,11 +84,11 @@ jobs:
     if: >-
       github.repository == 'arnen7000/dsh-tm' &&
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-      startsWith(github.event.head_commit.message, 'chore(release): publish GitHub v0.1.12')
+      startsWith(github.event.head_commit.message, 'chore(release): publish GitHub v0.1.13')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
-      group: dsh-tm-release-v0.1.12
+      group: dsh-tm-release-v0.1.13
     permissions:
       contents: write
     steps:
@@ -123,18 +123,31 @@ jobs:
           fi
 
           cat > release-notes.md <<'EOF'
-          此版修复 macOS 安装进度窗被主界面遮挡、npm 超时误报和超时后残留子进程的问题。
-          可从进度窗主动转入后台，安装期间继续使用已装槽。结束后刷新槽位并汇总成功与失败。
+          macOS 安装碰到过期的 npm 版本缓存时会向当前源核对一次。零槽自检、安装结果和卸载进度的日志更准确。
+          新增使用手册及架构、可靠性、性能说明。
 
-          - Windows x64 下载 `dsh-tm-0.1.12-portable.zip`。
-          - Apple Silicon 下载 `DSH-TM-0.1.12-macos-arm64-unsigned.zip`。
-          - Intel Mac 下载 `DSH-TM-0.1.12-macos-x64-unsigned.zip`。
+          - Windows x64 下载 `dsh-tm-0.1.13-portable.zip`。
+          - Apple Silicon 下载 `DSH-TM-0.1.13-macos-arm64-unsigned.zip`。
+          - Intel Mac 下载 `DSH-TM-0.1.13-macos-x64-unsigned.zip`。
 
           Mac 包使用临时签名，尚未取得 Developer ID 签名或 Apple 公证。macOS 可能拦截首次启动。
-          最低部署目标为 macOS 13.5。两种架构在 macOS 15 运行了 0.2.2-rc.1 和 0.2.2-rc.5 的安装、认证及启停验收。
 
-          [Mac 安装与首次启动说明](https://github.com/arnen7000/dsh-tm/blob/v0.1.12/docs/macos.md) ·
-          [变更记录](https://github.com/arnen7000/dsh-tm/blob/v0.1.12/CHANGELOG.md)
+          ## 验证范围
+
+          **本次 CI 实测**
+
+          - macOS 15，GitHub 托管 Apple Silicon 和 Intel runner。两种架构均启动了解包后的 App，并用包内运行时真实安装 `0.2.2-rc.1` 和 `0.2.2-rc.5`，验证 HTTP 认证与启停。App 启动与生命周期分开测试。
+          - Windows x64，GitHub 托管 `windows-latest` runner。通过源码回归，以及解包后的 CLI、Python/Tk、Node/npm 与进程安全检查。
+
+          **设计支持，尚缺本次实机验收证据**
+
+          - macOS arm64 和 x64 包的最低部署目标是 13.5。此次 CI 只覆盖 macOS 15。最低系统版本上的实际启动、物理双屏和成品 GUI 安装卸载全流程未由此运行验证。
+          - Windows 便携包面向 Windows 10 / 11 x64。普通桌面安装上的端到端实测未由此运行验证。
+
+          [Mac 安装与首次启动说明](https://github.com/arnen7000/dsh-tm/blob/v0.1.13/docs/macos.md) ·
+          [变更记录](https://github.com/arnen7000/dsh-tm/blob/v0.1.13/CHANGELOG.md) ·
+          [使用手册与开发文档](https://github.com/arnen7000/dsh-tm/tree/v0.1.13/docs) ·
+          [本地验收记录](https://github.com/arnen7000/dsh-tm/blob/v0.1.13/docs/test-coverage-v0.1.13.md)
 
           ## SHA-256
           EOF
@@ -243,7 +256,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
-      group: dsh-tm-release-v0.1.12
+      group: dsh-tm-release-v0.1.13
     permissions:
       contents: write
     steps:
@@ -285,13 +298,27 @@ jobs:
           done
 
           cat > release-notes.md <<'EOF'
-          此版修复安装进度和 npm 超时反馈。两平台共用六槽管理、设置、体检和 CLI。
+          macOS 安装会重新核对疑似过期的 npm 版本缓存，并改进自检、安装和卸载反馈。
 
-          - Windows 10 / 11 x64 下载 `dsh-tm-0.1.12-portable.zip`。
-          - Apple Silicon 下载 `DSH-TM-0.1.12-macos-arm64.zip`。
-          - Intel Mac 下载 `DSH-TM-0.1.12-macos-x64.zip`。
+          - Windows 10 / 11 x64 下载 `dsh-tm-0.1.13-portable.zip`。
+          - Apple Silicon 下载 `DSH-TM-0.1.13-macos-arm64.zip`。
+          - Intel Mac 下载 `DSH-TM-0.1.13-macos-x64.zip`。
 
-          macOS 的最低部署目标是 13.5。Apple Silicon 和 Intel 均在 macOS 15 通过安装、认证访问和停机测试。两个 App 已使用 Developer ID 签名，并经 Apple 公证和票据装订。
+          两个 Mac App 已使用 Developer ID 签名，并经 Apple 公证和票据装订。
+
+          ## 验证范围
+
+          **本次 CI 实测**
+
+          - macOS 15，GitHub 托管 Apple Silicon 和 Intel runner。两种架构均启动了解包后已签名的 App，并真实安装 `0.2.2-rc.1`，验证 HTTP 认证与启停。App 启动与生命周期分开测试。
+          - Windows x64，GitHub 托管 `windows-latest` runner。通过源码回归，以及解包后的 CLI、Python/Tk、Node/npm 与进程安全检查。
+
+          **设计支持，尚缺本次实机验收证据**
+
+          - macOS arm64 和 x64 包的最低部署目标是 13.5。此次 CI 只覆盖 macOS 15。最低系统版本上的实际启动、物理双屏和成品 GUI 安装卸载全流程未由此运行验证。
+          - Windows 便携包面向 Windows 10 / 11 x64。普通桌面安装上的端到端实测未由此运行验证。
+
+          [本地验收记录](https://github.com/arnen7000/dsh-tm/blob/v0.1.13/docs/test-coverage-v0.1.13.md)
 
           ## SHA-256
           EOF

@@ -17,6 +17,7 @@ import dsh_adopt
 import dsh_install_ops
 import dsh_platform
 import dsh_slot_process
+import dsh_uninstall_ops
 
 DSH_VERSION = "0.2.2-rc.1"
 
@@ -57,6 +58,42 @@ def verify_gui_start(exe, config):
                     proc.wait(timeout=10)
                     raise
                 assert code == 0, ("Packaged manager did not quit normally", code)
+
+
+def verify_running_uninstall(app, args, config, home, base, key, slot):
+    slot_root = Path(slot["bin_js"]).parents[4]
+    marker = Path(slot["dsh_home"]) / "coverage-session.txt"
+    marker_content = "fixture session to preserve\n"
+    marker.write_text(marker_content, encoding="utf-8")
+    port = slot["port"]
+
+    def stop(key_to_stop, port_to_stop):
+        assert (key_to_stop, port_to_stop) == (key, port)
+        assert dsh_slot_process.port_reachable(port)
+        stopped = packaged_cli(args, "stop", key)
+        return stopped["changed"] == [key] and not dsh_slot_process.port_reachable(port)
+
+    try:
+        started = packaged_cli(args, "start", key, "--wait", "60")
+        assert started["changed"] == [key]
+        ok, payload, detail = dsh_uninstall_ops.uninstall_slots(
+            [key], str(config), str(home), str(app), str(app),
+            versions_root=str(slot_root.parent), backup_root=str(base / "test backups"),
+            stop_fn=stop, base_override=str(base))
+        assert ok, detail
+        assert payload["removed"] == [key] and not payload["kept_in_config"]
+        assert payload["details"][0]["stopped"]
+        backup = Path(payload["details"][0]["backup"])
+        assert (backup / marker.name).read_text(encoding="utf-8") == marker_content
+        assert not slot_root.exists()
+        assert not dsh_slot_process.port_reachable(port)
+        saved = json.loads(config.read_text(encoding="utf-8-sig"))
+        assert saved["legacy_extension"] == {"keep": True}
+        assert packaged_cli(args, "list")["count"] == 0
+    finally:
+        if dsh_slot_process.port_reachable(port):
+            dsh_slot_process.stop_slot(slot["bin_js"], port)
+    print("Running dsh was stopped, backed up and uninstalled", flush=True)
 
 
 def run(app, gui=True, dsh_version=DSH_VERSION):
@@ -147,6 +184,7 @@ def run(app, gui=True, dsh_version=DSH_VERSION):
         finally:
             if dsh_slot_process.port_reachable(port):
                 dsh_slot_process.stop_slot(slot["bin_js"], port)
+        verify_running_uninstall(app, args, config, home, base, key, slot)
         print("Packaged dsh lifecycle passed for " + dsh_version)
 
 

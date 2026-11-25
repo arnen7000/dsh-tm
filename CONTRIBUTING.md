@@ -6,17 +6,18 @@
 
 ## English
 
-A small Windows desktop tool (Tkinter + pure Python), with no third-party dependencies.
-Before changing anything, read the code map below and
+A Windows and macOS desktop tool with a Tkinter interface and a Python CLI.
+Start with the [architecture and performance guide](docs/架构与性能.md), then consult the code map below and
 [`docs/工程经验总结.md`](docs/工程经验总结.md) (why some parts look "roundabout").
 
 ### Environment
 
 | Need | Version | Notes |
 |---|---|---|
-| Windows | 10 / 11 | Windows APIs only (processes, ports, junctions); no cross-platform plan |
+| Windows | 10 / 11 x64 | Native process tools, junctions and batch launchers |
+| macOS | Apple Silicon / Intel; minimum deployment target 13.5 | Native Python 3.12.15 / Tk 9 for builds; see [macOS](docs/macos.md) |
 | Python | 3.10+, **with tkinter** | Use system Python for development; releases use `runtime\python` (3.10, with tkinter) |
-| Node | >= 22.19 | Only needed to install a new slot; tests never need a real node |
+| Node | >= 22.19 for older dsh; >= 24.9 for 0.2.2+ | The release packages bundle Node. Process and package tests exercise a real runtime. |
 
 First run generates `config.json` from `config/config.example.json`
 (**this file is not tracked**).
@@ -125,7 +126,7 @@ token / sensitive-file scans); the full gate still needs a manual `check-all.ps1
 
 ## 中文
 
-这是一个 Windows 桌面小工具（Tkinter + 纯 Python），没有第三方依赖。改动之前请先读
+这是一个 Windows 和 macOS 桌面工具，界面使用 Tkinter，并提供 Python CLI。改动之前请先读[架构、可靠性与性能](docs/架构与性能.md)、
 下面的代码地图和
 [`docs/工程经验总结.md`](docs/工程经验总结.md)（为什么有些地方看起来"绕"）。
 
@@ -133,9 +134,10 @@ token / sensitive-file scans); the full gate still needs a manual `check-all.ps1
 
 | 需要 | 版本 | 说明 |
 |---|---|---|
-| Windows | 10 / 11 | 只用 Windows API（进程、端口、junction），没有跨平台计划 |
+| Windows | 10 / 11 x64 | 使用本地进程工具、junction 和批处理启动器 |
+| macOS | Apple Silicon 或 Intel，最低部署目标 13.5 | 构建使用原生 Python 3.12.15 / Tk 9，见 [macOS](docs/macos.md) |
 | Python | 3.10+，**必须带 tkinter** | 开发时可直接用系统 Python；发布包里用 `runtime\python`（3.10，含 tkinter） |
-| Node | ≥ 22.19 | 只在"装一个新槽"时需要；测试用不到真实 node |
+| Node | 旧版 dsh ≥ 22.19，0.2.2 起 ≥ 24.9 | 发布包自带 Node，进程及成品测试使用真实运行时 |
 
 首次运行会从 `config/config.example.json` 生成 `config.json`（**这个文件不入库**）。
 
@@ -226,3 +228,4 @@ git config core.hooksPath .githooks
 - **不要**把 `config.json` 或 `dsh备份` 在机器之间同步 —— 里面是本机绝对路径和明文凭据。
 - 发布前：改 `VERSION` → 写 `CHANGELOG.md` → **提交** → 打 tag（`v` 前缀）→ 跑 `check-all.ps1`
   → **再**打便携包（打包脚本会拒绝在 `HEAD:VERSION` 与工作区不一致时出包）→ 实测一次真实安装。
+- GitHub Release 保留「验证范围」。逐项记录产物或提交、OS 版本、架构、托管 runner 或实机、实际执行的场景及证据链接。将最低部署目标、未跑的系统版本与 GUI 场景单独列出。补测用源码、替身或本地重建包时写明方式，并核对证据是否对应本次发布产物。[v0.1.12 验收记录](docs/test-coverage-v0.1.12.md)

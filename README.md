@@ -2,6 +2,8 @@
 
 macOS 用户可按 [macOS 使用说明](docs/macos.md) 安装 App 或从源码运行管理器。下文的批处理与 PowerShell 示例适用于 Windows。
 
+[完整使用手册](docs/dsh管理器使用说明.md) · [架构、可靠性与性能](docs/架构与性能.md) · [CLI JSON 接口](docs/agent-api.md)
+
 **中文** · [English](README.en.md)
 
 [![check-all](https://github.com/arnen7000/dsh-tm/actions/workflows/ci.yml/badge.svg)](https://github.com/arnen7000/dsh-tm/actions/workflows/ci.yml)
@@ -311,16 +313,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -Targe
 
 | 类别 | 内容 | 卸载时 |
 |---|---|---|
-| 用户数据 | 该槽的 `.dsh-home`（会话 / 配置 / 凭据 / 插件配置） | **只备份、可原样取回** |
+| 用户数据 | 该槽的 `.dsh-home`（会话 / 配置 / 凭据 / 插件配置） | **备份并核对后删除槽内原目录**，可从备份恢复 |
 | 用户改过的配置 | `config.json` | 改前自动备份为 `config.json.bak-<时间戳>` |
 | 程序产物 | `node_modules\`、自带 `node\`、三件 bat、`package.json` | **删除** |
-| 临时目录 | 各槽的 `temp_dir` | **保留**（不在槽目录内时不归槽所有） |
+| 临时目录 | 各槽的 `temp_dir` | 随槽移除槽内临时目录，保留槽外临时目录 |
 | 仓库源码 | README / 脚本 / 图标 / `config.example.json` | **不动** |
 
 > ⚠️ **你自己放进槽目录的东西（笔记、补丁、下载的文件）会跟着一起删且不进备份。** 要留请先复制出去。
 > 卸载确认框会把这类「不是 dsh 装出来的」条目**逐个点名列出**（`node_modules` / `node` / `.dsh-home` / `.tmp` / 三件 bat / `package*.json` 之外的都算）。
 
-**备份要么完整、要么中止**：备份后会逐文件核对大小；对不上就把备份目录改名成 `-INCOMPLETE` 并中止卸载，绝不留下"看着正常其实缺文件"的假备份。
+备份后逐文件核对内容摘要。核对失败时将不完整的备份标为 `-INCOMPLETE` 并中止卸载。
 
 ### 4.8 备份与恢复
 
@@ -679,7 +681,7 @@ dsh 官方文档站（`deepseek-harness.github.io`）在国内可能打不开，
 | 场景 | 为什么 | 表现 |
 |---|---|---|
 | **dsh 桌面版（Electron）** | 桌面版是 `app.asar` 打包态，npm 包封在里面，**不是 `node_modules` 布局**，`lib/bin.js` 不可达 | 管理器**看不到也管不了**它；两者可共存，只是端口别撞 |
-| **macOS / Linux** | 进程识别、端口查询、杀进程、快捷方式全按 Windows API 写 | `check-env.py` 直接报缺失 |
+| **Linux 桌面** | 当前发布范围为 Windows 和 macOS | 无 Linux 发布包或发布验收 |
 | **32 位（x86）Windows** | 管理器与 dsh 均为 64 位构建 | 装不上或无法运行 |
 | **Windows 7 / 8.1** | `python-build-standalone` 只发 Win10+ 构建；部分 API 缺失 | 装不上便携 Python |
 | **Windows Server / LTSC / N 版** | 未实测；这类系统常缺 winget 与桌面 Shell 组件 | 建议先跑 `check-env.py` |
@@ -712,7 +714,7 @@ dsh 官方文档站（`deepseek-harness.github.io`）在国内可能打不开，
 
 ### 6.3 数据安全边界（四条硬承诺）
 
-1. **用户数据只备份、永不删除**。卸载只删程序产物，`.dsh-home` 原样保留且另有备份。
+1. **先备份用户数据，再卸载槽位**。备份核对通过后删除槽内原 `.dsh-home`。需要恢复时使用备份。
 2. **杀进程只杀认得出的 dsh**。签名 = 该槽 `bin.js` 绝对路径，外加端口兜底；端口被非 dsh 程序占用时**拒绝杀**。
 3. **备份要么完整、要么中止**。核对失败就把目录改名 `-INCOMPLETE` 并中止，绝不静默丢数据。
 4. **移出管理不碰磁盘**。只改 `config.json`，一个字节都不动。
@@ -827,9 +829,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1 -Fast   # 跳过耗时回归
 ```
 
-**CI**：`.github/workflows/ci.yml` 在 `windows-latest` 上跑同一份全量 `check-all.ps1`（含 19 套回归）。push 到 `main` 或开 PR 都会触发；仓库不含 `config.json`，CI 会先用 `config/config.example.json` 生成一份零槽配置。项目本身是 Windows 专属，所以只跑 Windows runner。
+Windows CI 在 `windows-latest` 上执行全量 `check-all.ps1`，先用 `config/config.example.json` 生成零槽配置。macOS CI 在 Apple Silicon 和 Intel runner 上执行源码回归和解包验收。两项检查在推送 `main` 或开 PR 时触发。[v0.1.12 测试覆盖记录](docs/test-coverage-v0.1.12.md)
 
-它覆盖 6 项 + 19 套离线回归：
+Windows 总检有 6 项检查。
 
 | # | 检查 |
 |---|---|
@@ -838,9 +840,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-all.ps1 -Fast 
 | 3 | `config.json` / 日志 / 凭据不许入库 |
 | 4 | 文档与日志里不许出现完整 `token=...` |
 | 5 | Markdown 相对链接能否落地（逐个 `Test-Path`） |
-| 6 | 19 套离线回归 + **卫生闸**（回归不许在真实盘上留任何东西） |
+| 6 | 离线回归和测试夹具清理检查 |
 
-离线回归名单（19 套，见 `scripts/check-all.ps1` 的 `$all`）：`test-manager-logic` / `test-adopt-logic` / `test-install-ops` / `test-slot-ops` / `test-bat-text` / `test-ui-prefs` / `test-health` / `test-drift` / `test-standalone` / `test-tk-selfheal` / `test-cli` / `test-config-guard`（配置地基 + doctor 契约）/ `test-cli-boundary`（CLI 读写分界 + 地基修复）/ `test-config-compat`（config.json 跨版本兼容）/ `test-log-mask` / `test-i18n` / `test-move` / `test-log-levels` / `test-portable`。
+Windows 离线回归名单见 [check-all.ps1](scripts/check-all.ps1) 中的 `$all`。
 
 `test-standalone.py` 特别值得知道：它用**真的 cmd.exe + 真的 node.exe** 跑生成出来的 bat，验证"管理器删了 dsh 仍能自己跑"。
 
