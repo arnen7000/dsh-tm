@@ -1271,5 +1271,6 @@
   "无法恢复": "Cannot restore",
   "请先停止槽 %s 再恢复插件：安装依赖会改写它的 node_modules。": "Stop slot %s before restoring plugins - installing dependencies rewrites its node_modules.",
   "内部错误：返回值形状不对（%s）": "Internal error: unexpected return shape (%s)",
-  "[恢复插件] 完成：%s": "[Restore plugins] Done: %s"
+  "[恢复插件] 完成：%s": "[Restore plugins] Done: %s",
+  "\n\n⚠ 有 %d 个插件声明不支持该槽的 dsh %s：%s": "\n\n⚠ %d plugin(s) declare they do not support this slot's dsh %s: %s"
 }

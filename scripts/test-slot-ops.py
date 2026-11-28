@@ -1291,6 +1291,112 @@ finally:
     shutil.rmtree(_K, ignore_errors=True)
 
 # ══════════════════════════════════════════════════════════════════
+# L. 恢复前的兼容性预检（2026-11-28）
+#    备份是卸载时的插件清单，目标是用户随手选的槽 —— 两边 dsh 版本可能不同。
+#    判定必须与 dsh 自己一致：engines.dsh 单独决定（peer 忽略）；否则每个
+#    @deepseek-ai/dsh* peer 都要满足；一律 includePrerelease: true。
+#    这里用一个**假的 semver**（只认 "ALLOW"/"DENY" 两个字面量）来验证接线：
+#    到底用的是哪条范围、优先级对不对、判不了时会不会乱猜。
+# ══════════════════════════════════════════════════════════════════
+section("L. 恢复前兼容性预检")
+
+_L = tempfile.mkdtemp(prefix="dsh-compat-")
+try:
+    _lb = os.path.join(_L, "bk", "v1-userdata-20260101-000000")
+    _lp = os.path.join(_lb, "profiles", "web")
+    os.makedirs(_lp)
+    with open(os.path.join(_lb, "_meta.json"), "w", encoding="utf-8") as f:
+        json.dump({"slot_key": "v1", "installed_version": "0.2.2-rc.3",
+                   "backed_up_at": "20260101-000000"}, f)
+    with open(os.path.join(_lp, "package.json"), "w", encoding="utf-8") as f:
+        json.dump({"name": "dsh-profile-web", "private": True,
+                   "dependencies": {"p-allow": "1.0.0", "p-deny": "1.0.0",
+                                    "p-mixed": "1.0.0", "p-peerdeny": "1.0.0",
+                                    "p-plain": "1.0.0"}}, f)
+
+    def _plug(name, manifest):
+        d = os.path.join(_lp, "node_modules", name)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "package.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+
+    _plug("p-allow", {"version": "1.0.0", "engines": {"dsh": "ALLOW"}})
+    _plug("p-deny", {"version": "2.0.0", "engines": {"dsh": "DENY"}})
+    # 有 engines 时 peer 必须被忽略：peer 写 DENY，但 engines 说 ALLOW
+    _plug("p-mixed", {"version": "3.0.0", "engines": {"dsh": "ALLOW"},
+                      "peerDependencies": {"@deepseek-ai/dsh-agent": "DENY"}})
+    # 没有 engines → 看 peer
+    _plug("p-peerdeny", {"version": "4.0.0",
+                         "peerDependencies": {"@deepseek-ai/dsh-agent": "DENY"}})
+    _plug("p-plain", {"version": "5.0.0", "peerDependencies": {"react": "^18"}})
+
+    _lslot = os.path.join(_L, "dshV9")
+    _dshdir = os.path.join(_lslot, "node_modules", "@deepseek-ai", "dsh")
+    os.makedirs(_dshdir)
+    with open(os.path.join(_dshdir, "package.json"), "w", encoding="utf-8") as f:
+        json.dump({"name": "@deepseek-ai/dsh", "version": "0.2.3-alpha.2"}, f)
+    chk("L1 能读到目标槽的 dsh 版本",
+        RP.slot_dsh_version(_lslot) == "0.2.3-alpha.2",
+        str(RP.slot_dsh_version(_lslot)))
+
+    _node = shutil.which("node") or shutil.which("node.exe")
+    if not _node:
+        chk("L2 没有 node 时判不了就如实说（不猜）", False, "找不到 node")
+    else:
+        # 假 semver：只认 ALLOW / DENY，其余一律 false（含空串）
+        _sem = os.path.join(_lslot, "node_modules", "semver")
+        os.makedirs(_sem, exist_ok=True)
+        with open(os.path.join(_sem, "index.js"), "w", encoding="utf-8") as f:
+            f.write("exports.satisfies = function (v, r) {\n"
+                    "  return String(r).trim() === 'ALLOW';\n"
+                    "};\n")
+
+        _want = ["p-allow", "p-deny", "p-mixed", "p-peerdeny", "p-plain"]
+        _c = RP.check_compat(_lb, _lslot, _node, _want)
+        _res = {r["name"]: r for r in _c["results"]}
+        chk("L2 预检真的跑了（judged=True）",
+            _c["judged"] is True and _c["reason"] == "", str(_c)[:160])
+        chk("L3 engines.dsh 满足 → ok=True", _res["p-allow"]["ok"] is True,
+            str(_res["p-allow"]))
+        chk("L4 engines.dsh 不满足 → ok=False 并给出是哪条范围",
+            _res["p-deny"]["ok"] is False
+            and _res["p-deny"]["bad"] == [["engines.dsh", "DENY"]],
+            str(_res["p-deny"]))
+        chk("L5 有 engines 时 peerDependencies 被忽略（dsh 的规则）",
+            _res["p-mixed"]["ok"] is True, str(_res["p-mixed"]))
+        chk("L6 没有 engines 时看 @deepseek-ai/dsh* peer",
+            _res["p-peerdeny"]["ok"] is False, str(_res["p-peerdeny"]))
+        chk("L7 只声明非 dsh 的 peer（react）→ 不参与判定（ok=None）",
+            _res["p-plain"]["ok"] is None, str(_res["p-plain"]))
+        chk("L8 compat_problems 只挑出明确不支持的",
+            [r["name"] for r in RP.compat_problems(_c)] == ["p-deny", "p-peerdeny"],
+            str([r["name"] for r in RP.compat_problems(_c)]))
+
+        # 缺 semver：宁可说判不了，也不能默认「兼容」
+        os.remove(os.path.join(_sem, "index.js"))
+        _c2 = RP.check_compat(_lb, _lslot, _node, _want)
+        chk("L9 缺 semver 时 judged=False 且 reason=no_semver（不猜）",
+            _c2["judged"] is False and _c2["reason"] == "no_semver",
+            str(_c2)[:140])
+        chk("L10 判不了时 compat_problems 返回空（不误报不支持）",
+            RP.compat_problems(_c2) == [], str(RP.compat_problems(_c2)))
+
+    # 缺 dsh 版本（目标槽还没装好）：同样只报告不判定
+    _empty_slot = os.path.join(_L, "empty")
+    os.makedirs(_empty_slot, exist_ok=True)
+    _c3 = RP.check_compat(_lb, _empty_slot, _node or "node", ["p-allow"])
+    chk("L11 读不到目标槽 dsh 版本时 judged=False",
+        _c3["judged"] is False and _c3["reason"] == "no_dsh_version",
+        str(_c3)[:140])
+
+    # 规则必须与 dsh 一致：includePrerelease —— 少了它，0.2.3-alpha.2 会被判
+    # 成不满足 `>=0.2.0-rc.1 <0.3.0-0`（严格 semver 的预发布规则）。
+    chk("L12 判定脚本带 includePrerelease（与 dsh-app-boot 一致）",
+        "includePrerelease: true" in RP._NODE_CHECK_JS)
+finally:
+    shutil.rmtree(_L, ignore_errors=True)
+
+# ══════════════════════════════════════════════════════════════════
 print("")
 if FAILS:
     print("FAILED %d 项：" % len(FAILS))

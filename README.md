@@ -351,7 +351,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -Targe
 
 > 插件与新版本 dsh 不兼容时，`pnpm install` 或启动会失败 —— 这正是它想帮你发现的事。
 
-> 备份里的 `profiles\node_modules\*` 是**真目录**（备份时解引用 junction），完整自包含。装回去之后 dsh 会按需重建链接。
+**恢复前会提示兼容性（只提示，不拦）**：备份是卸载时那套清单，目标槽可能是别的 dsh 版本，所以选好槽之后会按**目标槽的** dsh 版本判一次。规则与 dsh 自己完全一致（`dsh-app-boot` 的 `unmetRequirements()`）：插件写了 `engines.dsh` 就只看它、否则每个 `@deepseek-ai/dsh*` 的 `peerDependencies` 都要满足，且一律 `includePrerelease: true`（否则预发布版本会被误判）。
+
+判定不通过只在预览里加一行 ⚠，**不会阻止安装、也不会改你要装的版本** —— 想验证插件与某个 dsh 版本是否兼容，本来就是用这个管理器的人要自己看的事。判不了（槽里没有 dsh、没有 semver、node 起不来）时**保持沉默**，不猜。
+
+> 备份里的 `profiles/node_modules/*` 是**真目录**（备份时解引用 junction），完整自包含。装回去之后 dsh 会按需重建链接。
 
 ### 4.9 界面显示偏好与拖动排序
 

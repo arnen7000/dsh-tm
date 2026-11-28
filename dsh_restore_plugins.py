@@ -140,6 +140,160 @@ def plan_restore(backup_path, slot_root, profile="web"):
     }
 
 
+# ── 兼容性预检（2026-11-28）──────────────────────────────────────────────
+# 备份记的是「卸载时那套插件清单」，恢复目标却是「用户随手选的槽」，两边的
+# dsh 版本本来就可能不同（用户原话：卸载时的版本不一定等于新装的版本，槽也
+# 可能随意选）。所以判定必须**现场**做，而且必须和 dsh 自己一致：
+#
+#   dsh-app-boot/lib/index.js 的 unmetRequirements()：
+#     · 有 engines.dsh → 它**单独**决定，peerDependencies 一律忽略
+#     · 否则 → 每个 @deepseek-ai/dsh 或 @deepseek-ai/dsh-* 的 peer 都必须满足
+#     · 一律 semver.satisfies(v, r, { includePrerelease: true })
+#
+# 最后一条很关键：0.2.3-alpha.2 这种预发布版本，严格 semver 判
+# `>=0.2.0-rc.1 <0.3.0-0` 是 false（预发布默认不参与区间），加了
+# includePrerelease 才是 true。自己实现 semver 很容易和 npm 判得不一样，
+# 所以直接调槽内自带的 semver（dsh 依赖它，必然在树里）；判不了就如实说
+# 「判不了」，绝不猜。
+
+
+def slot_dsh_version(slot_root):
+    """读目标槽的 dsh 版本；读不到返回 None。"""
+    p = os.path.join(slot_root, "node_modules", "@deepseek-ai", "dsh",
+                     "package.json")
+    try:
+        return str(_read_json(p).get("version") or "") or None
+    except Exception:
+        return None
+
+
+def _semver_dir(slot_root):
+    """找槽内可用的 semver 包目录（dsh-app-boot 依赖它，所以必然在树里）。
+
+    必须确认 `index.js` 真的在：目录存在但残缺（比如被清理了一半）时，宁可
+    报「判不了」，也不要交给 node 去撞 require 失败。
+    """
+    for c in (os.path.join(slot_root, "node_modules", "semver"),
+              os.path.join(slot_root, "node_modules", "@deepseek-ai",
+                           "dsh-app-boot", "node_modules", "semver")):
+        if os.path.isfile(os.path.join(c, "index.js")):
+            return c
+    return None
+
+
+def _plugin_requirement(profile_dir, name):
+    """从**备份**的 node_modules 读插件声明，返回 (kind, ranges, version)。
+
+    kind: "engines"（engines.dsh 单独决定）/ "peers" / ""（没声明）
+    """
+    pj = os.path.join(profile_dir, "node_modules", name, "package.json")
+    try:
+        man = _read_json(pj)
+    except Exception:
+        return "", [], ""
+    ver = str(man.get("version") or "")
+    eng = (man.get("engines") or {}).get("dsh")
+    if isinstance(eng, str) and eng.strip():
+        return "engines", [["engines.dsh", eng]], ver
+    peers = [[k, v] for k, v in (man.get("peerDependencies") or {}).items()
+             if (k == "@deepseek-ai/dsh" or k.startswith("@deepseek-ai/dsh-"))
+             and isinstance(v, str)]
+    if peers:
+        return "peers", peers, ver
+    return "", [], ver
+
+
+# node 侧只做一件事：用槽内的 semver 按 dsh 的规则逐条判。payload 走临时文件，
+# 避免把 JSON 拼进命令行（范围里有 | > < 之类字符）。
+_NODE_CHECK_JS = """
+const fs = require("fs");
+const semver = require(process.argv[1]);
+const payload = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const out = payload.plugins.map(function (p) {
+  const pairs = p.kind === "engines" ? [["engines.dsh", p.ranges[0][1]]] : p.ranges;
+  const bad = pairs.filter(function (pair) {
+    const r = String(pair[1]);
+    return !(r.trim() !== "" &&
+             semver.satisfies(payload.version, r, { includePrerelease: true }));
+  });
+  return { name: p.name, ok: bad.length === 0, bad: bad };
+});
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def check_compat(backup_path, slot_root, node_exe, plugins,
+                 profile="web", timeout=30):
+    """判断这些插件在目标槽的 dsh 版本下是否相容（只读，不写盘）。
+
+    返回 {"dsh_version", "judged", "results": [{name, version, kind, ranges,
+    ok, bad}], "reason"}。`judged=False` 时 `ok` 一律为 None —— 只报告插件
+    自己声明的范围，不做判定（缺 dsh 版本 / 缺 semver / node 跑不起来）。
+    """
+    dsh_ver = slot_dsh_version(slot_root)
+    prof_dir = os.path.join(backup_path, "profiles", profile)
+    results = []
+    for name in plugins:
+        kind, ranges, ver = _plugin_requirement(prof_dir, name)
+        results.append({"name": name, "version": ver, "kind": kind,
+                        "ranges": ranges, "ok": None, "bad": []})
+    out = {"dsh_version": dsh_ver, "judged": False, "results": results,
+           "reason": ""}
+    if not dsh_ver:
+        out["reason"] = "no_dsh_version"
+        return out
+    declared = [r for r in results if r["kind"]]
+    if not declared:
+        out["reason"] = "no_declaration"
+        return out
+    sem = _semver_dir(slot_root)
+    if not sem or not node_exe:
+        out["reason"] = "no_semver"
+        return out
+
+    payload = {"version": dsh_ver,
+               "plugins": [{"name": r["name"], "kind": r["kind"],
+                            "ranges": r["ranges"]} for r in declared]}
+    tmp = None
+    try:
+        import tempfile
+        fd, tmp = tempfile.mkstemp(prefix="dsh-compat-", suffix=".json")
+        with io.open(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        p = subprocess.run(
+            [node_exe, "-e", _NODE_CHECK_JS, sem.replace("\\", "/"), tmp],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=timeout)
+        if p.returncode != 0:
+            out["reason"] = "node_exit_%d" % p.returncode
+            return out
+        judged = {d["name"]: d for d in json.loads(p.stdout or "[]")}
+    except Exception as e:
+        out["reason"] = "check_failed: %s" % e
+        return out
+    finally:
+        if tmp:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+    for r in results:
+        d = judged.get(r["name"])
+        if d is not None:
+            r["ok"] = bool(d.get("ok"))
+            r["bad"] = [[k, v] for k, v in (d.get("bad") or [])]
+    out["judged"] = True
+    return out
+
+
+def compat_problems(compat):
+    """从 check_compat 的结果里挑出「声明不支持」的插件（judged=False 时为空）。"""
+    if not compat or not compat.get("judged"):
+        return []
+    return [r for r in (compat.get("results") or []) if r.get("ok") is False]
+
+
 def _merged_manifest(plan):
     """把 plan 应用到目标清单上，返回新 dict（不改原对象）。"""
     man = json.loads(json.dumps(plan.get("dst_manifest") or {}))

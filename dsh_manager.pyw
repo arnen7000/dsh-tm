@@ -5451,7 +5451,42 @@ def restore_plugins_dialog():
             return None, key
         return RP.plan_restore(backups[i]["path"], root_dir), key
 
+    _compat_cache = {}
+
+    def _compat_now(i, j):
+        """按**目标槽的** dsh 版本判一次兼容性（缓存，避免每次选择都起 node）。
+
+        备份是卸载时的插件清单，目标是随手选的槽 —— 两边 dsh 版本可能不同，
+        所以判定必须现场做，规则与 dsh 自己一致（见 dsh_restore_plugins）。
+        """
+        if i < 0 or j < 0:
+            return None
+        ck = (i, j)
+        if ck in _compat_cache:
+            return _compat_cache[ck]
+        key = SLOT_KEYS[j]
+        root_dir = _version_root(VC[key])
+        if not root_dir:
+            return None
+        plan = RP.plan_restore(backups[i]["path"], root_dir)
+        if not plan.get("ok"):
+            return None
+        want = list(plan["add_deps"]) + list(plan["version_conflicts"])
+        res = RP.check_compat(backups[i]["path"], root_dir,
+                              VC[key].get("node_exe") or "", want)
+        _compat_cache[ck] = res
+        return res
+
+    def _compat_warn(compat):
+        bad = RP.compat_problems(compat)
+        if not bad:
+            return ""
+        return T("\n\n⚠ 有 %d 个插件声明不支持该槽的 dsh %s：%s") % (
+            len(bad), (compat or {}).get("dsh_version") or "?",
+            "、".join("%s %s" % (r["name"], r["version"]) for r in bad))
+
     def _refresh(*_a):
+        i, j = b_cb.current(), s_cb.current()
         plan, key = _plan_now()
         if key is None:
             preview.configure(text="")
@@ -5465,6 +5500,7 @@ def restore_plugins_dialog():
             if plan["version_conflicts"]:
                 txt += T("；%d 个已存在（保留当前版本）") % len(
                     plan["version_conflicts"])
+            txt += _compat_warn(_compat_now(i, j))
             preview.configure(text=txt)
 
     b_cb.bind("<<ComboboxSelected>>", _refresh)
@@ -5495,7 +5531,9 @@ def restore_plugins_dialog():
                 T("将向槽 %s 追加 %d 个插件，并重新安装依赖。\n\n"
                   "目标槽原有的插件清单会先备份成 .bak-文件。\n"
                   "插件与新版本 dsh 不兼容时，安装或启动可能失败。\n\n"
-                  "继续？") % (key, len(plan["add_deps"])), parent=win):
+                  "继续？") % (key, len(plan["add_deps"]))
+                + _compat_warn(_compat_now(b_cb.current(), s_cb.current())),
+                parent=win):
             return
         win.destroy()
         node_exe = VC[key].get("node_exe") or ""
