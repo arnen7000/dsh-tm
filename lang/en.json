@@ -1267,5 +1267,9 @@
   "恢复未完成": "Restore did not finish",
   "原因：%s\n\n%s": "Reason: %s\n\n%s",
   "恢复插件": "Restore plugins",
-  "开始恢复": "Start restore"
+  "开始恢复": "Start restore",
+  "无法恢复": "Cannot restore",
+  "请先停止槽 %s 再恢复插件：安装依赖会改写它的 node_modules。": "Stop slot %s before restoring plugins - installing dependencies rewrites its node_modules.",
+  "内部错误：返回值形状不对（%s）": "Internal error: unexpected return shape (%s)",
+  "[恢复插件] 完成：%s": "[Restore plugins] Done: %s"
 }

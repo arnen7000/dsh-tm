@@ -1021,6 +1021,55 @@ chk("F6 安装 / 纳入不再拿中文字面量比级别",
     and _ops_src.count("is_hard(lv)") >= 4,
     "is_hard 出现 %d 处" % _ops_src.count("is_hard(lv)"))
 
+# ══════════════════════════════════════════════════════════════════
+# G. run_in_thread 的返回值契约
+#    2026-11-28 实测：调用方返回二元组 (ok, report)，wrapper 取 result[2]
+#    抛 IndexError，后台线程静默死掉、模态进度窗永远不关（插件已装好，用户
+#    以为卡住半小时）。所以「形状不对」必须走失败回调，绝不能什么都不做。
+# ══════════════════════════════════════════════════════════════════
+class _FakeProg:
+    def __init__(self):
+        self.calls = []
+
+    def on_done(self, ok, payload=None, error=""):
+        self.calls.append((ok, payload, error))
+
+
+_p1 = _FakeProg()
+_t1 = O.run_in_thread(lambda: (True, {"k": 1}, ""), _p1, None)
+_t1.join(10)
+chk("G1 三元组按 ok=True + payload 回调",
+    len(_p1.calls) == 1 and _p1.calls[0][0] is True
+    and _p1.calls[0][1] == {"k": 1}, str(_p1.calls))
+
+_p2 = _FakeProg()
+_done2 = []
+_t2 = O.run_in_thread(lambda: (True, {"k": 1}), _p2,
+                      lambda ok, pl, msg: _done2.append((ok, pl, msg)))
+_t2.join(10)
+chk("G2 返回值形状不对时仍回调 on_done（不卡进度窗）",
+    len(_p2.calls) == 1 and _p2.calls[0][0] is False, str(_p2.calls))
+chk("G3 形状不对时 done_callback 也收到失败",
+    len(_done2) == 1 and _done2[0][0] is False, str(_done2))
+
+_p3 = _FakeProg()
+_t3 = O.run_in_thread(lambda: 1 / 0, _p3, None)
+_t3.join(10)
+chk("G4 任务自身抛异常仍回调 on_done(False)",
+    len(_p3.calls) == 1 and _p3.calls[0][0] is False, str(_p3.calls))
+
+# 恢复插件对话框的接线（.pyw 不可 import，只能静态断言）：
+# work() 必须返回三元组、done 必须收三个参数 —— 这两个错各自都能让窗口卡死。
+_mgr_src = open(os.path.join(ROOT, "dsh_manager.pyw"), encoding="utf-8").read()
+_rp_start = _mgr_src.find("def restore_plugins_dialog")
+_rp_body = _mgr_src[_rp_start:_mgr_src.find("\ndef _do_readd", _rp_start)]
+chk("G5 恢复插件 work() 返回三元组（不是 (ok, report)）",
+    "return True, rep, \"\"" in _rp_body and "return False, None," in _rp_body)
+chk("G6 恢复插件 done 回调收 (ok, payload, error) 三个参数",
+    "def done(ok, payload, error):" in _rp_body)
+chk("G7 槽在运行时拒绝恢复（安装依赖会改写 node_modules）",
+    "port_open(int(VC[key].get(\"port\") or 0))" in _rp_body)
+
 print()
 if FAILS:
     print("RESULT: FAIL（%d 项）: %s" % (len(FAILS), "; ".join(FAILS)))

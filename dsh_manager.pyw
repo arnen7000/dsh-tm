@@ -5478,6 +5478,14 @@ def restore_plugins_dialog():
         plan, key = _plan_now()
         if plan is None or not plan.get("ok"):
             return
+        # 安装依赖会改写 node_modules：槽在跑的时候改，轻则插件加载不到，重则
+        # 正在运行的进程读到半装的模块。必须在动手前拦住。
+        if port_open(int(VC[key].get("port") or 0)):
+            messagebox.showwarning(
+                T("无法恢复"),
+                T("请先停止槽 %s 再恢复插件：安装依赖会改写它的 node_modules。")
+                % key, parent=win)
+            return
         if not messagebox.askyesno(
                 T("确认恢复"),
                 T("将向槽 %s 追加 %d 个插件，并重新安装依赖。\n\n"
@@ -5491,24 +5499,35 @@ def restore_plugins_dialog():
                       "pnpm_install": T("安装依赖（可能要几分钟）")}
 
         def work():
-            return RP.apply_restore(
+            # run_in_thread 的契约是 (ok, payload, msg)，**必须返回三元组**。
+            # 2026-11-28 实测：早先这里返回二元组 (ok, report)，run_in_thread 取
+            # result[2] 抛 IndexError，后台线程静默死掉 —— 插件其实装好了，但进度窗
+            # 永远不关（用户以为卡住半小时）。
+            ok, rep = RP.apply_restore(
                 plan, node_exe,
                 progress=lambda m: log(T("[恢复插件] %s")
                                        % step_names.get(m, m)))
-
-        def done(ok, rep):
             if ok:
-                body = T("已恢复 %d 个插件：%s") % (
-                    len(rep["installed"]), ", ".join(rep["installed"]) or "—")
-                if rep.get("conflicts"):
-                    body += T("\n\n保留目标槽版本的 %d 个：%s") % (
-                        len(rep["conflicts"]), ", ".join(rep["conflicts"]))
-                messagebox.showinfo(T("插件已恢复"), body)
-            else:
-                tail = "\n".join((rep.get("log") or [])[-8:])
-                messagebox.showerror(
-                    T("恢复未完成"),
-                    T("原因：%s\n\n%s") % (rep.get("reason") or "?", tail))
+                return True, rep, ""
+            tail = "\n".join((rep.get("log") or [])[-8:])
+            return False, None, T("原因：%s\n\n%s") % (
+                rep.get("reason") or "?", tail)
+
+        def done(ok, payload, error):
+            # _GuiProgress._finish 固定按 (ok, payload, error) 三个参数回调。
+            if not ok:
+                messagebox.showerror(T("恢复未完成"), error or "?",
+                                     parent=root)
+                return
+            rep = payload or {}
+            got = list(rep.get("installed") or [])
+            body = T("已恢复 %d 个插件：%s") % (len(got), ", ".join(got) or "—")
+            conflicts = list(rep.get("conflicts") or {})
+            if conflicts:
+                body += T("\n\n保留目标槽版本的 %d 个：%s") % (
+                    len(conflicts), ", ".join(conflicts))
+            log(T("[恢复插件] 完成：%s") % body.replace("\n\n", "；"))
+            messagebox.showinfo(T("插件已恢复"), body, parent=root)
 
         prog = _GuiProgress(T("恢复插件"), done)
         OPS.run_in_thread(work, prog, None)

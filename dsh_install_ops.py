@@ -1467,8 +1467,14 @@ def _tail(text, n=8):
 
 def run_in_thread(fn, progress, done_callback):
     """把长任务丢后台线程。
+
     注意：回调里刷新界面必须由调用方切回主线程（tkinter 不线程安全），
-    这里只负责不让界面卡住。"""
+    这里只负责不让界面卡住。
+
+    `fn` 的契约是返回 `(ok, payload, msg)` 三元组。**形状不对也必须回调**
+    —— 2026-11-28 实测：调用方返回了二元组，`result[2]` 抛 IndexError，
+    线程静默死掉、模态进度窗永远不关，用户只能杀进程。报错比卡死好得多。
+    """
     def wrapper():
         try:
             result = fn()
@@ -1478,9 +1484,17 @@ def run_in_thread(fn, progress, done_callback):
             if done_callback:
                 done_callback(False, None, str(e))
             return
-        ok = bool(result and result[0])
-        msg = result[2] if result else ""
-        payload = result[1] if ok and result else None
+        try:
+            ok = bool(result and result[0])
+            msg = result[2] if result else ""
+            payload = result[1] if ok and result else None
+        except Exception as e:
+            detail = T("内部错误：返回值形状不对（%s）") % e
+            if progress:
+                progress.on_done(False, None, detail)
+            if done_callback:
+                done_callback(False, None, detail)
+            return
         if progress:
             progress.on_done(ok, payload, msg if not ok else "")
         if done_callback:
