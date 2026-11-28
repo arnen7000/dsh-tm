@@ -896,6 +896,7 @@
   "浏览器": "browser",
   "深度体检": "deep health check",
   "深色": "Dark",
+  "清理半成品链接失败：%s": "Failed to clean up partial hard links: %s",
   "清理旧位置 %s …": "Cleaning up the old location %s …",
   "清理槽外 dsh 残留（排障用；旧版界面按钮已移除）": "clean up dsh leftovers outside the slots (troubleshooting; the old GUI button was removed)",
   "清空…": "Clear…",

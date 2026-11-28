@@ -332,7 +332,72 @@ def _robocopy(src, dst):
     return (False, T("robocopy 退出码 %d") % proc.returncode)
 
 
-def _copy_user_data(src, dst, failures=None):
+def _hardlink_tree(src, dst, fails):
+    """逐文件在 dst 建硬链接（不复制数据）。返回 True = 全部成功。
+
+    为什么值得：`profiles/*/node_modules` 动辄几万个小文件，复制 + 逐文件
+    SHA256 校验要十几分钟（2026-11-28 实测 v1 备份 341 MB / 27,182 文件
+    耗时 15 分 28 秒）。硬链接只改目录项，几秒完成，而且**数据只有一份**，
+    备份天然完整 —— 调用方可以跳过内容校验（见 verify_manifest）。
+
+    只在**同卷 + NTFS** 上生效；跨卷 / 文件系统不支持时返回 False，调用方
+    退回复制。失败前已经建好的链接**必须由调用方清掉**：硬链接和源文件是
+    同一份数据，直接让 robocopy 覆盖写会把源文件改坏。
+    """
+    if os.name != "nt":
+        return False
+    try:
+        if os.stat(src).st_dev != os.stat(dst).st_dev:
+            return False                      # 跨卷：硬链接不可能成功
+    except OSError:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        _fn = ctypes.WinDLL("kernel32", use_last_error=True).CreateHardLinkW
+        _fn.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPVOID]
+        _fn.restype = wintypes.BOOL
+    except Exception:
+        return False
+
+    stack = [(src, dst)]
+    while stack:
+        s, d = stack.pop()
+        try:
+            entries = list(os.scandir(s))
+        except OSError as e:
+            fails.append((os.path.relpath(s, src) or ".", T("读不到目录：%s") % e))
+            return False
+        for e in entries:
+            target = os.path.join(d, e.name)
+            if _is_reparse(e):
+                continue                      # 链接已在 _collect_links 里记过
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    os.makedirs(target, exist_ok=True)
+                    stack.append((e.path, target))
+                elif e.is_file(follow_symlinks=False):
+                    if not _fn(target, e.path, None):
+                        return False
+            except OSError:
+                return False
+    return True
+
+
+def verify_manifest(src, dst):
+    """只比对文件名 + 大小，不读内容（硬链接模式专用）。
+
+    硬链接下源和目标共享同一份数据，读两遍算 SHA256 纯属浪费（341 MB × 2）。
+    清单 + 大小已经能抓住「少文件」和「文件被换掉」两类问题。
+    """
+    source = _walk_file_sizes(src)
+    backup = _walk_file_sizes(dst)
+    missing = [p for p in source if p not in backup]
+    changed = [p for p in source if p in backup and source[p] != backup[p]]
+    return missing, changed, len(source)
+
+
+def _copy_user_data(src, dst, failures=None, info=None):
     """把 src 的内容拷到 dst，**跳过 junction / 符号链接**，返回跳过的链接清单。
 
     为什么不能用 shutil.copytree（2026-10-30 故障实证）：
@@ -354,7 +419,21 @@ def _copy_user_data(src, dst, failures=None):
     fails = failures if failures is not None else []
     skipped = _collect_links(src, fails)
 
-    # 快路：robocopy 多线程（约 4 倍）。失败则退回逐文件，慢但能把"哪个文件拷不动"
+    # 快路 1：同卷硬链接（不复制数据，几秒）。见 _hardlink_tree 的说明。
+    if _hardlink_tree(src, dst, fails):
+        if info is not None:
+            info["linked"] = True
+        return skipped
+    # 硬链接失败时 dst 里可能已有半套链接 —— 它们和源文件是同一份数据，
+    # 直接让 robocopy 覆盖写会把源文件改坏，必须先清掉再退回复制。
+    try:
+        for name in os.listdir(dst):
+            _force_rmtree(os.path.join(dst, name))
+    except OSError as e:
+        fails.append((".", T("清理半成品链接失败：%s") % e))
+        return skipped
+
+    # 快路 2：robocopy 多线程（约 4 倍）。失败则退回逐文件，慢但能把"哪个文件拷不动"
     # 逐个记下来 —— 备份宁可慢，也不能悄悄不完整。
     if _robocopy(src, dst)[0]:
         return skipped
@@ -457,8 +536,11 @@ def _force_rmtree(path):
         try:
             func(entry)
         except PermissionError:
-            if (os.name != "nt" or entry_stat.st_nlink > 1
-                    or _is_reparse_path(entry)):
+            # 2026-11-28：硬链接备份（_hardlink_tree）会让源文件 st_nlink > 1。
+            # 卸载时源文件马上就要删，去掉只读只会让备份里的同名链接也变可写，
+            # 不影响内容；所以不再因为 st_nlink > 1 就拒绝。reparse（junction /
+            # 符号链接）仍然拒绝 —— 改它的属性会误伤目标。
+            if os.name != "nt" or _is_reparse_path(entry):
                 raise
             # Unlike os.chmod on Windows Python < 3.13, SetFileAttributesW
             # changes attributes on the entry itself if it becomes a symlink.
@@ -595,8 +677,14 @@ def _backup_slot(plan, key, backup_root, stamp):
     if home and os.path.isdir(home):
         missing, changed, total = [], [], 0
         try:
-            links = _copy_user_data(home, dst, fails)
-            missing, changed, total = verify_backup(home, dst)
+            info = {}
+            links = _copy_user_data(home, dst, fails, info)
+            # 硬链接模式下源和目标共享同一份数据，逐文件算 SHA256 纯属浪费
+            # （341 MB × 2 遍）；清单 + 大小已经足够。
+            if info.get("linked"):
+                missing, changed, total = verify_manifest(home, dst)
+            else:
+                missing, changed, total = verify_backup(home, dst)
         except OSError as exc:
             fails.append((".", str(exc)))
         verify = {"checked": total, "missing": len(missing),

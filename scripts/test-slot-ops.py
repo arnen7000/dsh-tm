@@ -737,7 +737,8 @@ try:
     chk("H4b 大小不符不算缺失（文件在，只是内容变了）", miss == [], str(miss))
 
     # H5 拷不动的文件进 failures，不进链接清单（旧版会写成假链接）
-    _real_rc9, _real_copy2 = U._robocopy, U.shutil.copy2
+    _real_rc9, _real_copy2, _real_hl9 = (U._robocopy, U.shutil.copy2,
+                                         U._hardlink_tree)
 
     def _bad_copy2(src, dstp, *a, **k):
         if os.path.basename(src) == "locked.bin":
@@ -746,6 +747,8 @@ try:
 
     U._robocopy = lambda s, d: (False, "模拟 robocopy 失败，走逐文件")
     U.shutil.copy2 = _bad_copy2
+    # 这一段专门验证「复制路径」的失败处理；硬链接是独立快路（见 §J）。
+    U._hardlink_tree = lambda s, d, f: False
     try:
         fails9 = []
         sk9 = U._copy_user_data(home, os.path.join(HT, "bk-bad"), fails9)
@@ -807,7 +810,8 @@ try:
             "不完整" in _mark and "缺" in _mark and "一个文件都没删" in _mark,
             _mark[:120].replace("\n", " / "))
     finally:
-        U._robocopy, U.shutil.copy2 = _real_rc9, _real_copy2
+        U._robocopy, U.shutil.copy2, U._hardlink_tree = (
+            _real_rc9, _real_copy2, _real_hl9)
 
     # H7 正常路径：返回 (dst, verify)，verify 数字可读且被写进 _meta.json
     dst7, vfy7 = U._backup_slot(plan9, "v9", bkroot9, "20260101-000001")
@@ -843,14 +847,16 @@ try:
         {"install_base": "<self>", "versions": {"v8": slot_cfg("v8", 12080)}},
         ensure_ascii=False, indent=2))
 
-    _real_vfy = U.verify_backup
+    _real_vfy, _real_hl8 = U.verify_backup, U._hardlink_tree
     U.verify_backup = lambda s, d: (["ghost-file.bin"], [], 7)   # 模拟核对不过
+    # 硬链接模式走 verify_manifest，不走 verify_backup —— 这条要测后者。
+    U._hardlink_tree = lambda s, d, f: False
     try:
         ok8, payload8, msg8 = U.uninstall_slots(
             ["v8"], cfgp8, HOME, REPO, FAKE8, versions_root=VER8,
             stamp="20260101-040506")
     finally:
-        U.verify_backup = _real_vfy
+        U.verify_backup, U._hardlink_tree = _real_vfy, _real_hl8
     cfg8 = json.load(open(cfgp8, encoding="utf-8-sig"))
     chk("H8 核对不过 → 整体 ok=False", ok8 is False, msg8[:200])
     chk("H8b 核对不过 → 槽仍在 config 里", "v8" in cfg8["versions"],
@@ -1095,6 +1101,84 @@ chk("I33 被拒时陈旧记录不丢（盘没接上时用户还能再试）",
     len(_cfg8b.get("detached") or []) == 1, str(_cfg8b.get("detached"))[:160])
 
 shutil.rmtree(FAKEI, ignore_errors=True)
+
+# ══════════════════════════════════════════════════════════════════
+# J. 卸载备份：同卷硬链接（2026-11-28）
+# ══════════════════════════════════════════════════════════════════
+# 341 MB / 27,182 文件的备份要 15 分 28 秒，几乎全耗在「复制 + 逐文件
+# SHA256」上。同卷改成硬链接后只改目录项，几秒完成，数据仍只有一份。
+section("J. 备份：硬链接快路")
+
+import subprocess as _sp
+
+_J = tempfile.mkdtemp(prefix="dsh-hardlink-")
+try:
+    _src = os.path.join(_J, "src")
+    os.makedirs(os.path.join(_src, "profiles", "web", "node_modules"))
+    for _i in range(120):
+        with open(os.path.join(_src, "profiles", "web", "node_modules",
+                               "f%03d.txt" % _i), "w", encoding="utf-8") as _f:
+            _f.write("z" * 800)
+    _dst = os.path.join(_J, "dst")
+    _info, _fails = {}, []
+    U._copy_user_data(_src, _dst, _fails, _info)
+    chk("J1 同卷备份走硬链接（不复制数据）", _info.get("linked") is True, str(_info))
+    _miss, _chg, _total = U.verify_manifest(_src, _dst)
+    chk("J2 硬链接备份清单完整", not _miss and not _chg and _total == 120,
+        "total=%s miss=%s chg=%s" % (_total, len(_miss), len(_chg)))
+    shutil.rmtree(_src)
+    _readable = 0
+    for _root, _dirs, _files in os.walk(_dst):
+        for _f in _files:
+            try:
+                with open(os.path.join(_root, _f), "rb") as _fh:
+                    _fh.read()
+                _readable += 1
+            except Exception:
+                pass
+    chk("J3 删掉源目录后备份仍可读（硬链接持有数据）", _readable == 120, str(_readable))
+
+    _src2 = os.path.join(_J, "src2")
+    os.makedirs(_src2)
+    for _i in range(20):
+        with open(os.path.join(_src2, "f%02d.txt" % _i), "w",
+                  encoding="utf-8") as _f:
+            _f.write("q" * 300)
+    _dst2 = os.path.join(_J, "dst2")
+    _real = U._hardlink_tree
+    U._hardlink_tree = lambda s, d, f: False
+    try:
+        _info2, _fails2 = {}, []
+        U._copy_user_data(_src2, _dst2, _fails2, _info2)
+    finally:
+        U._hardlink_tree = _real
+    _m2, _c2, _t2 = U.verify_backup(_src2, _dst2)
+    chk("J4 硬链接不可用时退回复制，内容逐字节一致",
+        _info2.get("linked") is not True and not _m2 and not _c2 and _t2 == 20,
+        "linked=%s total=%s miss=%s chg=%s"
+        % (_info2.get("linked"), _t2, len(_m2), len(_c2)))
+
+    _tgt = os.path.join(_J, "outside")
+    os.makedirs(_tgt)
+    with open(os.path.join(_tgt, "secret.txt"), "w", encoding="utf-8") as _f:
+        _f.write("should not be backed up")
+    _junc = os.path.join(_src2, "linked_dir")
+    _r = _sp.run(["cmd", "/c", "mklink", "/J", _junc, _tgt],
+                 capture_output=True, text=True, encoding="utf-8",
+                 errors="replace")
+    if _r.returncode == 0:
+        _dst3 = os.path.join(_J, "dst3")
+        _info3, _fails3 = {}, []
+        _links3 = U._copy_user_data(_src2, _dst3, _fails3, _info3)
+        chk("J5 junction 被跳过并记进 links（不跟进去拷目标）",
+            any(str(p) == "linked_dir" for p, _t in _links3)
+            and not os.path.exists(os.path.join(_dst3, "linked_dir")),
+            str(_links3)[:120])
+    else:
+        chk("J5 junction 被跳过并记进 links（不跟进去拷目标）", False,
+            "mklink rc=%s" % _r.returncode)
+finally:
+    shutil.rmtree(_J, ignore_errors=True)
 
 # ══════════════════════════════════════════════════════════════════
 print("")
