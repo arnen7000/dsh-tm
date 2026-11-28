@@ -1121,23 +1121,28 @@ try:
                                "f%03d.txt" % _i), "w", encoding="utf-8") as _f:
             _f.write("z" * 800)
     _dst = os.path.join(_J, "dst")
-    _info, _fails = {}, []
-    U._copy_user_data(_src, _dst, _fails, _info)
-    chk("J1 同卷备份走硬链接（不复制数据）", _info.get("linked") is True, str(_info))
-    _miss, _chg, _total = U.verify_manifest(_src, _dst)
-    chk("J2 硬链接备份清单完整", not _miss and not _chg and _total == 120,
-        "total=%s miss=%s chg=%s" % (_total, len(_miss), len(_chg)))
-    shutil.rmtree(_src)
-    _readable = 0
-    for _root, _dirs, _files in os.walk(_dst):
-        for _f in _files:
-            try:
-                with open(os.path.join(_root, _f), "rb") as _fh:
-                    _fh.read()
-                _readable += 1
-            except Exception:
-                pass
-    chk("J3 删掉源目录后备份仍可读（硬链接持有数据）", _readable == 120, str(_readable))
+    if os.name == "nt":
+        _info, _fails = {}, []
+        U._copy_user_data(_src, _dst, _fails, _info)
+        chk("J1 同卷备份走硬链接（不复制数据）",
+            _info.get("linked") is True, str(_info))
+        _miss, _chg, _total = U.verify_manifest(_src, _dst)
+        chk("J2 硬链接备份清单完整", not _miss and not _chg and _total == 120,
+            "total=%s miss=%s chg=%s" % (_total, len(_miss), len(_chg)))
+        shutil.rmtree(_src)
+        _readable = 0
+        for _root, _dirs, _files in os.walk(_dst):
+            for _f in _files:
+                try:
+                    with open(os.path.join(_root, _f), "rb") as _fh:
+                        _fh.read()
+                    _readable += 1
+                except Exception:
+                    pass
+        chk("J3 删掉源目录后备份仍可读（硬链接持有数据）",
+            _readable == 120, str(_readable))
+    else:
+        print("SKIP  J1-J3（硬链接快路只在 Windows 上启用）")
 
     _src2 = os.path.join(_J, "src2")
     os.makedirs(_src2)
@@ -1164,10 +1169,14 @@ try:
     with open(os.path.join(_tgt, "secret.txt"), "w", encoding="utf-8") as _f:
         _f.write("should not be backed up")
     _junc = os.path.join(_src2, "linked_dir")
-    _r = _sp.run(["cmd", "/c", "mklink", "/J", _junc, _tgt],
-                 capture_output=True, text=True, encoding="utf-8",
-                 errors="replace")
-    if _r.returncode == 0:
+    if os.name != "nt":
+        print("SKIP  J5（junction 用 mklink /J 创建，仅 Windows）")
+        _r = None
+    else:
+        _r = _sp.run(["cmd", "/c", "mklink", "/J", _junc, _tgt],
+                     capture_output=True, text=True, encoding="utf-8",
+                     errors="replace")
+    if _r is not None and _r.returncode == 0:
         _dst3 = os.path.join(_J, "dst3")
         _info3, _fails3 = {}, []
         _links3 = U._copy_user_data(_src2, _dst3, _fails3, _info3)
@@ -1175,7 +1184,7 @@ try:
             any(str(p) == "linked_dir" for p, _t in _links3)
             and not os.path.exists(os.path.join(_dst3, "linked_dir")),
             str(_links3)[:120])
-    else:
+    elif _r is not None:
         chk("J5 junction 被跳过并记进 links（不跟进去拷目标）", False,
             "mklink rc=%s" % _r.returncode)
 finally:
