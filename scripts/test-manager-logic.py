@@ -2038,6 +2038,70 @@ chk("P10 在原点左侧的显示器上保留负坐标",
     _dock_x(-1800, 840, 380, -1920, 0) == -960)
 
 
+# ══════════════════════════════════════════════════════════════════
+# Q. 后台任务接线契约（2026-11-28）
+#
+#   run_in_thread(fn, progress, done) 的契约：
+#     · fn 必须返回 (ok, payload, msg) **三元组**
+#     · progress 是 _GuiProgress，它 _finish 里固定调 done_cb(ok, payload, error)
+#
+#   这两处不符都不会当场报错，而是「后台线程静默死掉」或「回调 TypeError」，
+#   表现是**进度窗永不关闭 / 界面按钮永久禁用**。2026-11-28 一天里踩了两次
+#   （恢复插件返回二元组；移动安装根目录的 done 只收两个参数），所以这里对
+#   **所有**调用点做静态断言，而不是只守某一个对话框。
+# ══════════════════════════════════════════════════════════════════
+def _calls_in(fn):
+    """只扫本函数自己的语句，不进嵌套 def（嵌套的由它自己作为 fn 再扫）。"""
+    out = []
+    for stmt in fn.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for n in ast.walk(stmt):
+            if not isinstance(n, ast.Call):
+                continue
+            f = n.func
+            name = getattr(f, "attr", None) or getattr(f, "id", None)
+            if name == "run_in_thread" and n.args and isinstance(n.args[0], ast.Name):
+                out.append(("work", n.args[0].id, n.lineno))
+            elif (name == "_GuiProgress" and len(n.args) >= 2
+                    and isinstance(n.args[1], ast.Name)):
+                out.append(("done", n.args[1].id, n.lineno))
+    return out
+
+
+_contract_bad, _contract_sites = [], 0
+for _fn in ast.walk(tree):
+    if not isinstance(_fn, ast.FunctionDef):
+        continue
+    _calls = _calls_in(_fn)
+    if not _calls:
+        continue
+    _nested = {c.name: c for c in _fn.body if isinstance(c, ast.FunctionDef)}
+    for _kind, _target, _line in _calls:
+        _contract_sites += 1
+        _d = _nested.get(_target)
+        if _d is None:
+            _contract_bad.append("%s():%d 找不到 %s()" % (_fn.name, _line, _target))
+            continue
+        if _kind == "work":
+            _bad = [r.lineno for r in ast.walk(_d) if isinstance(r, ast.Return)
+                    and not (isinstance(r.value, ast.Tuple)
+                             and len(r.value.elts) == 3)]
+            if _bad:
+                _contract_bad.append("%s():%d work() 第 %s 行返回不是三元组"
+                                     % (_fn.name, _line, _bad))
+        else:
+            _n = len(_d.args.args)
+            if _n != 3:
+                _contract_bad.append("%s():%d done() 收 %d 个参数（应为 3）"
+                                     % (_fn.name, _line, _n))
+
+chk("Q1 找到的接线点数量合理（防 AST 扫描静默失效）",
+    _contract_sites >= 12, "只找到 %d 处" % _contract_sites)
+chk("Q2 每个 run_in_thread 的 work() 都返回三元组、每个 done() 都收三个参数",
+    not _contract_bad, "; ".join(_contract_bad)[:300])
+
+
 print()
 if FAILS:
     print("RESULT: FAIL（%d 项）: %s" % (len(FAILS), "; ".join(FAILS)))

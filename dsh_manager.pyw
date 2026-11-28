@@ -7774,8 +7774,13 @@ def _do_move_root(MV, plan):
     log(T("[移动] 开始：%s → %s（%d 个槽）")
         % (plan["src_base"], plan["dst_base"], len(plan["slots"])))
 
-    def done(ok, message):
+    def done(ok, payload, error):
+        # _GuiProgress._finish 固定按 (ok, payload, error) 三个参数回调。
+        # 2026-11-28 审计发现这里原来只收 (ok, message)：移动成功后回调抛
+        # TypeError，`_actions_enabled(True)` 不执行 —— 整个界面按钮永久禁用，
+        # 而搬迁其实已经成功了。跑得少、没人踩到，但踩到就是"搬完不能用了"。
         _actions_enabled(True)
+        message = payload if ok else error
         if ok:
             log(T("[移动] 完成：%s") % str(message).replace("\n", " | "))
             messagebox.showinfo(
