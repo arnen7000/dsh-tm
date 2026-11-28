@@ -76,7 +76,9 @@ jobs:
       (github.ref == 'refs/heads/codex/macos-support' || github.ref == 'refs/heads/main')
     uses: ./.github/workflows/windows-release.yml
     with:
-      version: '0.1.15'
+      # 发版时必须与仓库根的 VERSION 同步：windows-release.yml 会校验，
+      # 不一致就直接 throw（2026-11-28 发 0.1.16 时踩到，当时还写着 0.1.15）。
+      version: '0.1.16'
 
   publish-github:
     name: Publish tested GitHub release packages
