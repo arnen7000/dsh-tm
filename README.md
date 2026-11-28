@@ -337,6 +337,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -Targe
 3. 把备份里的 `.dsh-home` 内容覆盖到新槽的 `.dsh-home`；
 4. 启动。
 
+**只恢复插件（2026-11-28 起）**：换 dsh 版本后想继续用原来的插件，不必整份覆盖：
+
+「设置 → 版本管理 → **从备份恢复插件…**」→ 选备份 → 选目标槽 → 开始恢复。
+
+它只做三件事：把备份里的**用户插件**追加到目标槽的 `package.json`（`@deepseek-ai/` 开头的内置 bundle 不动）、拷 `cordis.patch.yml` 等配置、重新跑一次 `pnpm install`。
+
+| 会做 | 不会做 |
+|---|---|
+| 追加插件依赖和 bundle | 不覆盖目标槽已有的插件版本（冲突会列出来） |
+| 目标槽原清单先备份成 `.bak-<时间戳>` | 不恢复会话 / 凭据（那些要整份覆盖 `.dsh-home`） |
+| 重新安装依赖并逐个校验 | 不拷旧的 `pnpm-lock.yaml`（避免与新版 dsh 冲突） |
+
+> 插件与新版本 dsh 不兼容时，`pnpm install` 或启动会失败 —— 这正是它想帮你发现的事。
+
 > 备份里的 `profiles\node_modules\*` 是**真目录**（备份时解引用 junction），完整自包含。装回去之后 dsh 会按需重建链接。
 
 ### 4.9 界面显示偏好与拖动排序

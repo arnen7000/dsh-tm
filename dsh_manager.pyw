@@ -5388,6 +5388,136 @@ def _bats_missing(key):
                                   root, cfg.get("port")).values())
 
 
+def restore_plugins_dialog():
+    """从卸载备份把插件恢复到某个槽（2026-11-28）。
+
+    只恢复插件清单 + 配置，不恢复会话/凭据；node_modules 重新装，
+    顺便验证与目标槽 dsh 版本的兼容性。
+    """
+    import dsh_restore_plugins as RP
+    bk_root = os.path.join(INSTALL_BASE, "dsh备份")
+    backups = [b for b in RP.list_backups(bk_root) if b["usable"]]
+    if not backups:
+        messagebox.showinfo(
+            T("没有可恢复的备份"),
+            T("在下面这个目录里没有找到包含插件清单的备份：\n%s\n\n"
+              "备份只在「卸载」时生成（「移出管理」不备份）。") % bk_root)
+        return
+
+    win = tk.Toplevel(root)
+    win.title(T("从备份恢复插件"))
+    win.transient(root)
+    win.resizable(False, False)
+
+    ttk.Label(win, text=T("把某个备份里的插件装到指定槽"),
+              font=("", 11, "bold")).pack(anchor="w", padx=16, pady=(14, 4))
+    ttk.Label(win, foreground=_MUTED, wraplength=470, justify="left",
+              text=T("只恢复插件清单和配置，不恢复会话/凭据。"
+                     "插件会重新安装，用来验证与目标槽 dsh 版本是否兼容。")
+              ).pack(anchor="w", padx=16, pady=(0, 10))
+
+    f1 = ttk.Frame(win)
+    f1.pack(fill="x", padx=16, pady=3)
+    ttk.Label(f1, text=T("备份"), width=8).pack(side="left")
+    b_labels = ["%s · %s · %s · %d 个插件" % (
+        b.get("label") or b.get("slot_key") or b["name"],
+        b.get("installed_version") or "?",
+        b.get("backed_up_at") or "?",
+        b.get("plugin_count") or 0) for b in backups]
+    b_cb = ttk.Combobox(f1, values=b_labels, state="readonly", width=44)
+    b_cb.current(0)
+    b_cb.pack(side="left", padx=(6, 0))
+
+    f2 = ttk.Frame(win)
+    f2.pack(fill="x", padx=16, pady=3)
+    ttk.Label(f2, text=T("目标槽"), width=8).pack(side="left")
+    slot_labels = ["%s（%s）" % (k, VC[k].get("label") or k) for k in SLOT_KEYS]
+    s_cb = ttk.Combobox(f2, values=slot_labels, state="readonly", width=44)
+    if slot_labels:
+        s_cb.current(0)
+    s_cb.pack(side="left", padx=(6, 0))
+
+    preview = ttk.Label(win, foreground=_MUTED, wraplength=470,
+                        justify="left", text="")
+    preview.pack(anchor="w", padx=16, pady=(8, 4))
+
+    def _plan_now():
+        i, j = b_cb.current(), s_cb.current()
+        if i < 0 or j < 0:
+            return None, None
+        key = SLOT_KEYS[j]
+        root_dir = _version_root(VC[key])
+        if not root_dir:
+            return None, key
+        return RP.plan_restore(backups[i]["path"], root_dir), key
+
+    def _refresh(*_a):
+        plan, key = _plan_now()
+        if key is None:
+            preview.configure(text="")
+        elif plan is None:
+            preview.configure(text=T("这个槽没有可用的版本根目录，无法恢复。"))
+        elif not plan.get("ok"):
+            preview.configure(text=T("这个备份里没有 web profile 的清单。"))
+        else:
+            txt = T("将追加 %d 个插件、%d 个 bundle") % (
+                len(plan["add_deps"]), len(plan["add_bundles"]))
+            if plan["version_conflicts"]:
+                txt += T("；%d 个已存在（保留当前版本）") % len(
+                    plan["version_conflicts"])
+            preview.configure(text=txt)
+
+    b_cb.bind("<<ComboboxSelected>>", _refresh)
+    s_cb.bind("<<ComboboxSelected>>", _refresh)
+    _refresh()
+
+    btns = ttk.Frame(win)
+    btns.pack(fill="x", padx=16, pady=(10, 14))
+
+    def on_ok():
+        plan, key = _plan_now()
+        if plan is None or not plan.get("ok"):
+            return
+        if not messagebox.askyesno(
+                T("确认恢复"),
+                T("将向槽 %s 追加 %d 个插件，并重新安装依赖。\n\n"
+                  "目标槽原有的插件清单会先备份成 .bak-文件。\n"
+                  "插件与新版本 dsh 不兼容时，安装或启动可能失败。\n\n"
+                  "继续？") % (key, len(plan["add_deps"])), parent=win):
+            return
+        win.destroy()
+        node_exe = VC[key].get("node_exe") or ""
+        step_names = {"write_manifest": T("写入插件清单"),
+                      "pnpm_install": T("安装依赖（可能要几分钟）")}
+
+        def work():
+            return RP.apply_restore(
+                plan, node_exe,
+                progress=lambda m: log(T("[恢复插件] %s")
+                                       % step_names.get(m, m)))
+
+        def done(ok, rep):
+            if ok:
+                body = T("已恢复 %d 个插件：%s") % (
+                    len(rep["installed"]), ", ".join(rep["installed"]) or "—")
+                if rep.get("conflicts"):
+                    body += T("\n\n保留目标槽版本的 %d 个：%s") % (
+                        len(rep["conflicts"]), ", ".join(rep["conflicts"]))
+                messagebox.showinfo(T("插件已恢复"), body)
+            else:
+                tail = "\n".join((rep.get("log") or [])[-8:])
+                messagebox.showerror(
+                    T("恢复未完成"),
+                    T("原因：%s\n\n%s") % (rep.get("reason") or "?", tail))
+
+        prog = _GuiProgress(T("恢复插件"), done)
+        OPS.run_in_thread(work, prog, None)
+
+    ttk.Button(btns, text=T("取消"), command=win.destroy).pack(side="right")
+    ttk.Button(btns, text=T("开始恢复"), command=on_ok).pack(
+        side="right", padx=(0, 8))
+
+
 def _do_readd(roots, on_done=None):
     """重新登记已移出的槽，再按每个槽的端口是否变化补齐或重建脚本。"""
     _actions_enabled(False)
@@ -7904,6 +8034,7 @@ def settings_hub_dialog():
     _obtn(0, 1, T("扫描已装 dsh 并纳入"),
           lambda: scan_and_offer_adopt())
     _obtn(1, 0, T("卸载 / 移出管理"), uninstall_versions_dialog, span=2)
+    _obtn(2, 0, T("从备份恢复插件…"), restore_plugins_dialog, span=2)
 
     # ── 界面 ──────────────────────────────────────────────
     look = ttk.LabelFrame(host, text=T("界面"), padding=(12, 10))

@@ -17,6 +17,7 @@ sys.path.insert(0, REPO)
 import dsh_registry as R      # noqa: E402
 import dsh_platform as P
 import dsh_uninstall_ops as U  # noqa: E402
+import dsh_restore_plugins as RP  # noqa: E402
 
 FAILS = []
 
@@ -1179,6 +1180,106 @@ try:
             "mklink rc=%s" % _r.returncode)
 finally:
     shutil.rmtree(_J, ignore_errors=True)
+
+# ══════════════════════════════════════════════════════════════════
+# K. 从卸载备份恢复插件（2026-11-28）
+# ══════════════════════════════════════════════════════════════════
+section("K. 从备份恢复插件")
+
+_K = tempfile.mkdtemp(prefix="dsh-restore-")
+try:
+    _bk = os.path.join(_K, "dsh备份")
+    _b1 = os.path.join(_bk, "v1-userdata-20260101-000000")
+    os.makedirs(os.path.join(_b1, "profiles", "web"))
+    with open(os.path.join(_b1, "_meta.json"), "w", encoding="utf-8") as f:
+        json.dump({"slot_key": "v1", "label": "dshV1",
+                   "installed_version": "0.2.2-rc.3",
+                   "backed_up_at": "20260101-000000"}, f)
+    with open(os.path.join(_b1, "profiles", "web", "package.json"), "w",
+              encoding="utf-8") as f:
+        json.dump({
+            "name": "dsh-profile-web", "private": True,
+            "dependencies": {"dsh-a": "1.0.0", "dsh-b": "2.0.0"},
+            "dsh": {"profile": {"bundles": [
+                "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app",
+                "dsh-a", "dsh-b"]}},
+        }, f)
+    with open(os.path.join(_b1, "profiles", "web", "cordis.patch.yml"), "w",
+              encoding="utf-8") as f:
+        f.write("- id: demo\n")
+    os.makedirs(os.path.join(_bk, "v2-userdata-broken"))
+
+    _list = RP.list_backups(_bk)
+    _good = [x for x in _list if x["usable"]]
+    _bad = [x for x in _list if not x["usable"]]
+    chk("K1 能识别有效备份（含插件数）",
+        len(_good) == 1 and _good[0]["plugin_count"] == 2, str(_good)[:160])
+    chk("K2 缺 _meta.json 的备份标记为不可用",
+        len(_bad) == 1 and _bad[0]["reason"] == "missing_meta", str(_bad)[:120])
+
+    _slot = os.path.join(_K, "dshV3")
+    _pd = os.path.join(_slot, ".dsh-home", "profiles", "web")
+    os.makedirs(_pd)
+    with open(os.path.join(_pd, "package.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            "name": "dsh-profile-web", "private": True,
+            "dependencies": {"dsh-a": "0.9.0"},
+            "dsh": {"profile": {"bundles": [
+                "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"]}},
+        }, f)
+
+    _plan = RP.plan_restore(_b1, _slot)
+    chk("K3 只追加目标没有的依赖（已有的不降级）",
+        _plan["add_deps"] == {"dsh-b": "2.0.0"}, str(_plan["add_deps"]))
+    chk("K4 版本冲突被报告且保留目标版本",
+        _plan["version_conflicts"].get("dsh-a", {}).get("current") == "0.9.0",
+        str(_plan["version_conflicts"]))
+    chk("K5 bundles 只追加用户插件（不动 @deepseek-ai/）",
+        _plan["add_bundles"] == ["dsh-a", "dsh-b"], str(_plan["add_bundles"]))
+
+    _real_pnpm = RP._pnpm_install
+
+    def _fake_pnpm(node, cwd, timeout, log):
+        for dep in ("dsh-a", "dsh-b"):
+            os.makedirs(os.path.join(cwd, "node_modules", dep), exist_ok=True)
+        log.append("(mocked pnpm install)")
+        return True, ""
+
+    RP._pnpm_install = _fake_pnpm
+    try:
+        _ok, _rep = RP.apply_restore(_plan,
+                                     os.path.join(_slot, "node", "node.exe"))
+    finally:
+        RP._pnpm_install = _real_pnpm
+    _merged = json.load(open(os.path.join(_pd, "package.json"),
+                             encoding="utf-8"))
+    chk("K6 合并结果：依赖 + bundles 都写对了",
+        _ok and _merged["dependencies"].get("dsh-a") == "0.9.0"
+        and _merged["dependencies"].get("dsh-b") == "2.0.0"
+        and _merged["dsh"]["profile"]["bundles"] == [
+            "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app",
+            "dsh-a", "dsh-b"], str(_merged)[:200])
+    chk("K7 目标原清单被备份成 .bak-*",
+        bool([n for n in os.listdir(_pd) if ".bak-" in n]), str(os.listdir(_pd)))
+    chk("K8 恢复成功时报告已安装的插件",
+        set(_rep["installed"]) == {"dsh-a", "dsh-b"} and not _rep["missing"],
+        str(_rep)[:160])
+
+    def _fail_pnpm(node, cwd, timeout, log):
+        log.append("ERR_PNPM_NO_MATCHING_VERSION")
+        return False, "pnpm_exit_1"
+
+    RP._pnpm_install = _fail_pnpm
+    try:
+        _ok2, _rep2 = RP.apply_restore(
+            RP.plan_restore(_b1, _slot), os.path.join(_slot, "node", "node.exe"))
+    finally:
+        RP._pnpm_install = _real_pnpm
+    chk("K9 安装失败时 ok=False 并给出原因",
+        _ok2 is False and _rep2["reason"] == "pnpm_exit_1"
+        and any("ERR_PNPM" in x for x in _rep2["log"]), str(_rep2)[:160])
+finally:
+    shutil.rmtree(_K, ignore_errors=True)
 
 # ══════════════════════════════════════════════════════════════════
 print("")
