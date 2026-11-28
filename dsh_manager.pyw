@@ -5478,12 +5478,9 @@ def restore_plugins_dialog():
         return res
 
     def _compat_warn(compat):
-        bad = RP.compat_problems(compat)
-        if not bad:
-            return ""
-        return T("\n\n⚠ 有 %d 个插件声明不支持该槽的 dsh %s：%s") % (
-            len(bad), (compat or {}).get("dsh_version") or "?",
-            "、".join("%s %s" % (r["name"], r["version"]) for r in bad))
+        # 文本生成放在 dsh_restore_plugins 里，是为了能离线断言「警告里带插件名
+        # 和目标 dsh 版本」—— 这一段是用户唯一能看到的判据。
+        return RP.compat_warning_text(compat, T)
 
     def _refresh(*_a):
         i, j = b_cb.current(), s_cb.current()

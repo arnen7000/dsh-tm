@@ -1393,6 +1393,65 @@ try:
     # 成不满足 `>=0.2.0-rc.1 <0.3.0-0`（严格 semver 的预发布规则）。
     chk("L12 判定脚本带 includePrerelease（与 dsh-app-boot 一致）",
         "includePrerelease: true" in RP._NODE_CHECK_JS)
+
+    # 警告文本：用户唯一能看到的东西。必须点名「哪个插件」+「目标槽是哪个版本」，
+    # 否则只写"不兼容"等于没说。这里用假 tr（原样返回 key）验格式，不依赖界面。
+    def _tr(s):
+        return s
+
+    _w = RP.compat_warning_text(
+        {"judged": True, "dsh_version": "0.2.3-alpha.2",
+         "results": [
+             {"name": "p-ok", "version": "1.0.0", "ok": True},
+             {"name": "p-deny", "version": "2.0.0", "ok": False},
+         ]}, _tr)
+    chk("L13 警告里点名插件版本 + 目标 dsh 版本",
+        "p-deny 2.0.0" in _w and "0.2.3-alpha.2" in _w and "p-ok" not in _w,
+        _w[:120])
+    chk("L14 全部支持 / 判不了时不给警告",
+        RP.compat_warning_text(
+            {"judged": True, "dsh_version": "0.2.3",
+             "results": [{"name": "p", "version": "1", "ok": True}]}, _tr) == ""
+        and RP.compat_warning_text(
+            {"judged": False, "dsh_version": "0.2.3",
+             "results": [{"name": "p", "version": "1", "ok": None}]}, _tr) == "")
+
+    # 判定引擎必须是 dsh 自己解析到的那份 semver：dsh-app-boot 先找自己的
+    # node_modules、再找上层提升的。两份同时存在时，必须用嵌在 dsh-app-boot
+    # 下面的那份 —— 否则 pnpm 布局一变，我们和 dsh 就可能判得不一样。
+    if _node:
+        _nested = os.path.join(_lslot, "node_modules", "@deepseek-ai",
+                               "dsh-app-boot", "node_modules", "semver")
+        os.makedirs(_nested, exist_ok=True)
+        with open(os.path.join(_nested, "index.js"), "w", encoding="utf-8") as f:
+            f.write("exports.satisfies = function (v, r) {\n"
+                    "  return String(r).trim() === 'NESTED';\n"
+                    "};\n")
+        _top = os.path.join(_lslot, "node_modules", "semver")
+        os.makedirs(_top, exist_ok=True)
+        with open(os.path.join(_top, "index.js"), "w", encoding="utf-8") as f:
+            f.write("exports.satisfies = function (v, r) {\n"
+                    "  return String(r).trim() === 'TOP';\n"
+                    "};\n")
+        _plug("p-nested", {"version": "9.0.0", "engines": {"dsh": "NESTED"}})
+        _cn = RP.check_compat(_lb, _lslot, _node, ["p-nested"])
+        chk("L15 两份 semver 同时存在时，用 dsh-app-boot 解析到的那份",
+            _cn["judged"] is True
+            and _cn["results"][0]["ok"] is True, str(_cn)[:150])
+
+        # 确定性：同样输入跑两次，结果必须完全一样（判定不许带随机/时间/网络）
+        _c_a = RP.check_compat(_lb, _lslot, _node, ["p-nested", "p-allow"])
+        _c_b = RP.check_compat(_lb, _lslot, _node, ["p-nested", "p-allow"])
+        chk("L16 同一输入两次判定结果一致（确定性）",
+            _c_a == _c_b, "%s vs %s" % (str(_c_a)[:70], str(_c_b)[:70]))
+
+    # 判定本身绝不联网：模块只读本地文件 + 起本地 node 跑本地 semver。
+    # （安装那一步会联网，但那是 pnpm 的事，与"判兼容"无关。）
+    _rp_src = open(os.path.join(REPO, "dsh_restore_plugins.py"),
+                   encoding="utf-8").read()
+    chk("L17 兼容性判定不联网（没有 urllib / socket / requests）",
+        not any(k in _rp_src for k in ("urllib", "socket", "requests",
+                                       "http.client")))
 finally:
     shutil.rmtree(_L, ignore_errors=True)
 

@@ -168,14 +168,19 @@ def slot_dsh_version(slot_root):
 
 
 def _semver_dir(slot_root):
-    """找槽内可用的 semver 包目录（dsh-app-boot 依赖它，所以必然在树里）。
+    """找槽内 semver 包目录，**优先 dsh 自己解析到的那份**。
 
-    必须确认 `index.js` 真的在：目录存在但残缺（比如被清理了一半）时，宁可
-    报「判不了」，也不要交给 node 去撞 require 失败。
+    顺序很重要：`dsh-app-boot` 是跑判定的那个包，它 `require("semver")` 时
+    先看自己的 node_modules、再看上层提升的。我们按同样的顺序找，才能保证
+    「和 dsh 用的是同一个引擎」—— pnpm 布局把 semver 嵌在 dsh-app-boot 下面时，
+    用顶层那份理论上可能判得不一样。
+
+    必须确认 `index.js` 真的在：目录残缺时宁可报「判不了」，也不交给 node 去撞
+    require 失败（那会变成"看起来判过了"）。
     """
-    for c in (os.path.join(slot_root, "node_modules", "semver"),
-              os.path.join(slot_root, "node_modules", "@deepseek-ai",
-                           "dsh-app-boot", "node_modules", "semver")):
+    for c in (os.path.join(slot_root, "node_modules", "@deepseek-ai",
+                           "dsh-app-boot", "node_modules", "semver"),
+              os.path.join(slot_root, "node_modules", "semver")):
         if os.path.isfile(os.path.join(c, "index.js")):
             return c
     return None
@@ -292,6 +297,22 @@ def compat_problems(compat):
     if not compat or not compat.get("judged"):
         return []
     return [r for r in (compat.get("results") or []) if r.get("ok") is False]
+
+
+def compat_warning_text(compat, tr):
+    """把预检结果渲染成给用户看的一行警告（没有问题时返回空串）。
+
+    `tr` 由调用方传进来（GUI 传 T），这样这个函数保持纯逻辑、可以离线断言：
+    「警告里必须出现插件名和目标槽的 dsh 版本」——否则用户只知道"不兼容"，
+    不知道该找谁算账。
+    """
+    bad = compat_problems(compat)
+    if not bad:
+        return ""
+    return tr("\n\n⚠ 有 %d 个插件声明不支持该槽的 dsh %s：%s") % (
+        len(bad), (compat or {}).get("dsh_version") or "?",
+        "、".join("%s %s" % (r.get("name"), r.get("version") or "?")
+                 for r in bad))
 
 
 def _merged_manifest(plan):
