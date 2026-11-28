@@ -68,17 +68,32 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
+  version:
+    name: Read VERSION
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # 版本号只有一个来源：仓库根的 VERSION。以前这里是手抄的字面量，
+      # 2026-11-28 发 0.1.16 时还写着 0.1.15，windows-release.yml 校验不一致
+      # 直接 throw，整个 "macOS app" 变红（而所有测试其实都过了）。
+      - id: read
+        run: echo "version=$(tr -d '\r\n' < VERSION)" >> "$GITHUB_OUTPUT"
+
   windows-portable:
     name: Verify and build Windows portable package
+    needs: [version]
     if: >-
       github.repository == 'arnen7000/dsh-tm' &&
       github.event_name == 'push' &&
       (github.ref == 'refs/heads/codex/macos-support' || github.ref == 'refs/heads/main')
     uses: ./.github/workflows/windows-release.yml
     with:
-      # 发版时必须与仓库根的 VERSION 同步：windows-release.yml 会校验，
-      # 不一致就直接 throw（2026-11-28 发 0.1.16 时踩到，当时还写着 0.1.15）。
-      version: '0.1.16'
+      version: ${{ needs.version.outputs.version }}
 
   publish-github:
     name: Publish tested GitHub release packages
