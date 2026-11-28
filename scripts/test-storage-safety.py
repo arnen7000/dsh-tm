@@ -210,7 +210,10 @@ class SlotFilesystemTests(unittest.TestCase):
 
         with patch.object(uninstall, "_robocopy", return_value=(False, "")):
             with patch.object(uninstall.shutil, "copy2", side_effect=corrupt_copy):
-                ok, payload, _ = self.uninstall_slot()
+                # 这条测的是「复制路径」的损坏检测；硬链接模式有独立测试
+                # （test-slot-ops 的 J1-J5），这里显式关掉，避免绕过 corrupt_copy。
+                with patch.object(uninstall, "_hardlink_tree", return_value=False):
+                    ok, payload, _ = self.uninstall_slot()
         self.assertFalse(ok)
         self.assertEqual(payload["kept_in_config"], ["v1"])
         self.assertEqual(self.data.read_text(encoding="utf-8"), "user data")
