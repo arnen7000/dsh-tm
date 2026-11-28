@@ -5480,7 +5480,11 @@ def restore_plugins_dialog():
             return
         # 安装依赖会改写 node_modules：槽在跑的时候改，轻则插件加载不到，重则
         # 正在运行的进程读到半装的模块。必须在动手前拦住。
-        if port_open(int(VC[key].get("port") or 0)):
+        try:
+            _busy = port_open(int(VC[key].get("port") or 0))
+        except (TypeError, ValueError):
+            _busy = False        # 端口写坏了不该卡住这个对话框，交给体检去报
+        if _busy:
             messagebox.showwarning(
                 T("无法恢复"),
                 T("请先停止槽 %s 再恢复插件：安装依赖会改写它的 node_modules。")
