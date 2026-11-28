@@ -33,7 +33,7 @@ class AdoptionRecovery(unittest.TestCase):
         return nm
 
     def test_search_parent_and_precise_paths(self):
-        users = self.root / "Users/example"
+        users = self.root / "Users/_example"
         first = self.make_install(users / "dsh-01")
         second = self.make_install(users / "dsh-02", "0.1.5-rc.2")
         same_version = self.make_install(users / "项目 with spaces/dsh-copy")
@@ -69,7 +69,7 @@ class AdoptionRecovery(unittest.TestCase):
         return exe
 
     def test_adoption_prefers_source_node_and_preserves_sibling_data(self):
-        directory = self.root / "Users/example/dsh-01"
+        directory = self.root / "Users/_example/dsh-01"
         nm = self.make_install(directory)
         self.make_node(directory / "node", b"portable")
         home = directory.with_name("dsh-01-home")
